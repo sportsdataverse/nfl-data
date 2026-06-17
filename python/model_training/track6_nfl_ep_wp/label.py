@@ -58,61 +58,57 @@ def compute_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
             - ``next_score_half`` (Utf8): score label string (one of 7 classes).
             - ``next_score_class`` (Int32): integer class index 0–6.
     """
-    # Tag each play with its own score label and scoring team (null if not a scoring play)
+    # 1. On each scoring play, record the ABSOLUTE score type + scoring team. Perspective
+    #    is applied later, relative to each play's OWN posteam. (The previous version baked
+    #    the scoring play's perspective into the label and propagated it unchanged, which
+    #    flipped the sign on every possession-change play and never produced Opp_Field_Goal
+    #    or Safety. See the row-wise spec in _score_type_and_team.)
     df = df.with_columns([
-        pl.when(
-            (pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null()
-            & (pl.col("td_team") == pl.col("posteam"))
-        ).then(pl.lit("Touchdown"))
-        .when(
-            (pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null()
-            & (pl.col("td_team") == pl.col("defteam"))
-        ).then(pl.lit("Opp_Touchdown"))
-        .when(
-            (pl.col("sp") == 1) & (pl.col("field_goal_result") == "made")
-        ).then(pl.lit("Field_Goal"))
-        .when(
-            (pl.col("sp") == 1) & (pl.col("safety") == 1)
-        ).then(pl.lit("Opp_Safety"))
+        pl.when((pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
+        .then(pl.lit("TD"))
+        .when((pl.col("sp") == 1) & (pl.col("field_goal_result") == "made"))
+        .then(pl.lit("FG"))
+        .when((pl.col("sp") == 1) & (pl.col("safety") == 1))
+        .then(pl.lit("Safety"))
         .otherwise(pl.lit(None).cast(pl.Utf8))
-        .alias("_own_score_label"),
+        .alias("_score_type"),
+        pl.when((pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
+        .then(pl.col("td_team"))                       # TD: the team that scored (offense or defense)
+        .when((pl.col("sp") == 1) & (pl.col("field_goal_result") == "made"))
+        .then(pl.col("posteam"))                       # made FG: kicked by the possession team
+        .when((pl.col("sp") == 1) & (pl.col("safety") == 1))
+        .then(pl.col("defteam"))                       # safety: scored by the defense (posteam conceded)
+        .otherwise(pl.lit(None).cast(pl.Utf8))
+        .alias("_score_team"),
     ])
 
-    # Sort by (game_id, game_half, play_id ascending) so forward-fill gives NEXT score
-    df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, False])
-
-    # Within each (game_id, game_half) group, forward-fill the score label BACKWARDS:
-    # we want each play to take the label of the NEXT scoring play, not the last.
-    # Strategy: reverse-sort within group so that backward_fill becomes "next" fill.
-    # Actually: sort ascending, then do a backward fill from the end of each group.
-    # polars shift_and_fill is not available — use a window reverse approach.
-
-    # Step 1: for each play, get the label of the NEXT scoring play in the same group.
-    # We do this with a sort+cumulative approach:
-    #   - Sort DESCENDING by play_id within group
-    #   - forward_fill on _own_score_label (which is now REVERSE order)
-    #   - That fills each play with the PREVIOUS score in REVERSED order = NEXT score in ORIGINAL order
-    #   - EXCEPT: the scoring play itself should keep its own label (not the one before it)
-
-    # Re-sort descending within group to enable forward fill = "next" semantics
+    # 2. Within each (game_id, game_half), propagate the NEXT scoring play's type + team to
+    #    all earlier plays: sort DESCENDING by play_id, then forward_fill (which now walks
+    #    earliest-last, so each play inherits the nearest *future* score). The scoring play
+    #    keeps its own score.
     df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, True])
-
-    df = df.with_columns(
-        pl.col("_own_score_label")
-        .forward_fill()
-        .over(["game_id", "game_half"])
-        .alias("next_score_half_raw")
-    )
-
-    # Restore ascending order
+    df = df.with_columns([
+        pl.col("_score_type").forward_fill().over(["game_id", "game_half"]).alias("_next_type"),
+        pl.col("_score_team").forward_fill().over(["game_id", "game_half"]).alias("_next_team"),
+    ])
     df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, False])
 
-    # Replace nulls (plays with no score after them in the half) with "No_Score"
+    # 3. Express the next score RELATIVE to each play's own posteam: same team -> the positive
+    #    class, opponent -> the Opp_ class. No further score in the half -> No_Score.
+    same = pl.col("_next_team") == pl.col("posteam")
     df = df.with_columns(
-        pl.col("next_score_half_raw").fill_null("No_Score").alias("next_score_half")
+        pl.when(pl.col("_next_type").is_null()).then(pl.lit("No_Score"))
+        .when(pl.col("_next_type") == "TD")
+        .then(pl.when(same).then(pl.lit("Touchdown")).otherwise(pl.lit("Opp_Touchdown")))
+        .when(pl.col("_next_type") == "FG")
+        .then(pl.when(same).then(pl.lit("Field_Goal")).otherwise(pl.lit("Opp_Field_Goal")))
+        .when(pl.col("_next_type") == "Safety")
+        .then(pl.when(same).then(pl.lit("Safety")).otherwise(pl.lit("Opp_Safety")))
+        .otherwise(pl.lit("No_Score"))
+        .alias("next_score_half")
     )
 
-    # Map to class index — use replace_strict with a catch-all fill_null for robustness
+    # 4. Map to the integer class index.
     no_score_class = SCORE_LABEL_TO_CLASS["No_Score"]
     df = df.with_columns(
         pl.col("next_score_half")
@@ -120,7 +116,7 @@ def compute_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
         .alias("next_score_class")
     )
 
-    return df.drop(["_own_score_label", "next_score_half_raw"])
+    return df.drop(["_score_type", "_score_team", "_next_type", "_next_team"])
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+python/.cache/
+python/cfb/
+python/nfl/
+build/
+dist/
+.Rproj.user/

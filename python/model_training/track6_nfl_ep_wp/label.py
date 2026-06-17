@@ -82,16 +82,34 @@ def compute_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
         .alias("_score_team"),
     ])
 
-    # 2. Within each (game_id, game_half), propagate the NEXT scoring play's type + team to
-    #    all earlier plays: sort DESCENDING by play_id, then forward_fill (which now walks
-    #    earliest-last, so each play inherits the nearest *future* score). The scoring play
-    #    keeps its own score.
+    # On scoring plays also record the drive number — propagated below so each play knows
+    # the drive of its next score (the EP sample weight's drive-distance term).
+    df = df.with_columns(
+        pl.when(pl.col("_score_type").is_not_null())
+        .then(pl.col("fixed_drive"))
+        .otherwise(None)
+        .alias("_score_drive")
+    )
+
+    # 2. Within each (game_id, game_half), propagate the NEXT scoring play's type + team
+    #    (+ drive) to all earlier plays: sort DESCENDING by play_id, then forward_fill (which
+    #    now walks earliest-last, so each play inherits the nearest *future* score). The
+    #    scoring play keeps its own score.
     df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, True])
     df = df.with_columns([
         pl.col("_score_type").forward_fill().over(["game_id", "game_half"]).alias("_next_type"),
         pl.col("_score_team").forward_fill().over(["game_id", "game_half"]).alias("_next_team"),
+        pl.col("_score_drive").forward_fill().over(["game_id", "game_half"]).alias("_next_drive"),
     ])
     df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, False])
+
+    # next_score_drive: the drive of the next score in the half. For No_Score plays (no
+    # future score) use the half's last drive so drive-distance stays well-defined.
+    df = df.with_columns(
+        pl.col("_next_drive")
+        .fill_null(pl.col("fixed_drive").max().over(["game_id", "game_half"]))
+        .alias("next_score_drive")
+    )
 
     # 3. Express the next score RELATIVE to each play's own posteam: same team -> the positive
     #    class, opponent -> the Opp_ class. No further score in the half -> No_Score.
@@ -195,22 +213,54 @@ def compute_winner(df: pl.DataFrame) -> pl.DataFrame:
 # Convenience builders
 # ---------------------------------------------------------------------------
 
+def _add_ep_sample_weights(df: pl.DataFrame) -> pl.DataFrame:
+    """Add the nflscrapR/nflfastR EP sample-weight column ``weight`` (Total_W_Scaled).
+
+    Down-weights plays that are far (in drives) from the next score and that occur in
+    lopsided game states (garbage time), so the EP surface is fit on the informative
+    plays. Requires ``next_score_drive`` (from compute_next_score_half), ``fixed_drive``
+    and ``score_differential``. Normalisation is global over the supplied frame.
+    """
+    df = df.with_columns([
+        (pl.col("next_score_drive") - pl.col("fixed_drive")).clip(lower_bound=0).alias("_dsd"),
+        pl.col("score_differential").fill_null(0).abs().alias("_absdiff"),
+    ])
+    df = df.with_columns([
+        pl.when(pl.col("_dsd").max() == pl.col("_dsd").min()).then(pl.lit(0.5))
+        .otherwise((pl.col("_dsd").max() - pl.col("_dsd")) / (pl.col("_dsd").max() - pl.col("_dsd").min()))
+        .alias("_dsd_w"),
+        pl.when(pl.col("_absdiff").max() == pl.col("_absdiff").min()).then(pl.lit(0.5))
+        .otherwise((pl.col("_absdiff").max() - pl.col("_absdiff")) / (pl.col("_absdiff").max() - pl.col("_absdiff").min()))
+        .alias("_sd_w"),
+    ])
+    df = df.with_columns((pl.col("_dsd_w") + pl.col("_sd_w")).alias("_total_w"))
+    df = df.with_columns(
+        pl.when(pl.col("_total_w").max() == pl.col("_total_w").min()).then(pl.lit(1.0))
+        .otherwise((pl.col("_total_w") - pl.col("_total_w").min())
+                   / (pl.col("_total_w").max() - pl.col("_total_w").min()))
+        .alias("weight")
+    )
+    return df.drop(["_dsd", "_absdiff", "_dsd_w", "_sd_w", "_total_w"])
+
+
 def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
     """Full EP training set pipeline from raw nflverse PBP.
 
-    1. Compute ``Next_Score_Half`` label.
-    2. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
-    3. Select ``EP_FEATURES + next_score_class``.
+    1. Compute ``Next_Score_Half`` label (+ ``next_score_drive``).
+    2. Add the nflscrapR/nflfastR sample ``weight`` (Total_W_Scaled).
+    3. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
+    4. Select ``EP_FEATURES + next_score_class + weight``.
 
     Args:
         df: Raw nflverse PBP frame (multiple seasons).
 
     Returns:
-        Training-ready DataFrame with EP_FEATURES columns + ``next_score_class``.
+        Training-ready DataFrame with EP_FEATURES columns + ``next_score_class`` + ``weight``.
     """
     df = compute_next_score_half(df)
+    df = _add_ep_sample_weights(df)
     df = make_model_mutations(df)
-    return df.select([*EP_FEATURES, "next_score_class"])
+    return df.select([*EP_FEATURES, "next_score_class", "weight"])
 
 
 def build_wp_training_set(

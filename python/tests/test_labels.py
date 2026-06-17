@@ -34,7 +34,7 @@ def _play(
         result=result, home_score=home_score, away_score=away_score,
         season=2024, down=1.0, yardline_100=75.0, ydstogo=10.0,
         half_seconds_remaining=1800.0, game_seconds_remaining=3600.0,
-        score_differential=0.0, spread_line=-3.0,
+        score_differential=0.0, spread_line=-3.0, fixed_drive=1.0,
         posteam_timeouts_remaining=3.0, defteam_timeouts_remaining=3.0,
         roof="outdoors",
     )

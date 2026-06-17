@@ -51,6 +51,7 @@ def _load_pbp_for_validation(
     """Return (ep_frame, wp_frame) filtered to plays with reference values."""
     from .ingest import load_local_pbp
     from .features import make_model_mutations, _add_wp_aux, _add_receive_2h_ko
+    from .label import compute_winner
 
     df = load_local_pbp(seasons, data_dir=data_dir)
     df = make_model_mutations(df)
@@ -58,12 +59,15 @@ def _load_pbp_for_validation(
     # EP frame: plays with non-null nflfastR ep reference
     ep_df = df.filter(pl.col("ep").is_not_null()).select([*EP_FEATURES, "ep"])
 
-    # WP frame: regulation plays with non-null wp reference and outcome label
+    # WP frame: regulation plays with non-null wp reference and outcome label.
+    # compute_winner adds the `wp_label` (posteam-won 0/1) column the gate scores
+    # against — the training path computes it too; validation must mirror that.
     wp_df = df.filter(
         pl.col("qtr") <= 4
     )
     wp_df = _add_wp_aux(wp_df)
     wp_df = _add_receive_2h_ko(wp_df)
+    wp_df = compute_winner(wp_df)
     wp_df = wp_df.filter(
         pl.col("wp").is_not_null()
         & pl.col("wp_label").is_not_null()

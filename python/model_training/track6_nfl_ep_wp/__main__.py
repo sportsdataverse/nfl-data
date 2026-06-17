@@ -32,6 +32,14 @@ import argparse
 import sys
 from pathlib import Path
 
+# Windows consoles default to cp1252, which cannot encode the Unicode arrows/symbols
+# in our progress output -> UnicodeEncodeError mid-run. Force UTF-8 stdout/stderr at
+# entry so `python -m ...` works regardless of the console codepage.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def _parse_season_range(values: list[str]) -> list[int]:
     """Convert 1 or 2 season args into a list.

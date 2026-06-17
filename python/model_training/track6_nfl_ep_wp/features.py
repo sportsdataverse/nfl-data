@@ -21,13 +21,15 @@ from .constants import (
     EP_LABEL_TO_SCORE,
 )
 
-# Era boundary years (left-inclusive, right-exclusive) matching nflfastR
+# Era boundary years (left-inclusive, right-exclusive) matching nflfastR's documented
+# buckets: 1999-2001, 2002-2005, 2006-2013, 2014-2017, 2018+ (opensourcefootball EP/WP
+# models post). Prior cutoffs (2001, 2019) misbucketed 2001 -> era1 and 2018 -> era3.
 _ERA_BOUNDS: list[tuple[int, int, str]] = [
-    (0, 2001, "era0"),
-    (2001, 2006, "era1"),
-    (2006, 2014, "era2"),
-    (2014, 2019, "era3"),
-    (2019, 9999, "era4"),
+    (0, 2002, "era0"),      # 1999-2001 (pre-expansion)
+    (2002, 2006, "era1"),   # 2002-2005 (pre-CPOE)
+    (2006, 2014, "era2"),   # 2006-2013 (pre-LOB rules change)
+    (2014, 2018, "era3"),   # 2014-2017
+    (2018, 9999, "era4"),   # 2018+
 ]
 
 

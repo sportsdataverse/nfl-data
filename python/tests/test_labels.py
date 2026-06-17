@@ -34,7 +34,7 @@ def _play(
         result=result, home_score=home_score, away_score=away_score,
         season=2024, down=1.0, yardline_100=75.0, ydstogo=10.0,
         half_seconds_remaining=1800.0, game_seconds_remaining=3600.0,
-        score_differential=0.0, spread_line=-3.0,
+        score_differential=0.0, spread_line=-3.0, fixed_drive=1.0,
         posteam_timeouts_remaining=3.0, defteam_timeouts_remaining=3.0,
         roof="outdoors",
     )
@@ -120,6 +120,30 @@ class TestComputeNextScoreHalf:
         df = pl.DataFrame(plays)
         result = compute_next_score_half(df)
         assert result.filter(pl.col("play_id") == 1)["next_score_half"][0] == "Opp_Safety"
+
+    def test_opp_field_goal_after_possession_change(self):
+        """posteam=KC, then BUF gains possession and kicks a made FG → Opp_Field_Goal
+        from KC's perspective. Regression: the old labeler propagated the scoring play's
+        own perspective unchanged and never produced Opp_Field_Goal (every FG was
+        Field_Goal)."""
+        plays = [
+            _play(game_id="P1", play_id=1, sp=0, posteam="KC", defteam="BUF"),
+            _play(game_id="P1", play_id=2, sp=1, field_goal_result="made",
+                  posteam="BUF", defteam="KC"),
+        ]
+        result = compute_next_score_half(pl.DataFrame(plays))
+        assert result.filter(pl.col("play_id") == 1)["next_score_half"][0] == "Opp_Field_Goal"
+
+    def test_posteam_safety_when_own_defense_scores(self):
+        """posteam=KC, then BUF possesses and concedes a safety (KC's defense scores +2)
+        → Safety from KC's perspective. Regression: the +2 Safety class was never
+        produced (all safeties were Opp_Safety)."""
+        plays = [
+            _play(game_id="P2", play_id=1, sp=0, posteam="KC", defteam="BUF"),
+            _play(game_id="P2", play_id=2, sp=1, safety=1, posteam="BUF", defteam="KC"),
+        ]
+        result = compute_next_score_half(pl.DataFrame(plays))
+        assert result.filter(pl.col("play_id") == 1)["next_score_half"][0] == "Safety"
 
     def test_no_score_in_half_returns_no_score(self):
         """No scoring play in the half → No_Score."""

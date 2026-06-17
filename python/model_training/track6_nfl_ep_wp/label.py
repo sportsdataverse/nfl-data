@@ -58,61 +58,75 @@ def compute_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
             - ``next_score_half`` (Utf8): score label string (one of 7 classes).
             - ``next_score_class`` (Int32): integer class index 0–6.
     """
-    # Tag each play with its own score label and scoring team (null if not a scoring play)
+    # 1. On each scoring play, record the ABSOLUTE score type + scoring team. Perspective
+    #    is applied later, relative to each play's OWN posteam. (The previous version baked
+    #    the scoring play's perspective into the label and propagated it unchanged, which
+    #    flipped the sign on every possession-change play and never produced Opp_Field_Goal
+    #    or Safety. See the row-wise spec in _score_type_and_team.)
     df = df.with_columns([
-        pl.when(
-            (pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null()
-            & (pl.col("td_team") == pl.col("posteam"))
-        ).then(pl.lit("Touchdown"))
-        .when(
-            (pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null()
-            & (pl.col("td_team") == pl.col("defteam"))
-        ).then(pl.lit("Opp_Touchdown"))
-        .when(
-            (pl.col("sp") == 1) & (pl.col("field_goal_result") == "made")
-        ).then(pl.lit("Field_Goal"))
-        .when(
-            (pl.col("sp") == 1) & (pl.col("safety") == 1)
-        ).then(pl.lit("Opp_Safety"))
+        pl.when((pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
+        .then(pl.lit("TD"))
+        .when((pl.col("sp") == 1) & (pl.col("field_goal_result") == "made"))
+        .then(pl.lit("FG"))
+        .when((pl.col("sp") == 1) & (pl.col("safety") == 1))
+        .then(pl.lit("Safety"))
         .otherwise(pl.lit(None).cast(pl.Utf8))
-        .alias("_own_score_label"),
+        .alias("_score_type"),
+        pl.when((pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
+        .then(pl.col("td_team"))                       # TD: the team that scored (offense or defense)
+        .when((pl.col("sp") == 1) & (pl.col("field_goal_result") == "made"))
+        .then(pl.col("posteam"))                       # made FG: kicked by the possession team
+        .when((pl.col("sp") == 1) & (pl.col("safety") == 1))
+        .then(pl.col("defteam"))                       # safety: scored by the defense (posteam conceded)
+        .otherwise(pl.lit(None).cast(pl.Utf8))
+        .alias("_score_team"),
     ])
 
-    # Sort by (game_id, game_half, play_id ascending) so forward-fill gives NEXT score
-    df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, False])
+    # On scoring plays also record the drive number — propagated below so each play knows
+    # the drive of its next score (the EP sample weight's drive-distance term).
+    df = df.with_columns(
+        pl.when(pl.col("_score_type").is_not_null())
+        .then(pl.col("fixed_drive"))
+        .otherwise(None)
+        .alias("_score_drive")
+    )
 
-    # Within each (game_id, game_half) group, forward-fill the score label BACKWARDS:
-    # we want each play to take the label of the NEXT scoring play, not the last.
-    # Strategy: reverse-sort within group so that backward_fill becomes "next" fill.
-    # Actually: sort ascending, then do a backward fill from the end of each group.
-    # polars shift_and_fill is not available — use a window reverse approach.
-
-    # Step 1: for each play, get the label of the NEXT scoring play in the same group.
-    # We do this with a sort+cumulative approach:
-    #   - Sort DESCENDING by play_id within group
-    #   - forward_fill on _own_score_label (which is now REVERSE order)
-    #   - That fills each play with the PREVIOUS score in REVERSED order = NEXT score in ORIGINAL order
-    #   - EXCEPT: the scoring play itself should keep its own label (not the one before it)
-
-    # Re-sort descending within group to enable forward fill = "next" semantics
+    # 2. Within each (game_id, game_half), propagate the NEXT scoring play's type + team
+    #    (+ drive) to all earlier plays: sort DESCENDING by play_id, then forward_fill (which
+    #    now walks earliest-last, so each play inherits the nearest *future* score). The
+    #    scoring play keeps its own score.
     df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, True])
-
-    df = df.with_columns(
-        pl.col("_own_score_label")
-        .forward_fill()
-        .over(["game_id", "game_half"])
-        .alias("next_score_half_raw")
-    )
-
-    # Restore ascending order
+    df = df.with_columns([
+        pl.col("_score_type").forward_fill().over(["game_id", "game_half"]).alias("_next_type"),
+        pl.col("_score_team").forward_fill().over(["game_id", "game_half"]).alias("_next_team"),
+        pl.col("_score_drive").forward_fill().over(["game_id", "game_half"]).alias("_next_drive"),
+    ])
     df = df.sort(["game_id", "game_half", "play_id"], descending=[False, False, False])
 
-    # Replace nulls (plays with no score after them in the half) with "No_Score"
+    # next_score_drive: the drive of the next score in the half. For No_Score plays (no
+    # future score) use the half's last drive so drive-distance stays well-defined.
     df = df.with_columns(
-        pl.col("next_score_half_raw").fill_null("No_Score").alias("next_score_half")
+        pl.col("_next_drive")
+        .fill_null(pl.col("fixed_drive").max().over(["game_id", "game_half"]))
+        .alias("next_score_drive")
     )
 
-    # Map to class index — use replace_strict with a catch-all fill_null for robustness
+    # 3. Express the next score RELATIVE to each play's own posteam: same team -> the positive
+    #    class, opponent -> the Opp_ class. No further score in the half -> No_Score.
+    same = pl.col("_next_team") == pl.col("posteam")
+    df = df.with_columns(
+        pl.when(pl.col("_next_type").is_null()).then(pl.lit("No_Score"))
+        .when(pl.col("_next_type") == "TD")
+        .then(pl.when(same).then(pl.lit("Touchdown")).otherwise(pl.lit("Opp_Touchdown")))
+        .when(pl.col("_next_type") == "FG")
+        .then(pl.when(same).then(pl.lit("Field_Goal")).otherwise(pl.lit("Opp_Field_Goal")))
+        .when(pl.col("_next_type") == "Safety")
+        .then(pl.when(same).then(pl.lit("Safety")).otherwise(pl.lit("Opp_Safety")))
+        .otherwise(pl.lit("No_Score"))
+        .alias("next_score_half")
+    )
+
+    # 4. Map to the integer class index.
     no_score_class = SCORE_LABEL_TO_CLASS["No_Score"]
     df = df.with_columns(
         pl.col("next_score_half")
@@ -120,7 +134,7 @@ def compute_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
         .alias("next_score_class")
     )
 
-    return df.drop(["_own_score_label", "next_score_half_raw"])
+    return df.drop(["_score_type", "_score_team", "_next_type", "_next_team"])
 
 
 # ---------------------------------------------------------------------------
@@ -199,22 +213,61 @@ def compute_winner(df: pl.DataFrame) -> pl.DataFrame:
 # Convenience builders
 # ---------------------------------------------------------------------------
 
+def _add_ep_sample_weights(df: pl.DataFrame) -> pl.DataFrame:
+    """Add the nflscrapR/nflfastR EP sample-weight column ``weight`` (Total_W_Scaled).
+
+    Down-weights plays that are far (in drives) from the next score and that occur in
+    lopsided game states (garbage time), so the EP surface is fit on the informative
+    plays. Requires ``next_score_drive`` (from compute_next_score_half), ``fixed_drive``
+    and ``score_differential``. Normalisation is global over the supplied frame.
+    """
+    df = df.with_columns([
+        (pl.col("next_score_drive") - pl.col("fixed_drive")).clip(lower_bound=0).alias("_dsd"),
+        pl.col("score_differential").fill_null(0).abs().alias("_absdiff"),
+    ])
+    df = df.with_columns([
+        pl.when(pl.col("_dsd").max() == pl.col("_dsd").min()).then(pl.lit(0.5))
+        .otherwise((pl.col("_dsd").max() - pl.col("_dsd")) / (pl.col("_dsd").max() - pl.col("_dsd").min()))
+        .alias("_dsd_w"),
+        pl.when(pl.col("_absdiff").max() == pl.col("_absdiff").min()).then(pl.lit(0.5))
+        .otherwise((pl.col("_absdiff").max() - pl.col("_absdiff")) / (pl.col("_absdiff").max() - pl.col("_absdiff").min()))
+        .alias("_sd_w"),
+    ])
+    df = df.with_columns((pl.col("_dsd_w") + pl.col("_sd_w")).alias("_total_w"))
+    df = df.with_columns(
+        pl.when(pl.col("_total_w").max() == pl.col("_total_w").min()).then(pl.lit(1.0))
+        .otherwise((pl.col("_total_w") - pl.col("_total_w").min())
+                   / (pl.col("_total_w").max() - pl.col("_total_w").min()))
+        .alias("weight")
+    )
+    return df.drop(["_dsd", "_absdiff", "_dsd_w", "_sd_w", "_total_w"])
+
+
 def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
     """Full EP training set pipeline from raw nflverse PBP.
 
-    1. Compute ``Next_Score_Half`` label.
-    2. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
-    3. Select ``EP_FEATURES + next_score_class``.
+    1. Compute ``Next_Score_Half`` label (+ ``next_score_drive``).
+    2. Add the nflscrapR/nflfastR sample ``weight`` (Total_W_Scaled).
+    3. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
+    4. Filter to nflfastR's cal_data domain (non-null yardline + timeouts).
+    5. Select ``EP_FEATURES + next_score_class + weight``.
 
     Args:
         df: Raw nflverse PBP frame (multiple seasons).
 
     Returns:
-        Training-ready DataFrame with EP_FEATURES columns + ``next_score_class``.
+        Training-ready DataFrame with EP_FEATURES columns + ``next_score_class`` + ``weight``.
     """
     df = compute_next_score_half(df)
+    df = _add_ep_sample_weights(df)
     df = make_model_mutations(df)
-    return df.select([*EP_FEATURES, "next_score_class"])
+    # Match nflfastR's cal_data filter (MODELS.R): drop plays missing yardline or timeouts.
+    df = df.filter(
+        pl.col("yardline_100").is_not_null()
+        & pl.col("posteam_timeouts_remaining").is_not_null()
+        & pl.col("defteam_timeouts_remaining").is_not_null()
+    )
+    return df.select([*EP_FEATURES, "next_score_class", "weight"])
 
 
 def build_wp_training_set(

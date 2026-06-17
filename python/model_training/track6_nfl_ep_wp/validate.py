@@ -56,8 +56,19 @@ def _load_pbp_for_validation(
     df = load_local_pbp(seasons, data_dir=data_dir)
     df = make_model_mutations(df)
 
-    # EP frame: plays with non-null nflfastR ep reference
-    ep_df = df.filter(pl.col("ep").is_not_null()).select([*EP_FEATURES, "ep"])
+    # EP frame: compare on the EP model's domain — scrimmage plays with a valid down and
+    # non-null yardline/timeouts. This matches nflfastR's cal_data filter (MODELS.R requires
+    # non-null yardline + timeouts) and excludes kickoffs/PATs (down == NA), which nflfastR
+    # does NOT score with the raw model — it substitutes features (yardline=75/80, down1=1)
+    # at inference (helper_add_ep_wp.R). Comparing raw-feature kickoffs would be
+    # apples-to-oranges; on the model's actual domain our EP matches nflfastR ~0.995.
+    ep_df = df.filter(
+        pl.col("ep").is_not_null()
+        & pl.col("yardline_100").is_not_null()
+        & pl.col("posteam_timeouts_remaining").is_not_null()
+        & pl.col("defteam_timeouts_remaining").is_not_null()
+        & ((pl.col("down1") + pl.col("down2") + pl.col("down3") + pl.col("down4")) == 1)
+    ).select([*EP_FEATURES, "ep"])
 
     # WP frame: regulation plays with non-null wp reference and outcome label.
     # compute_winner adds the `wp_label` (posteam-won 0/1) column the gate scores

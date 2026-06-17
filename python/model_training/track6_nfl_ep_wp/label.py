@@ -249,7 +249,8 @@ def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
     1. Compute ``Next_Score_Half`` label (+ ``next_score_drive``).
     2. Add the nflscrapR/nflfastR sample ``weight`` (Total_W_Scaled).
     3. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
-    4. Select ``EP_FEATURES + next_score_class + weight``.
+    4. Filter to nflfastR's cal_data domain (non-null yardline + timeouts).
+    5. Select ``EP_FEATURES + next_score_class + weight``.
 
     Args:
         df: Raw nflverse PBP frame (multiple seasons).
@@ -260,6 +261,12 @@ def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
     df = compute_next_score_half(df)
     df = _add_ep_sample_weights(df)
     df = make_model_mutations(df)
+    # Match nflfastR's cal_data filter (MODELS.R): drop plays missing yardline or timeouts.
+    df = df.filter(
+        pl.col("yardline_100").is_not_null()
+        & pl.col("posteam_timeouts_remaining").is_not_null()
+        & pl.col("defteam_timeouts_remaining").is_not_null()
+    )
     return df.select([*EP_FEATURES, "next_score_class", "weight"])
 
 

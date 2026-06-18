@@ -55,11 +55,52 @@ def _parse_season_range(values: list[str]) -> list[int]:
     return seasons
 
 
-def _cmd_train(args: argparse.Namespace) -> int:
-    from .pipeline import run_full_pipeline
+def _train_xyac_model(seasons: list[int], args: argparse.Namespace) -> Path:
+    """Build the xYAC training set and train + save the 76-class xYAC model.
 
+    Mirrors the CP path but is invoked from the CLI (not run_full_pipeline) so the
+    xYAC model can be trained alongside the others or on its own via ``--xyac-only``.
+    """
+    from .constants import XYAC_FEATURES, XYAC_HYPERPARAMS
+    from .label import build_xyac_training_set
+    from .pipeline import _resolve_pbp
+    from .trainer import train_xyac
+
+    models_dir = Path(args.models_dir)
+    models_dir.mkdir(parents=True, exist_ok=True)
+    xyac_path = Path(args.xyac_model)
+    if not xyac_path.is_absolute() and xyac_path.parent == Path("."):
+        xyac_path = models_dir / xyac_path.name
+    xyac_path.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"[train] loading PBP for xYAC (source={args.source})...")
+    df = _resolve_pbp(seasons, Path(args.data_dir), args.download, args.source)
+    print(f"[train] building xYAC training set from {df.height:,} plays...")
+    xyac_df = build_xyac_training_set(df)
+    print(f"[train] xYAC: {xyac_df.height:,} completed passes → training (76-class)")
+    train_xyac(xyac_df, output_path=xyac_path)
+
+    # Write a model_card.json sidecar, mirroring the pipeline's other models.
+    try:
+        from .model_card import write_model_card
+        write_model_card(xyac_path, model_type="xyac", features=XYAC_FEATURES,
+                         label="label", seasons=seasons, n_rows=xyac_df.height,
+                         hyperparams=XYAC_HYPERPARAMS, source=args.source)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[train] (xYAC model card skipped: {exc})")
+    print(f"[train] xYAC model saved → {xyac_path}")
+    return xyac_path
+
+
+def _cmd_train(args: argparse.Namespace) -> int:
     seasons = _parse_season_range(args.seasons)
     print(f"[train] seasons={seasons[0]}–{seasons[-1]}  download={args.download}")
+
+    if args.xyac_only:
+        _train_xyac_model(seasons, args)
+        return 0
+
+    from .pipeline import run_full_pipeline
 
     paths = run_full_pipeline(
         seasons=seasons,
@@ -72,6 +113,12 @@ def _cmd_train(args: argparse.Namespace) -> int:
     print("[train] Models saved (+ model_card.json sidecars):")
     for key, path in paths.items():
         print(f"  {key:12s} → {path}")
+
+    # xYAC is trained from the CLI (not run_full_pipeline) so it stays optional + the
+    # core EP/WP/CP pipeline contract is unchanged. Train it unless suppressed.
+    if not args.no_xyac:
+        xyac_path = _train_xyac_model(seasons, args)
+        print(f"  {'xyac':12s} → {xyac_path}")
     return 0
 
 
@@ -149,6 +196,12 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="Download PBP from nflverse before training")
     p_train.add_argument("--source", choices=["nflverse", "native"], default="nflverse",
                          help="PBP source: nflverse parquet or native nfl/raw reconstruction")
+    p_train.add_argument("--xyac-model", default="models/xyac_model.ubj", metavar="PATH",
+                         help="Path for the trained 76-class xYAC model (default models/xyac_model.ubj)")
+    p_train.add_argument("--xyac-only", action="store_true",
+                         help="Train ONLY the xYAC model (skip EP/WP/CP)")
+    p_train.add_argument("--no-xyac", action="store_true",
+                         help="Skip the xYAC model (train only EP/WP/CP)")
 
     # ----------------------------------------------------------------- report
     p_report = sub.add_parser("report", help="LOSO calibration report (tables + figures + metrics)")

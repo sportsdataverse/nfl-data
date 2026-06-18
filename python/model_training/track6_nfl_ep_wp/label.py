@@ -13,8 +13,22 @@ from typing import Literal, Optional
 
 import polars as pl
 
-from .constants import CP_FEATURES, EP_CLASS_ORDER, EP_FEATURES, WP_NAIVE_FEATURES, WP_SPREAD_FEATURES
-from .features import make_model_mutations, prepare_cp_data, prepare_ep_data, prepare_wp_data
+from .constants import (
+    CP_FEATURES,
+    EP_CLASS_ORDER,
+    EP_FEATURES,
+    WP_NAIVE_FEATURES,
+    WP_SPREAD_FEATURES,
+    XYAC_FEATURES,
+    XYAC_NUM_CLASSES,
+)
+from .features import (
+    make_model_mutations,
+    prepare_cp_data,
+    prepare_ep_data,
+    prepare_wp_data,
+    prepare_xyac_data,
+)
 
 # ---------------------------------------------------------------------------
 # Class index mapping (Touchdown=0 … No_Score=6)
@@ -323,3 +337,53 @@ def build_cp_training_set(df: pl.DataFrame) -> pl.DataFrame:
     df = prepare_cp_data(df)
     df = df.filter(pl.col("valid_pass") == 1.0)
     return df.select([*CP_FEATURES, "complete_pass"])
+
+
+def build_xyac_training_set(df: pl.DataFrame) -> pl.DataFrame:
+    """Full xYAC training set pipeline from raw nflverse PBP.
+
+    Faithful port of ``nflverse-pbp/models/train_xyac_model.R``. Same completed-pass
+    feature family as CP plus ``distance_to_goal``; the label is a 76-class multinomial
+    over clamped yards-after-catch buckets.
+
+    1. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
+    2. Apply ``prepare_xyac_data()`` (CP mutations + ``distance_to_goal``; keeps
+       ``yards_after_catch`` + ``complete_pass`` for filtering + labelling).
+    3. Filter to the xYAC training domain (mirrors train_xyac_model.R):
+         - ``season >= 2006`` (air_yards available from the CPOE era).
+         - ``complete_pass == 1`` (YAC is only defined on completions).
+         - ``yards_after_catch`` non-null and ``>= -20``.
+         - ``air_yards`` non-null and in ``[-15, 70)``.
+         - ``air_yards < yardline_100`` (catch spot not past the goal line).
+         - ``pass_location`` non-null.
+    4. Build ``label`` = ``clamp(yards_after_catch, -5, 70) + 5`` → integers ``0..75``.
+    5. Select ``XYAC_FEATURES + label``.
+
+    Args:
+        df: Raw nflverse PBP frame containing pass play columns + ``yards_after_catch``.
+
+    Returns:
+        Training-ready DataFrame with ``XYAC_FEATURES`` columns + ``label`` (Int32, 0–75).
+    """
+    df = df.filter(pl.col("season") >= 2006)
+    df = make_model_mutations(df)
+    df = prepare_xyac_data(df)
+    df = df.filter(
+        (pl.col("complete_pass") == 1)
+        & pl.col("yards_after_catch").is_not_null()
+        & (pl.col("yards_after_catch") >= -20.0)
+        & pl.col("air_yards").is_not_null()
+        & (pl.col("air_yards") >= -15.0)
+        & (pl.col("air_yards") < 70.0)
+        & (pl.col("air_yards") < pl.col("yardline_100"))
+        & pl.col("pass_location").is_not_null()
+    )
+    # label = clamp(yards_after_catch, -5, 70) + 5  → 0..75 (XYAC_NUM_CLASSES buckets).
+    df = df.with_columns(
+        (pl.col("yards_after_catch").clip(-5.0, 70.0) + 5.0)
+        .round(0)
+        .cast(pl.Int32)
+        .clip(0, XYAC_NUM_CLASSES - 1)
+        .alias("label")
+    )
+    return df.select([*XYAC_FEATURES, "label"])

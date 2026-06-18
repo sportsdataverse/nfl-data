@@ -19,6 +19,12 @@ _RELEASE_BODY = {
     "nfl_model_pbp": (
         "NFL compiled play-by-play (EP/WP/QBR enriched; Python-built)."
     ),
+    "nfl_rosters": (
+        "SDV-native NFL season rosters (ESPN-sourced; Python-built)."
+    ),
+    "nfl_players": (
+        "SDV-native NFL player index (ESPN athlete crosswalk; Python-built)."
+    ),
 }
 
 
@@ -73,20 +79,29 @@ def upload_artifacts(
     tag: str,
     repo: str,
     *,
+    pattern: str | None = None,
     dry_run: bool = False,
     runner=None,
     exists_check=None,
 ) -> dict:
-    """Upload each discovered model + card to the *tag* release on *repo*.
+    """Upload each discovered artifact to the *tag* release on *repo*.
+
+    By default (``pattern=None``) the uploaded set is each ``*.ubj`` model plus
+    its ``.json`` card sidecar (:func:`plan_uploads`).  Pass *pattern* to upload
+    a flat glob instead (e.g. ``"roster_*.parquet"`` or ``"players.parquet"``);
+    no card-sidecar pairing is done in that mode.
 
     The release is created if it does not already exist (``gh release upload``
     does not create one), so a single call is self-sufficient.  *runner* and
     *exists_check* are injectable for hermetic testing.
 
     Args:
-        models_dir: Directory containing ``*.ubj`` model files.
+        models_dir: Directory containing the artifact files.
         tag: GitHub release tag (e.g. ``"nfl_model_artifacts"``).
         repo: GitHub repository slug (e.g. ``"sportsdataverse/sportsdataverse-data"``).
+        pattern: Optional glob (relative to *models_dir*) selecting a flat set of
+            files to upload. When ``None``, falls back to the ``*.ubj`` + card
+            discovery in :func:`plan_uploads`.
         dry_run: When True, print what would be done without touching the network.
         runner: Callable ``(args: list) -> None`` that executes a ``gh`` sub-command
             (injectable for testing; defaults to :func:`_gh_runner`).
@@ -100,7 +115,10 @@ def upload_artifacts(
     """
     run = runner or _gh_runner
     exists = exists_check or _gh_release_exists
-    files = plan_uploads(models_dir)
+    if pattern is None:
+        files = plan_uploads(models_dir)
+    else:
+        files = sorted(Path(models_dir).glob(pattern))
     created_release = False
 
     if dry_run:

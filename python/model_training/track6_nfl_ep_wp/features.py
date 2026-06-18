@@ -17,6 +17,7 @@ from .constants import (
     WP_SPREAD_FEATURES,
     WP_NAIVE_FEATURES,
     CP_FEATURES,
+    XYAC_FEATURES,
     EP_CLASS_ORDER,
     EP_LABEL_TO_SCORE,
 )
@@ -194,6 +195,37 @@ def prepare_cp_data(df: pl.DataFrame) -> pl.DataFrame:
     keep = [*CP_FEATURES, "valid_pass"]
     if "complete_pass" in df.columns:
         keep.append("complete_pass")
+    return df.select(keep)
+
+
+def prepare_xyac_data(df: pl.DataFrame) -> pl.DataFrame:
+    """Prepare xYAC model features.
+
+    Mirrors :func:`prepare_cp_data` (the closest analog — same completed-pass feature
+    family) and adds ``distance_to_goal`` (= ``yardline_100`` - ``air_yards``, i.e. the
+    yardline at the catch point). Reuses the CP mutations: ``air_is_zero``,
+    ``pass_middle``, ``distance_to_sticks``.
+
+    Args:
+        df: DataFrame that has already been passed through ``make_model_mutations()``.
+
+    Returns:
+        DataFrame with ``XYAC_FEATURES`` columns. ``yards_after_catch`` and
+        ``complete_pass`` are retained when present so ``build_xyac_training_set`` can
+        apply its filter + build the 76-class label; absent at inference time, where
+        only the features are needed.
+    """
+    df = df.with_columns(
+        (pl.col("air_yards") == 0.0).cast(pl.Float64).alias("air_is_zero"),
+        (pl.col("pass_location") == "middle").cast(pl.Float64).alias("pass_middle"),
+        (pl.col("air_yards") - pl.col("ydstogo")).alias("distance_to_sticks"),
+        (pl.col("yardline_100") - pl.col("air_yards")).alias("distance_to_goal"),
+    )
+    keep = [*XYAC_FEATURES]
+    # Keep the raw filter/label sources when present (training); absent at inference.
+    for extra in ("yards_after_catch", "complete_pass", "pass_location"):
+        if extra in df.columns:
+            keep.append(extra)
     return df.select(keep)
 
 

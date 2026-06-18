@@ -3,6 +3,12 @@
 Usage::
 
     python -m native_pbp build --seasons 2022:2024 --raw-dir .cache/nfl_raw --out out/model_pbp
+
+Pass ``--enrich`` to run the EP/WP/CP/xYAC enrichment (the canonical
+``nfl_model_pbp`` dataset) before each season's parquet is written::
+
+    python -m native_pbp build --seasons 2023:2024 --raw-dir nfl/raw \\
+        --out out/model_pbp --enrich
 """
 from __future__ import annotations
 
@@ -18,6 +24,8 @@ def build_season(
     season: int,
     raw_dir: str | Path,
     out_dir: str | Path,
+    *,
+    enrich: bool = False,
 ) -> Path:
     """Build one season's model-PBP parquet and write it to *out_dir*.
 
@@ -27,6 +35,12 @@ def build_season(
             Per-game files are expected at ``{raw_dir}/{season}/*.json``.
         out_dir: Output directory.  The file is written as
             ``{out_dir}/model_pbp_{season}.parquet``.
+        enrich: When ``True``, run the nflfastR-faithful EP/WP/CP/xYAC
+            enrichment (``sportsdataverse.nfl.ep_wp.enrich_nfl_pbp`` with
+            ``method="lead_diff"``) on the build frame before writing it.
+            The build frame already satisfies enrich's
+            ``NFLVERSE_FRAME_CONTRACT``.  When ``False`` (default), the raw
+            build frame is written unchanged.
 
     Returns:
         Path to the written parquet file.
@@ -36,6 +50,11 @@ def build_season(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     df = _build_season(season, raw_dir=raw_dir)
+
+    if enrich and df.height:
+        from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp
+
+        df = enrich_nfl_pbp(df, method="lead_diff")
 
     out_path = out_dir / f"model_pbp_{season}.parquet"
     df.write_parquet(out_path)
@@ -70,6 +89,14 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Output directory for the model_pbp_{season}.parquet files.",
     )
+    b.add_argument(
+        "--enrich",
+        action="store_true",
+        help=(
+            "Run the EP/WP/CP/xYAC enrichment (enrich_nfl_pbp, method='lead_diff') "
+            "on each season before writing — the canonical nfl_model_pbp dataset."
+        ),
+    )
     return ap
 
 
@@ -78,6 +105,8 @@ def main(argv=None) -> int:
     if args.cmd == "build":
         seasons = _parse_season_range(args.seasons)
         for season in seasons:
-            out_path = build_season(season, raw_dir=args.raw_dir, out_dir=args.out)
+            out_path = build_season(
+                season, raw_dir=args.raw_dir, out_dir=args.out, enrich=args.enrich
+            )
             print(f"wrote {out_path}")
     return 0

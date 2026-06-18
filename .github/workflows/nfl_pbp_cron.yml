@@ -1,0 +1,157 @@
+# NFL model_pbp build + publish
+#
+# Builds model_pbp_<season>.parquet (EP/WP/CP/xYAC enriched) from the raw
+# Shield JSON committed to sportsdataverse/nfl-raw, then uploads each parquet
+# to the "nfl_model_pbp" release on sportsdataverse/sportsdataverse-data.
+#
+# Off-season cron runs (Mar–Aug) are effectively no-ops when nfl-raw has no
+# new commits since the last run — the build will find the same raw files
+# and republish the same parquets (--clobber is safe; same bytes).
+# Consider adding a git-diff gate (compare nfl-raw HEAD to a cached SHA) if
+# you want to skip redundant rebuilds during the off-season.
+
+name: NFL model_pbp build + publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: >
+          Season or inclusive range to rebuild, e.g. "2024" or "2023:2024".
+          Defaults to the current NFL season (determined at run time).
+        required: false
+        default: ""
+
+  schedule:
+    # Mondays 09:00 UTC, September through February (active NFL season window).
+    # Off-season runs (March–August) are no-ops if nfl-raw is unchanged.
+    - cron: "0 9 * 9-12,1,2 1"
+
+# Prevent two builds from overlapping (e.g. a manual dispatch during a cron run).
+concurrency:
+  group: nfl-model-pbp-build
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build + publish nfl_model_pbp
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout nfl-data (this repo) ─────────────────────────────────
+      - name: Checkout nfl-data
+        uses: actions/checkout@v4
+        with:
+          path: nfl-data
+
+      # ── 2. Checkout nfl-raw (separate repo; provides raw Shield JSON) ─────
+      # Raw per-game JSON lives at nfl/raw/{season}/*.json inside nfl-raw.
+      # nfl-data does NOT vendor this data; a second checkout is required.
+      # The build step points --raw-dir at nfl-raw/nfl/raw so the native_pbp
+      # builder finds files at {raw_dir}/{season}/*.json as documented.
+      - name: Checkout nfl-raw (raw Shield JSON)
+        uses: actions/checkout@v4
+        with:
+          repository: sportsdataverse/nfl-raw
+          # No explicit ref → checks out the default branch (main).
+          # A token is only required if the repo is private; remove the
+          # `token:` line if nfl-raw is public.
+          token: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          path: nfl-raw
+
+      # ── 3. Set up Python 3.12 ────────────────────────────────────────────
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # ── 4. Install uv ────────────────────────────────────────────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # ── 5. Sync project deps from lockfile ───────────────────────────────
+      # The pyproject.toml + uv.lock live under python/ inside nfl-data.
+      - name: Sync nfl-data Python deps
+        working-directory: nfl-data/python
+        run: uv sync --frozen
+
+      # ── 6. Install sportsdataverse from sdv-py main ───────────────────────
+      # The xYAC surface (calculate_xyac / enrich_nfl_pbp with xYAC) landed
+      # on sdv-py main after the 0.0.65 PyPI release that pyproject.toml pins.
+      # Install from git until a new release carries it.
+      # TODO: pin to a PyPI release once sdv-py >=0.0.68 (or whichever
+      #       version first ships calculate_xyac) is published.
+      - name: Install sportsdataverse from git (main; xYAC fix)
+        working-directory: nfl-data/python
+        run: |
+          uv pip install \
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
+
+      # ── 7. Verify xYAC is importable ─────────────────────────────────────
+      - name: Verify xYAC import
+        working-directory: nfl-data/python
+        run: |
+          uv run python -c "from sportsdataverse.nfl.ep_wp import calculate_xyac; print('xYAC OK')"
+
+      # ── 8. Cache the sportsdataverse model artifacts (~34 MB) ────────────
+      # enrich_nfl_pbp downloads the EP/WP/CP/xYAC model files on first use
+      # and caches them under ~/.cache/sportsdataverse.  A fixed cache key
+      # means the models are re-used across runs; bump the key suffix when
+      # new model artifacts are published (e.g. "v1" → "v2").
+      - name: Cache sportsdataverse model files
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/sportsdataverse
+          key: sdv-nfl-model-cache-v1
+
+      # ── 9. Resolve season ────────────────────────────────────────────────
+      # If the workflow_dispatch input is blank (or this is a cron run),
+      # compute the current NFL season: the season year equals the calendar
+      # year, except in January–July it rolls back one year (e.g. Jan 2025
+      # is still season 2024).  Adjust the cutoff month if needed.
+      - name: Resolve seasons input
+        id: seasons
+        run: |
+          INPUT="${{ github.event.inputs.seasons }}"
+          if [ -n "$INPUT" ]; then
+            echo "seasons=$INPUT" >> "$GITHUB_OUTPUT"
+          else
+            MONTH=$(date -u +%m)   # 01-12
+            YEAR=$(date -u +%Y)
+            # Months 01-07 belong to the previous season year
+            if [ "$MONTH" -le 7 ]; then
+              SEASON=$((YEAR - 1))
+            else
+              SEASON=$YEAR
+            fi
+            echo "seasons=$SEASON" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 10. Build model_pbp parquets ──────────────────────────────────────
+      # --raw-dir points at the nfl/raw root inside the nfl-raw checkout.
+      # native_pbp expects files at {raw_dir}/{season}/*.json.
+      # Output parquets are written to nfl-data/python/out/model_pbp/.
+      - name: Build model_pbp parquets
+        working-directory: nfl-data/python
+        run: |
+          uv run python -m native_pbp build \
+            --enrich \
+            --seasons "${{ steps.seasons.outputs.seasons }}" \
+            --raw-dir "${{ github.workspace }}/nfl-raw/nfl/raw" \
+            --out out/model_pbp
+
+      # ── 11. Publish to sportsdataverse/sportsdataverse-data ───────────────
+      # SDV_DATA_TOKEN must be a PAT (classic or fine-grained) with
+      # Contents: write  on sportsdataverse/sportsdataverse-data.
+      # The fallback to GITHUB_TOKEN will fail for cross-repo uploads unless
+      # the nfl-data repo has been granted explicit permission — set up
+      # SDV_DATA_TOKEN in repository secrets for reliable operation.
+      - name: Publish model_pbp to sportsdataverse-data
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python -m nfl_model_publish pbp \
+            --parquet-dir out/model_pbp \
+            --tag nfl_model_pbp \
+            --repo sportsdataverse/sportsdataverse-data

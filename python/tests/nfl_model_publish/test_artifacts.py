@@ -124,3 +124,65 @@ def test_upload_result_keys(tmp_path):
     )
     assert set(res.keys()) == {"uploaded", "files", "tag", "created_release"}
     assert res["tag"] == "nfl_model_artifacts"
+
+
+# ---------------------------------------------------------------------------
+# pattern mode — flat glob, no card-sidecar pairing
+# ---------------------------------------------------------------------------
+
+def test_pattern_uploads_matching_glob(tmp_path):
+    (tmp_path / "roster_2022.parquet").write_bytes(b"r22")
+    (tmp_path / "roster_2023.parquet").write_bytes(b"r23")
+    (tmp_path / "ep.ubj").write_bytes(b"ignored")  # not matched by pattern
+    calls = []
+    res = upload_artifacts(
+        tmp_path,
+        "nfl_rosters",
+        "owner/repo",
+        pattern="roster_*.parquet",
+        dry_run=False,
+        runner=lambda args: calls.append(args),
+        exists_check=lambda tag, repo: True,  # skip create
+    )
+    names = {c[3].rsplit("\\", 1)[-1].rsplit("/", 1)[-1] for c in calls}
+    assert names == {"roster_2022.parquet", "roster_2023.parquet"}
+    assert res["uploaded"] == 2
+
+
+def test_pattern_single_file(tmp_path):
+    (tmp_path / "players.parquet").write_bytes(b"players")
+    res = upload_artifacts(
+        tmp_path,
+        "nfl_players",
+        "owner/repo",
+        pattern="players.parquet",
+        dry_run=True,
+        runner=lambda args: None,
+        exists_check=_boom,
+    )
+    assert len(res["files"]) == 1
+    assert res["files"][0].endswith("players.parquet")
+
+
+# ---------------------------------------------------------------------------
+# _parse_seasons
+# ---------------------------------------------------------------------------
+
+def test_parse_seasons_range_and_single():
+    from nfl_model_publish.cli import _parse_seasons
+
+    assert _parse_seasons("2022:2024") == [2022, 2023, 2024]
+    assert _parse_seasons("2023") == [2023]
+
+
+def test_parse_seasons_rejects_inverted_and_malformed():
+    import argparse
+
+    import pytest
+
+    from nfl_model_publish.cli import _parse_seasons
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        _parse_seasons("2024:2022")
+    with pytest.raises(argparse.ArgumentTypeError):
+        _parse_seasons("twenty:twentytwo")

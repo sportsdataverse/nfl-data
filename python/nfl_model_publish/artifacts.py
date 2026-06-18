@@ -19,37 +19,38 @@ _RELEASE_BODY = {
     "nfl_model_pbp": (
         "NFL compiled play-by-play (EP/WP/QBR enriched; Python-built)."
     ),
+    "nfl_rosters": (
+        "SDV-native NFL season rosters (ESPN-sourced; Python-built)."
+    ),
+    "nfl_players": (
+        "SDV-native NFL player index (ESPN athlete crosswalk; Python-built)."
+    ),
 }
 
 
-def plan_uploads(models_dir, pattern: str = "*.ubj") -> list[Path]:
-    """Discover artifact files (and, for ``*.ubj``, their card sidecars).
+def plan_uploads(models_dir) -> list[Path]:
+    """Discover model files + their card sidecars in *models_dir*.
 
-    For the default ``*.ubj`` pattern each match is paired with its sidecar
-    card — a ``.json`` file sharing the same stem (e.g. ``ep.ubj`` + ``ep.json``,
-    included only when it exists).  For any other pattern (e.g.
-    ``model_pbp_*.parquet``) the matched files are returned as-is with no
-    sidecar pairing.
+    For each ``*.ubj`` found, pairs it with its sidecar card: a ``.json`` file
+    sharing the same stem (e.g. ``ep.ubj`` + ``ep.json``).  The card is
+    included only when it exists.
 
     Args:
-        models_dir: Directory to scan for artifacts.
-        pattern: Glob pattern for the primary artifacts (default ``"*.ubj"``).
+        models_dir: Directory containing ``*.ubj`` model files (and optionally
+            their ``.json`` card sidecars).
 
     Returns:
         De-duplicated list of :class:`pathlib.Path` objects in stable order
-        (model first, then its card when applicable).
+        (model first, then its card).
     """
     models_dir = Path(models_dir)
-    pair_cards = pattern == "*.ubj"
     seen: set[Path] = set()
     out: list[Path] = []
 
-    for model_path in sorted(models_dir.glob(pattern)):
+    for model_path in sorted(models_dir.glob("*.ubj")):
         if model_path not in seen:
             seen.add(model_path)
             out.append(model_path)
-        if not pair_cards:
-            continue
         # Card sidecar: same stem, .json extension
         card_path = model_path.with_suffix(".json")
         if card_path.exists() and card_path not in seen:
@@ -78,23 +79,29 @@ def upload_artifacts(
     tag: str,
     repo: str,
     *,
-    pattern: str = "*.ubj",
+    pattern: str | None = None,
     dry_run: bool = False,
     runner=None,
     exists_check=None,
 ) -> dict:
-    """Upload each discovered artifact (+ card) to the *tag* release on *repo*.
+    """Upload each discovered artifact to the *tag* release on *repo*.
+
+    By default (``pattern=None``) the uploaded set is each ``*.ubj`` model plus
+    its ``.json`` card sidecar (:func:`plan_uploads`).  Pass *pattern* to upload
+    a flat glob instead (e.g. ``"roster_*.parquet"`` or ``"players.parquet"``);
+    no card-sidecar pairing is done in that mode.
 
     The release is created if it does not already exist (``gh release upload``
     does not create one), so a single call is self-sufficient.  *runner* and
     *exists_check* are injectable for hermetic testing.
 
     Args:
-        models_dir: Directory to scan for artifacts.
+        models_dir: Directory containing the artifact files.
         tag: GitHub release tag (e.g. ``"nfl_model_artifacts"``).
         repo: GitHub repository slug (e.g. ``"sportsdataverse/sportsdataverse-data"``).
-        pattern: Glob pattern for the artifacts to upload (default ``"*.ubj"``;
-            pass ``"model_pbp_*.parquet"`` for the compiled PBP dataset).
+        pattern: Optional glob (relative to *models_dir*) selecting a flat set of
+            files to upload. When ``None``, falls back to the ``*.ubj`` + card
+            discovery in :func:`plan_uploads`.
         dry_run: When True, print what would be done without touching the network.
         runner: Callable ``(args: list) -> None`` that executes a ``gh`` sub-command
             (injectable for testing; defaults to :func:`_gh_runner`).
@@ -108,7 +115,10 @@ def upload_artifacts(
     """
     run = runner or _gh_runner
     exists = exists_check or _gh_release_exists
-    files = plan_uploads(models_dir, pattern)
+    if pattern is None:
+        files = plan_uploads(models_dir)
+    else:
+        files = sorted(Path(models_dir).glob(pattern))
     created_release = False
 
     if dry_run:

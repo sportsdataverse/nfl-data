@@ -1,0 +1,119 @@
+# NFL rosters + players build + publish
+#
+# Builds the SDV-native public-tier datasets via sportsdataverse and uploads
+# them to sportsdataverse/sportsdataverse-data:
+#   - rosters: build_nfl_rosters(<season>) -> roster_<season>.parquet -> "nfl_rosters" release
+#   - players: build_nfl_players()         -> players.parquet         -> "nfl_players" release
+#
+# These use the NFL Shield rosters API + ESPN core-v2 athletes (public tiers);
+# no raw repo and no model artifacts are needed (unlike the model_pbp cron), so
+# there is no nfl-raw checkout and no model cache here. build_nfl_players walks
+# ~7,500 ESPN athlete $refs sequentially and takes several minutes — expected.
+#
+# Off-season runs still publish (rosters change with transactions/cuts; the
+# player index grows as new athletes are added). --clobber upload is idempotent.
+
+name: NFL rosters + players build + publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: >
+          Roster season or inclusive range, e.g. "2024" or "2022:2024".
+          Defaults to the current NFL season (determined at run time).
+        required: false
+        default: ""
+      skip_players:
+        description: "Set to 'true' to skip the (slow) players rebuild."
+        required: false
+        default: "false"
+
+  schedule:
+    # Mondays 09:00 UTC, September through February (active NFL season window).
+    - cron: "0 9 * 9-12,1,2 1"
+
+concurrency:
+  group: nfl-rosters-players-build
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    name: Build + publish nfl_rosters / nfl_players
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout nfl-data
+        uses: actions/checkout@v4
+        with:
+          path: nfl-data
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync nfl-data Python deps
+        working-directory: nfl-data/python
+        run: uv sync --frozen
+
+      # build_nfl_rosters / build_nfl_players landed on sdv-py main after the
+      # pinned PyPI release; install from git until a release carries them.
+      # TODO: pin to a PyPI release once it ships build_nfl_rosters/build_nfl_players.
+      - name: Install sportsdataverse from git (main)
+        working-directory: nfl-data/python
+        run: |
+          uv pip install \
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
+
+      - name: Verify builders import
+        working-directory: nfl-data/python
+        run: |
+          uv run python -c "from sportsdataverse.nfl import build_nfl_rosters, build_nfl_players; print('builders OK')"
+
+      # Resolve roster season: workflow_dispatch input wins; otherwise the
+      # current NFL season (Jan–Jul roll back one year).
+      - name: Resolve seasons input
+        id: seasons
+        run: |
+          INPUT="${{ github.event.inputs.seasons }}"
+          if [ -n "$INPUT" ]; then
+            echo "seasons=$INPUT" >> "$GITHUB_OUTPUT"
+          else
+            MONTH=$(date -u +%m)
+            YEAR=$(date -u +%Y)
+            if [ "$MONTH" -le 7 ]; then
+              SEASON=$((YEAR - 1))
+            else
+              SEASON=$YEAR
+            fi
+            echo "seasons=$SEASON" >> "$GITHUB_OUTPUT"
+          fi
+
+      # SDV_DATA_TOKEN must be a PAT with Contents: write on
+      # sportsdataverse/sportsdataverse-data (the GITHUB_TOKEN fallback fails
+      # for cross-repo uploads). See the model_pbp cron for the same note.
+      - name: Publish nfl_rosters
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python -m nfl_model_publish rosters \
+            --seasons "${{ steps.seasons.outputs.seasons }}" \
+            --out out/rosters \
+            --tag nfl_rosters \
+            --repo sportsdataverse/sportsdataverse-data
+
+      - name: Publish nfl_players
+        if: ${{ github.event.inputs.skip_players != 'true' }}
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python -m nfl_model_publish players \
+            --out out/players \
+            --tag nfl_players \
+            --repo sportsdataverse/sportsdataverse-data

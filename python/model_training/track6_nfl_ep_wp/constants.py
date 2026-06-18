@@ -155,3 +155,52 @@ CP_HYPERPARAMS: dict = {
     "min_child_weight": 6,
     "nrounds": 560,
 }
+
+# ---------------------------------------------------------------------------
+# xYAC — expected yards after catch (multi:softprob, 76 classes)
+# ---------------------------------------------------------------------------
+# Canonical source: nflverse-pbp/models/train_xyac_model.R. Same feature family as
+# CP (a completed pass at the catch point) plus ``distance_to_goal`` (= yardline_100 -
+# air_yards, the yardline at the catch). The label is a 76-class multinomial over
+# clamped YAC buckets: clamp(yards_after_catch, -5, 70) + 5 → integers 0..75. The
+# model gives, for each completed pass, the full distribution of plausible YAC values,
+# from which xYAC EP and other YAC-aware metrics are derived.
+
+XYAC_FEATURES: list[str] = [
+    "air_yards",
+    "yardline_100",
+    "ydstogo",
+    "distance_to_goal",
+    "down1",
+    "down2",
+    "down3",
+    "down4",
+    "air_is_zero",
+    "pass_middle",
+    "era2",
+    "era3",
+    "era4",
+    "qb_hit",
+    "home",
+    "outdoors",
+    "retractable",
+    "dome",
+    "distance_to_sticks",
+]
+
+# 76 YAC buckets: clamp(yards_after_catch, -5, 70) shifted by +5 → [0, 75].
+XYAC_NUM_CLASSES: int = 76
+
+XYAC_HYPERPARAMS: dict = {
+    "objective": "multi:softprob",
+    "num_class": XYAC_NUM_CLASSES,
+    "eval_metric": "mlogloss",
+    "eta": 0.025,
+    "gamma": 2.0,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "max_depth": 4,
+    "min_child_weight": 1,
+    "nrounds": 500,
+    "seed": 2013,
+}

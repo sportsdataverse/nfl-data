@@ -22,6 +22,8 @@ from .constants import (
     WP_NAIVE_HYPERPARAMS,
     CP_FEATURES,
     CP_HYPERPARAMS,
+    XYAC_FEATURES,
+    XYAC_HYPERPARAMS,
 )
 
 
@@ -140,6 +142,35 @@ def train_cp(
     if "complete_pass" in df.columns:
         params["base_score"] = float(df["complete_pass"].mean())
     dmat = _to_dmatrix(df, CP_FEATURES, "complete_pass")
+    model = xgb_train(params, dmat, num_boost_round=rounds)
+    if output_path is not None:
+        model.save_model(str(output_path))
+    return model
+
+
+def train_xyac(
+    df: pl.DataFrame,
+    *,
+    nrounds: Optional[int] = None,
+    output_path: Optional[Path] = None,
+) -> Booster:
+    """Train NFL expected-yards-after-catch (xYAC) model.
+
+    Faithful port of ``nflverse-pbp/models/train_xyac_model.R``: a 76-class
+    ``multi:softprob`` model over clamped YAC buckets, no sample weights.
+
+    Args:
+        df: Feature frame from ``build_xyac_training_set()`` — ``XYAC_FEATURES``
+            columns + ``label`` (Int32, 0–75).
+        nrounds: Override canonical nrounds (default: ``XYAC_HYPERPARAMS["nrounds"]``).
+        output_path: If given, save the model as a UBJ file.
+
+    Returns:
+        Trained :class:`xgboost.Booster`.
+    """
+    rounds = nrounds if nrounds is not None else XYAC_HYPERPARAMS["nrounds"]
+    params = {k: v for k, v in XYAC_HYPERPARAMS.items() if k != "nrounds"}
+    dmat = _to_dmatrix(df, XYAC_FEATURES, "label")
     model = xgb_train(params, dmat, num_boost_round=rounds)
     if output_path is not None:
         model.save_model(str(output_path))

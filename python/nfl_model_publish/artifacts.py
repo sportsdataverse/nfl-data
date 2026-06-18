@@ -22,29 +22,34 @@ _RELEASE_BODY = {
 }
 
 
-def plan_uploads(models_dir) -> list[Path]:
-    """Discover model files + their card sidecars in *models_dir*.
+def plan_uploads(models_dir, pattern: str = "*.ubj") -> list[Path]:
+    """Discover artifact files (and, for ``*.ubj``, their card sidecars).
 
-    For each ``*.ubj`` found, pairs it with its sidecar card: a ``.json`` file
-    sharing the same stem (e.g. ``ep.ubj`` + ``ep.json``).  The card is
-    included only when it exists.
+    For the default ``*.ubj`` pattern each match is paired with its sidecar
+    card — a ``.json`` file sharing the same stem (e.g. ``ep.ubj`` + ``ep.json``,
+    included only when it exists).  For any other pattern (e.g.
+    ``model_pbp_*.parquet``) the matched files are returned as-is with no
+    sidecar pairing.
 
     Args:
-        models_dir: Directory containing ``*.ubj`` model files (and optionally
-            their ``.json`` card sidecars).
+        models_dir: Directory to scan for artifacts.
+        pattern: Glob pattern for the primary artifacts (default ``"*.ubj"``).
 
     Returns:
         De-duplicated list of :class:`pathlib.Path` objects in stable order
-        (model first, then its card).
+        (model first, then its card when applicable).
     """
     models_dir = Path(models_dir)
+    pair_cards = pattern == "*.ubj"
     seen: set[Path] = set()
     out: list[Path] = []
 
-    for model_path in sorted(models_dir.glob("*.ubj")):
+    for model_path in sorted(models_dir.glob(pattern)):
         if model_path not in seen:
             seen.add(model_path)
             out.append(model_path)
+        if not pair_cards:
+            continue
         # Card sidecar: same stem, .json extension
         card_path = model_path.with_suffix(".json")
         if card_path.exists() and card_path not in seen:
@@ -73,20 +78,23 @@ def upload_artifacts(
     tag: str,
     repo: str,
     *,
+    pattern: str = "*.ubj",
     dry_run: bool = False,
     runner=None,
     exists_check=None,
 ) -> dict:
-    """Upload each discovered model + card to the *tag* release on *repo*.
+    """Upload each discovered artifact (+ card) to the *tag* release on *repo*.
 
     The release is created if it does not already exist (``gh release upload``
     does not create one), so a single call is self-sufficient.  *runner* and
     *exists_check* are injectable for hermetic testing.
 
     Args:
-        models_dir: Directory containing ``*.ubj`` model files.
+        models_dir: Directory to scan for artifacts.
         tag: GitHub release tag (e.g. ``"nfl_model_artifacts"``).
         repo: GitHub repository slug (e.g. ``"sportsdataverse/sportsdataverse-data"``).
+        pattern: Glob pattern for the artifacts to upload (default ``"*.ubj"``;
+            pass ``"model_pbp_*.parquet"`` for the compiled PBP dataset).
         dry_run: When True, print what would be done without touching the network.
         runner: Callable ``(args: list) -> None`` that executes a ``gh`` sub-command
             (injectable for testing; defaults to :func:`_gh_runner`).
@@ -100,7 +108,7 @@ def upload_artifacts(
     """
     run = runner or _gh_runner
     exists = exists_check or _gh_release_exists
-    files = plan_uploads(models_dir)
+    files = plan_uploads(models_dir, pattern)
     created_release = False
 
     if dry_run:

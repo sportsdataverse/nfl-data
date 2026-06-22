@@ -25,6 +25,10 @@ _RELEASE_BODY = {
     "nfl_players": (
         "SDV-native NFL player index (ESPN athlete crosswalk; Python-built)."
     ),
+    "nfl_player_stats": (
+        "SDV-native NFL player stats (week-level, REG+POST; aggregated from "
+        "SDV-native play-by-play; Python-built)."
+    ),
 }
 
 

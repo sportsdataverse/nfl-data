@@ -26,6 +26,13 @@ Usage::
         [--tag nfl_players] \\
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
+
+    python -m nfl_model_publish player-stats \\
+        --out <dir> \\
+        [--seasons 1999:2024] \\
+        [--tag nfl_player_stats] \\
+        [--repo sportsdataverse/sportsdataverse-data] \\
+        [--dry-run]
 """
 from __future__ import annotations
 
@@ -109,6 +116,17 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--tag", default="nfl_players", help="GitHub release tag.")
     _add_repo_dry(pl)
 
+    ps = sub.add_parser("player-stats", help="Build + upload SDV-native NFL week-level player stats.")
+    ps.add_argument(
+        "--seasons",
+        type=_parse_seasons,
+        default=list(range(1999, 2025)),
+        help="Season range 'YYYY:YYYY' (inclusive) or a single 'YYYY' (default 1999:2024).",
+    )
+    ps.add_argument("--out", required=True, help="Output directory for player_stats.parquet.")
+    ps.add_argument("--tag", default="nfl_player_stats", help="GitHub release tag.")
+    _add_repo_dry(ps)
+
     return ap
 
 
@@ -169,6 +187,25 @@ def main(argv=None) -> int:
         suffix = " (dry-run)" if args.dry_run else ""
         print(
             f"publish: rows={built['rows']} "
+            f"uploaded={res['uploaded']} files={len(res['files'])} "
+            f"-> {args.repo}:{res['tag']}{created}{suffix}"
+        )
+    elif args.cmd == "player-stats":
+        from .builders import build_player_stats
+
+        built = build_player_stats(args.seasons, args.out)
+        res = upload_artifacts(
+            args.out,
+            args.tag,
+            args.repo,
+            pattern="player_stats.parquet",
+            dry_run=args.dry_run,
+        )
+        created = " (created release)" if res.get("created_release") else ""
+        suffix = " (dry-run)" if args.dry_run else ""
+        seasons = built["seasons"]
+        print(
+            f"publish: seasons={min(seasons)}-{max(seasons)} rows={built['rows']} "
             f"uploaded={res['uploaded']} files={len(res['files'])} "
             f"-> {args.repo}:{res['tag']}{created}{suffix}"
         )

@@ -80,7 +80,62 @@ def test_rush_touchdown_sets_td_fields():
 def test_empty_and_unknown_statids_are_noops():
     assert sum_play_stats([]) == {}
     assert sum_play_stats([{"statType": 999, "yards": 1, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "z"}]) == {}
-    assert sum_play_stats([{"statType": 63, "yards": 0, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "z"}]) == {}
+
+
+def test_def_tackles_for_loss_counts_exactly():
+    # statId 402 = TFL credit; calculate_stats.R def_tackles_for_loss = sum(stat_id == 402).
+    # Three credits on one play must count 3 (the old 2-slot FILL capped at 2).
+    row = sum_play_stats([
+        {"statType": 402, "yards": 2, "gsisPlayerId": "A", "gsisPlayerName": "Aaa", "teamId": "T"},
+        {"statType": 402, "yards": 3, "gsisPlayerId": "B", "gsisPlayerName": "Bbb", "teamId": "T"},
+        {"statType": 402, "yards": 1, "gsisPlayerId": "C", "gsisPlayerName": "Ccc", "teamId": "T"},
+    ])
+    assert row["def_tackles_for_loss"] == 3
+    assert row["def_tackles_for_loss_yards"] == 6
+
+
+def test_misc_yards_sums_63_64():
+    # calculate_stats.R misc_yards = sum((stat_id %in% 63:64) * yards). statId 63 is now
+    # an accumulator (was a no-op); 64 also scores a TD.
+    row = sum_play_stats([
+        {"statType": 63, "yards": 7, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "z"},
+        {"statType": 64, "yards": 5, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "z"},
+    ])
+    assert row["misc_yards"] == 12
+    assert row["touchdown"] == 1  # 64 still scores
+
+
+def test_lateral_yards_credited_to_team_totals():
+    # rushing_yards = sum((stat_id %in% 10:13)*yards): the lateral carrier's yards (12)
+    # add to the primary carrier's (10), closing the lateral-row diffs.
+    rush = sum_play_stats([
+        {"statType": 10, "yards": 6, "gsisPlayerId": "RB", "gsisPlayerName": "R", "teamId": "T"},
+        {"statType": 12, "yards": 14, "gsisPlayerId": "WR", "gsisPlayerName": "W", "teamId": "T"},
+    ])
+    assert rush["rushing_yards"] == 20 and rush["lateral_rushing_yards"] == 14
+    rec = sum_play_stats([
+        {"statType": 21, "yards": 8, "gsisPlayerId": "R1", "gsisPlayerName": "A", "teamId": "T"},
+        {"statType": 23, "yards": 22, "gsisPlayerId": "R2", "gsisPlayerName": "B", "teamId": "T"},
+    ])
+    assert rec["receiving_yards"] == 30 and rec["lateral_receiving_yards"] == 22
+
+
+def test_fumble_recovery_lateral_yards_accumulate():
+    own = sum_play_stats([
+        {"statType": 57, "yards": 9, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "T"},
+    ])
+    assert own["fumble_recovery_own_lateral_yards"] == 9 and own["lateral_recovery"] == 1
+    opp = sum_play_stats([
+        {"statType": 61, "yards": 4, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "T"},
+    ])
+    assert opp["fumble_recovery_opp_lateral_yards"] == 4
+
+
+def test_td_ids_touchdown_flag():
+    # A rushing TD (statId 11) is in td_ids() -> sets td_ids_touchdown (def_tds input).
+    assert sum_play_stats([{"statType": 11, "yards": 1, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "T"}])["td_ids_touchdown"] == 1
+    # A fumble-recovery TD (statId 56) is NOT in td_ids() (counted in fumble_recovery_tds).
+    assert "td_ids_touchdown" not in sum_play_stats([{"statType": 56, "yards": 0, "gsisPlayerId": "x", "gsisPlayerName": "y", "teamId": "T"}])
 
 
 # ---------------------------------------------------------------------------

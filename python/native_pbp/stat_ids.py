@@ -13,9 +13,23 @@ Source-token semantics (per stat-effect tuple):
     ZERO         -> literal 0
     PID / PNAME  -> the entry's player id / name
     TEAM         -> the entry's teamId (resolved to an abbr downstream)
+    COUNT        -> +1 accumulator (each matching stat entry adds one). Used for
+                    exact per-play counts the team aggregation sums verbatim
+                    (e.g. ``def_tackles_for_loss`` = count of statId 402), so a
+                    >2-credit play is no longer capped at the old 2-slot ceiling.
+    SUMYARDS     -> += the entry's ``yards`` accumulator (e.g. ``misc_yards``,
+                    lateral-recovery yards). Distinct from YARDS, which overwrites.
     *_IFNA       -> written only if the target column is still None (first writer wins)
     *_FILL       -> first-available slot in the matching FILL_GROUPS set, with
                     same-player de-dup (a player already in an earlier slot is skipped)
+
+The COUNT / SUMYARDS accumulators (and the additive ``rushing_yards`` /
+``receiving_yards`` totals) make the team-aggregation columns
+:func:`nflfastR::calculate_stats` derives — ``def_tackles_for_loss``,
+``def_tackles_for_loss_yards``, ``misc_yards``, lateral fumble-recovery yards,
+and the lateral-inclusive rush/reception yardage — exactly reconstructible from
+the per-play frame. Each stat-id range is taken verbatim from
+``nflfastR/R/calculate_stats.R``.
 """
 from __future__ import annotations
 
@@ -34,19 +48,24 @@ STAT_ID_EFFECTS: Dict[int, List[tuple[str, str]]] = {
     7: [("third_down_failed", "ONE")],
     8: [("fourth_down_converted", "ONE")],
     9: [("fourth_down_failed", "ONE")],
-    10: [("rush_attempt", "ONE"), ("rusher_player_id", "PID"), ("rusher_player_name", "PNAME"), ("yards_gained", "YARDS"), ("rushing_yards", "YARDS")],
-    11: [("rush_attempt", "ONE"), ("touchdown", "ONE"), ("first_down_rush", "ONE"), ("rush_touchdown", "ONE"), ("rusher_player_id", "PID"), ("rusher_player_name", "PNAME"), ("yards_gained", "YARDS"), ("rushing_yards", "YARDS"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME")],
-    12: [("rush_attempt", "ONE"), ("lateral_rush", "ONE"), ("lateral_rusher_player_id", "PID"), ("lateral_rusher_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_rushing_yards", "YARDS")],
-    13: [("rush_attempt", "ONE"), ("touchdown", "ONE"), ("rush_touchdown", "ONE"), ("lateral_rush", "ONE"), ("lateral_rusher_player_id", "PID"), ("lateral_rusher_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_rushing_yards", "YARDS")],
+    # rushing_yards is a SUMYARDS accumulator over statIds 10:13 (calculate_stats.R
+    # rushing_yards = sum((stat_id %in% 10:13) * yards)) so the lateral ball-carrier's
+    # yards (12/13) are credited to the team total, closing the lateral-row diffs.
+    10: [("rush_attempt", "ONE"), ("rusher_player_id", "PID"), ("rusher_player_name", "PNAME"), ("yards_gained", "YARDS"), ("rushing_yards", "SUMYARDS")],
+    11: [("rush_attempt", "ONE"), ("touchdown", "ONE"), ("first_down_rush", "ONE"), ("rush_touchdown", "ONE"), ("rusher_player_id", "PID"), ("rusher_player_name", "PNAME"), ("yards_gained", "YARDS"), ("rushing_yards", "SUMYARDS"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME")],
+    12: [("rush_attempt", "ONE"), ("lateral_rush", "ONE"), ("lateral_rusher_player_id", "PID"), ("lateral_rusher_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_rushing_yards", "YARDS"), ("rushing_yards", "SUMYARDS")],
+    13: [("rush_attempt", "ONE"), ("touchdown", "ONE"), ("rush_touchdown", "ONE"), ("lateral_rush", "ONE"), ("lateral_rusher_player_id", "PID"), ("lateral_rusher_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_rushing_yards", "YARDS"), ("rushing_yards", "SUMYARDS")],
     14: [("incomplete_pass", "ONE"), ("pass_attempt", "ONE"), ("passer_player_id", "PID"), ("passer_player_name", "PNAME")],
     15: [("pass_attempt", "ONE"), ("complete_pass", "ONE"), ("passer_player_id", "PID"), ("passer_player_name", "PNAME"), ("yards_gained", "YARDS"), ("passing_yards", "YARDS")],
     16: [("pass_attempt", "ONE"), ("touchdown", "ONE"), ("pass_touchdown", "ONE"), ("complete_pass", "ONE"), ("passer_player_id", "PID"), ("passer_player_name", "PNAME"), ("yards_gained", "YARDS"), ("passing_yards", "YARDS"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME")],
     19: [("interception", "ONE"), ("pass_attempt", "ONE"), ("passer_player_id", "PID"), ("passer_player_name", "PNAME")],
     20: [("pass_attempt", "ONE"), ("sack", "ONE"), ("passer_player_id", "PID"), ("passer_player_name", "PNAME"), ("yards_gained", "YARDS")],
-    21: [("pass_attempt", "ONE"), ("complete_pass", "ONE"), ("receiver_player_id", "PID"), ("receiver_player_name", "PNAME"), ("yards_gained", "YARDS"), ("receiving_yards", "YARDS")],
-    22: [("pass_attempt", "ONE"), ("touchdown", "ONE"), ("pass_touchdown", "ONE"), ("complete_pass", "ONE"), ("receiver_player_id", "PID"), ("receiver_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("yards_gained", "YARDS"), ("receiving_yards", "YARDS")],
-    23: [("pass_attempt", "ONE"), ("complete_pass", "ONE"), ("lateral_reception", "ONE"), ("lateral_receiver_player_id", "PID"), ("lateral_receiver_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_receiving_yards", "YARDS")],
-    24: [("pass_attempt", "ONE"), ("touchdown", "ONE"), ("pass_touchdown", "ONE"), ("complete_pass", "ONE"), ("lateral_reception", "ONE"), ("lateral_receiver_player_id", "PID"), ("lateral_receiver_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_receiving_yards", "YARDS")],
+    # receiving_yards is a SUMYARDS accumulator over statIds 21:24 (calculate_stats.R
+    # receiving_yards = sum((stat_id %in% 21:24) * yards)) — credits the lateral receiver.
+    21: [("pass_attempt", "ONE"), ("complete_pass", "ONE"), ("receiver_player_id", "PID"), ("receiver_player_name", "PNAME"), ("yards_gained", "YARDS"), ("receiving_yards", "SUMYARDS")],
+    22: [("pass_attempt", "ONE"), ("touchdown", "ONE"), ("pass_touchdown", "ONE"), ("complete_pass", "ONE"), ("receiver_player_id", "PID"), ("receiver_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("yards_gained", "YARDS"), ("receiving_yards", "SUMYARDS")],
+    23: [("pass_attempt", "ONE"), ("complete_pass", "ONE"), ("lateral_reception", "ONE"), ("lateral_receiver_player_id", "PID"), ("lateral_receiver_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_receiving_yards", "YARDS"), ("receiving_yards", "SUMYARDS")],
+    24: [("pass_attempt", "ONE"), ("touchdown", "ONE"), ("pass_touchdown", "ONE"), ("complete_pass", "ONE"), ("lateral_reception", "ONE"), ("lateral_receiver_player_id", "PID"), ("lateral_receiver_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("yards_gained", "YARDS"), ("lateral_receiving_yards", "YARDS"), ("receiving_yards", "SUMYARDS")],
     25: [("pass_attempt", "ONE"), ("interception_player_id", "PID"), ("interception_player_name", "PNAME"), ("return_team", "TEAM"), ("return_yards", "YARDS"), ("return_penalty_fix", "ONE")],
     26: [("pass_attempt", "ONE"), ("touchdown", "ONE"), ("return_touchdown", "ONE"), ("interception_player_id", "PID"), ("interception_player_name", "PNAME"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("return_team", "TEAM"), ("return_yards", "YARDS"), ("return_penalty_fix", "ONE")],
     27: [("pass_attempt", "ONE"), ("lateral_return", "ONE"), ("lateral_interception_player_id", "PID"), ("lateral_interception_player_name", "PNAME"), ("return_yards", "YARDS"), ("return_penalty_fix", "ONE")],
@@ -79,14 +98,22 @@ STAT_ID_EFFECTS: Dict[int, List[tuple[str, str]]] = {
     54: [("fumble_out_of_bounds", "ONE"), ("fumble", "ONE"), ("fumbled_FILL_player_id", "PID"), ("fumbled_FILL_player_name", "PNAME"), ("fumbled_FILL_team", "TEAM")],
     55: [("fumble", "ONE"), ("fumble_recovery_FILL_player_id", "PID"), ("fumble_recovery_FILL_player_name", "PNAME"), ("fumble_recovery_FILL_team", "TEAM"), ("fumble_recovery_FILL_yards", "YARDS")],
     56: [("touchdown", "ONE"), ("fumble", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("fumble_recovery_FILL_player_id", "PID"), ("fumble_recovery_FILL_player_name", "PNAME"), ("fumble_recovery_FILL_team", "TEAM"), ("fumble_recovery_FILL_yards", "YARDS")],
-    57: [("fumble", "ONE"), ("lateral_recovery", "ONE")],
-    58: [("touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("fumble", "ONE"), ("lateral_recovery", "ONE")],
+    # 57/58 are OWN-recovery laterals, 61/62 OPP-recovery laterals: they don't count
+    # as a recovery (no FILL slot) but their yards DO count toward the recovery-yards
+    # totals (calculate_stats.R fumble_recovery_yards_own = sum((stat_id %in% 55:58)*yards),
+    # fumble_recovery_yards_opp = sum((stat_id %in% 59:62)*yards)). Emit the lateral
+    # yards as separate accumulators so the team agg adds them to the 55/56 (own) and
+    # 59/60 (opp) FILL-slot recovery yards exactly.
+    57: [("fumble", "ONE"), ("lateral_recovery", "ONE"), ("fumble_recovery_own_lateral_yards", "SUMYARDS")],
+    58: [("touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("fumble", "ONE"), ("lateral_recovery", "ONE"), ("fumble_recovery_own_lateral_yards", "SUMYARDS")],
     59: [("fumble", "ONE"), ("fumble_recovery_FILL_player_id", "PID"), ("fumble_recovery_FILL_player_name", "PNAME"), ("fumble_recovery_FILL_team", "TEAM"), ("fumble_recovery_FILL_yards", "YARDS")],
     60: [("touchdown", "ONE"), ("return_touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("fumble", "ONE"), ("fumble_recovery_FILL_player_id", "PID"), ("fumble_recovery_FILL_player_name", "PNAME"), ("fumble_recovery_FILL_team", "TEAM"), ("fumble_recovery_FILL_yards", "YARDS")],
-    61: [("fumble", "ONE"), ("lateral_recovery", "ONE")],
-    62: [("touchdown", "ONE"), ("return_touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("fumble", "ONE"), ("lateral_recovery", "ONE")],
-    63: [],
-    64: [("touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME")],
+    61: [("fumble", "ONE"), ("lateral_recovery", "ONE"), ("fumble_recovery_opp_lateral_yards", "SUMYARDS")],
+    62: [("touchdown", "ONE"), ("return_touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("fumble", "ONE"), ("lateral_recovery", "ONE"), ("fumble_recovery_opp_lateral_yards", "SUMYARDS")],
+    # statIds 63:64 yards = "misc yards" (calculate_stats.R misc_yards = sum((stat_id %in%
+    # 63:64)*yards)) — mostly yards gained after blocked punts / FGs. 64 also scores a TD.
+    63: [("misc_yards", "SUMYARDS")],
+    64: [("touchdown", "ONE"), ("td_team", "TEAM"), ("td_player_id", "PID"), ("td_player_name", "PNAME"), ("misc_yards", "SUMYARDS")],
     68: [("timeout", "ONE"), ("timeout_team", "TEAM")],
     69: [("field_goal_missed", "ONE"), ("field_goal_attempt", "ONE"), ("kicker_player_id", "PID"), ("kicker_player_name", "PNAME"), ("kick_distance", "YARDS")],
     70: [("field_goal_made", "ONE"), ("field_goal_attempt", "ONE"), ("kicker_player_id", "PID"), ("kicker_player_name", "PNAME"), ("kick_distance", "YARDS")],
@@ -128,7 +155,11 @@ STAT_ID_EFFECTS: Dict[int, List[tuple[str, str]]] = {
     115: [("pass_attempt", "ONE"), ("receiver_player_id", "PID"), ("receiver_player_name", "PNAME")],
     120: [("tackle_for_loss_FILL_player_id", "PID"), ("tackle_for_loss_FILL_player_name", "PNAME")],
     301: [("extra_point_aborted", "ONE"), ("extra_point_attempt", "ONE")],
-    402: [],
+    # statId 402 = a defender's tackle-for-loss credit. calculate_stats.R
+    # def_tackles_for_loss = sum(stat_id == 402) and def_tackles_for_loss_yards =
+    # sum((stat_id == 402)*yards). Emit as COUNT/SUMYARDS accumulators so a play with
+    # >2 TFL credits is counted exactly (the old 2-slot tackle_for_loss_FILL capped at 2).
+    402: [("def_tackles_for_loss", "COUNT"), ("def_tackles_for_loss_yards", "SUMYARDS")],
     403: [("defensive_two_point_attempt", "ONE")],
     404: [("defensive_two_point_conv", "ONE")],
     405: [("defensive_extra_point_attempt", "ONE")],
@@ -136,6 +167,19 @@ STAT_ID_EFFECTS: Dict[int, List[tuple[str, str]]] = {
     410: [("kickoff_attempt", "ONE"), ("kicker_player_id", "PID"), ("kicker_player_name", "PNAME")],
     420: [("two_point_return", "ONE"), ("two_point_attempt", "ONE")],
 }
+
+# nflfastR td_ids() (calculate_stats.R) — the statIds that count toward def_tds /
+# special_teams_tds. NB: 56/58/60/62 (fumble-recovery TDs) are DELIBERATELY excluded
+# (they're counted in fumble_recovery_tds, not def_tds). 18 is absent from the Shield
+# effect table (never appears). Every member already sets ``touchdown`` + ``td_team``.
+# We additionally emit a ``td_ids_touchdown`` COUNT so the team aggregation can compute
+# def_tds = sum(td_ids_touchdown >= 1 & special != 1 & td_team == defteam) — capturing
+# the blocked-kick-return TD (64) the old ``return_touchdown``-only path missed, while
+# correctly leaving fumble-return TDs to fumble_recovery_tds.
+TD_IDS: tuple[int, ...] = (11, 13, 16, 22, 24, 26, 28, 34, 36, 46, 48, 64, 108)
+for _tid in TD_IDS:
+    STAT_ID_EFFECTS.setdefault(_tid, []).append(("td_ids_touchdown", "COUNT"))
+del _tid
 
 # Ordered first-available slot sets for the ``*_FILL`` pseudo-columns.
 FILL_GROUPS: Dict[str, List[str]] = {
@@ -246,6 +290,16 @@ def sum_play_stats(stats: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not effects:
             continue
         for col, token in effects:
+            if token == "COUNT":
+                # Exact per-play count accumulator (e.g. def_tackles_for_loss).
+                row[col] = (row.get(col) or 0) + 1
+                continue
+            if token == "SUMYARDS":
+                # Additive yards accumulator (e.g. misc_yards, lateral recovery yards,
+                # lateral-inclusive rushing/receiving totals). None yards count as 0.
+                yds = entry.get("yards")
+                row[col] = (row.get(col) or 0) + (yds if yds is not None else 0)
+                continue
             value = _val(token, entry)
             if "_FILL_" in col:
                 slots = FILL_GROUPS[col]

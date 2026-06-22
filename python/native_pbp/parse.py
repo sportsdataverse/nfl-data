@@ -145,6 +145,10 @@ _BASE_INDICATORS = [
     # --- defensive / tackling indicators (team_stats enablement) ---
     "solo_tackle", "assist_tackle", "tackle_with_assist", "tackled_for_loss",
     "fumble_forced", "fumble_not_forced", "fumble_out_of_bounds",
+    # --- special-teams return flags (exact punt_returns / kickoff_returns inputs;
+    #     calculate_stats.R assigns statIds 37/38/39 + 49/50 to the receiving team) ---
+    "punt_fair_catch", "punt_downed", "punt_out_of_bounds",
+    "kickoff_fair_catch", "kickoff_out_of_bounds",
     # --- extra-point sub-results (drive extra_point_result) ---
     "extra_point_good", "extra_point_failed", "extra_point_blocked",
     "extra_point_safety", "extra_point_aborted",
@@ -156,7 +160,19 @@ _BASE_INDICATORS = [
 ]
 _BASE_NUMERICS = ["yards_gained", "air_yards", "yards_after_catch", "passing_yards",
                   "rushing_yards", "receiving_yards", "penalty_yards", "kick_distance",
-                  "return_yards"]
+                  "return_yards", "lateral_rushing_yards", "lateral_receiving_yards"]
+# Exact per-play stat-id count / yards-sum accumulators (int, default 0) that close
+# the team_stats parity gaps. Each maps 1:1 onto a nflfastR calculate_stats.R term:
+#   def_tackles_for_loss        = sum(stat_id == 402)            (count of 402 credits)
+#   def_tackles_for_loss_yards  = sum((stat_id == 402) * yards)
+#   td_ids_touchdown            = count of td_ids() TD stats -> exact def_tds downstream
+#   misc_yards                  = sum((stat_id %in% 63:64) * yards)
+#   fumble_recovery_own_lateral_yards = sum((stat_id %in% 57:58) * yards)
+#   fumble_recovery_opp_lateral_yards = sum((stat_id %in% 61:62) * yards)
+_BASE_COUNTS = [
+    "def_tackles_for_loss", "def_tackles_for_loss_yards", "td_ids_touchdown",
+    "misc_yards", "fumble_recovery_own_lateral_yards", "fumble_recovery_opp_lateral_yards",
+]
 _BASE_PLAYERS = ["passer_player_id", "passer_player_name", "rusher_player_id",
                  "rusher_player_name", "receiver_player_id", "receiver_player_name",
                  "td_player_id", "td_player_name", "td_team", "penalty_team", "timeout_team",
@@ -295,6 +311,9 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
         # Merge the requested stable columns (default 0 / None when absent).
         for col in _BASE_INDICATORS:
             row[col] = int(stat_row.get(col) or 0)
+        for col in _BASE_COUNTS:
+            # nflfastR sums these; the per-play value when no stat fires is 0 (not null).
+            row[col] = int(stat_row.get(col) or 0)
         for col in _BASE_NUMERICS:
             row[col] = stat_row.get(col)
         for col in _BASE_PLAYERS:
@@ -313,8 +332,10 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
     # for the first 100+ plays in many games, which would otherwise be inferred as
     # Null dtype and then fail when a later string value appears.
     df = pl.DataFrame(rows, infer_schema_length=None)
+    df = df.sort("play_seq")
     df = _add_special_teams_derivations(df)
-    return df.sort("play_seq")
+    df = _add_fixed_drive(df)
+    return df
 
 
 # nflverse play_types that count as special teams (helper_additional_functions.R).
@@ -384,4 +405,103 @@ def _add_special_teams_derivations(df: pl.DataFrame) -> pl.DataFrame:
         .otherwise(None),
         special=pl.col("play_type").is_in(_SPECIAL_PLAY_TYPES).fill_null(False).cast(pl.Int64),
     )
+    return df
+
+
+def _add_fixed_drive(df: pl.DataFrame) -> pl.DataFrame:
+    """Add nflfastR's ``fixed_drive`` — a per-game ascending drive counter.
+
+    Faithful polars port of the new_drive -> ``fixed_drive = cumsum(new_drive)``
+    logic in ``helper_add_fixed_drives.R`` (Carl/Baldwin). ``fixed_drive`` starts
+    at 1 and increments at each new possession; the number is shared across both
+    teams (interleaved). A play inherits the same number through interstitial
+    null-posteam plays (kickoffs / PATs / timeouts) via the look-back rules.
+
+    ``new_drive`` is 1 when:
+
+    * the possession team changes from the prior play (or from the play 2/3 back
+      when the intervening play(s) have a null posteam — the kickoff/PAT gap), or
+    * it is the first play of a half, or
+    * the offense kept the ball after its own lost fumble on a punt/pass/run/FG
+      (a new series), or it recovered an onside kick / muffed return, or
+    * it is a kickoff immediately after a safety.
+
+    It is forced back to 0 for a PAT/2pt that follows a *defensive* touchdown
+    (the try is part of the scoring drive, not a new one).
+
+    Args:
+        df: The sorted (by ``play_seq``) base play frame, carrying ``game_id``,
+            ``game_half``, ``posteam``, ``td_team``, ``touchdown``, ``fumble_lost``,
+            ``safety``, ``kickoff_attempt``, ``own_kickoff_recovery``, ``play_type``.
+
+    Returns:
+        The frame with an Int64 ``fixed_drive`` column added.
+    """
+    if df.height == 0:
+        return df.with_columns(fixed_drive=pl.lit(None, dtype=pl.Int64))
+
+    own_ko = pl.col("own_kickoff_recovery") if "own_kickoff_recovery" in df.columns else pl.lit(0)
+    g = ["game_id", "game_half"]
+    pos = pl.col("posteam")
+
+    # Base: possession change, with up to-3-play look-back across null posteams.
+    change = (
+        (pos != pos.shift(1).over(g))
+        | ((pos != pos.shift(2).over(g)) & pos.shift(1).over(g).is_null())
+        | (
+            (pos != pos.shift(3).over(g))
+            & pos.shift(1).over(g).is_null()
+            & pos.shift(2).over(g).is_null()
+        )
+    )
+    df = df.with_columns(_new_drive=change.cast(pl.Int64))
+
+    # PAT/2pt after a defensive TD is NOT a new drive (the try belongs to the
+    # scoring drive). Look back through up to two intervening timeout/TMW plays.
+    prev_def_td = (
+        (pl.col("touchdown").shift(1).over(g) == 1)
+        & (pl.col("posteam").shift(1).over(g) != pl.col("td_team").shift(1).over(g))
+        & pl.col("posteam").shift(1).over(g).is_not_null()
+    )
+    df = df.with_columns(
+        _new_drive=pl.when(prev_def_td).then(pl.lit(0)).otherwise(pl.col("_new_drive"))
+    )
+
+    # Same team retained the ball after its own lost fumble on a scrimmage/punt play
+    # (and the play was not a TD) -> a new series/drive.
+    retained_after_fumble = (
+        (pos == pos.shift(1).over(g))
+        & (pl.col("fumble_lost").shift(1).over(g) == 1)
+        & pl.col("play_type").shift(1).over(g).is_in(["punt", "pass", "run", "field_goal"])
+        & (pl.col("touchdown").shift(1).over(g) == 0)
+    )
+    df = df.with_columns(
+        _new_drive=pl.when(retained_after_fumble).then(pl.lit(1)).otherwise(pl.col("_new_drive"))
+    )
+
+    # Recovered onside kick / muffed return -> new drive.
+    ko_recovery = (pl.col("play_type") == "kickoff") & (
+        (own_ko == 1) | (pl.col("fumble_lost") == 1)
+    )
+    # Kickoff right after a safety -> new drive.
+    ko_after_safety = (pl.col("kickoff_attempt") == 1) & (pl.col("safety").shift(1).over(g) == 1)
+    df = df.with_columns(
+        _new_drive=pl.when(ko_recovery | ko_after_safety)
+        .then(pl.lit(1))
+        .otherwise(pl.col("_new_drive"))
+    )
+
+    # First play of each half is always a new drive.
+    df = df.with_columns(
+        _row=pl.int_range(0, pl.len()).over(g),
+    ).with_columns(
+        _new_drive=pl.when(pl.col("_row") == 0).then(pl.lit(1)).otherwise(pl.col("_new_drive"))
+    )
+
+    # Nulls (from shifts at boundaries) are not new drives.
+    df = df.with_columns(_new_drive=pl.col("_new_drive").fill_null(0))
+    # fixed_drive = cumulative count of new drives within the game.
+    df = df.with_columns(
+        fixed_drive=pl.col("_new_drive").cum_sum().over("game_id").cast(pl.Int64)
+    ).drop("_new_drive", "_row")
     return df

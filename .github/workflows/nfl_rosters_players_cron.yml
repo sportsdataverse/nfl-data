@@ -1,19 +1,24 @@
-# NFL rosters + players build + publish
+# NFL rosters + players + player-stats build + publish
 #
 # Builds the SDV-native public-tier datasets via sportsdataverse and uploads
 # them to sportsdataverse/sportsdataverse-data:
-#   - rosters: build_nfl_rosters(<season>) -> roster_<season>.parquet -> "nfl_rosters" release
-#   - players: build_nfl_players()         -> players.parquet         -> "nfl_players" release
+#   - rosters:      build_nfl_rosters(<season>)     -> roster_<season>.parquet -> "nfl_rosters" release
+#   - players:      build_nfl_players()             -> players.parquet         -> "nfl_players" release
+#   - player-stats: build_nfl_player_stats(1999..N) -> player_stats.parquet     -> "nfl_player_stats" release
+#   - team-stats:   build_nfl_team_stats(1999..N)   -> team_stats.parquet       -> "nfl_team_stats" release
 #
-# These use the NFL Shield rosters API + ESPN core-v2 athletes (public tiers);
-# no raw repo and no model artifacts are needed (unlike the model_pbp cron), so
-# there is no nfl-raw checkout and no model cache here. build_nfl_players walks
-# ~7,500 ESPN athlete $refs sequentially and takes several minutes — expected.
+# rosters/players use the NFL Shield rosters API + ESPN core-v2 athletes (public
+# tiers). player-stats aggregates the SDV-native play-by-play release into one
+# combined week-level parquet (all seasons, REG+POST, offense), mirroring
+# nflverse player_stats. No raw repo and no model artifacts are needed (unlike
+# the model_pbp cron), so there is no nfl-raw checkout and no model cache here.
+# build_nfl_players walks ~7,500 ESPN athlete $refs sequentially and takes
+# several minutes — expected.
 #
 # Off-season runs still publish (rosters change with transactions/cuts; the
 # player index grows as new athletes are added). --clobber upload is idempotent.
 
-name: NFL rosters + players build + publish
+name: NFL rosters + players + player-stats + team-stats build + publish
 
 on:
   workflow_dispatch:
@@ -28,6 +33,26 @@ on:
         description: "Set to 'true' to skip the (slow) players rebuild."
         required: false
         default: "false"
+      skip_player_stats:
+        description: "Set to 'true' to skip the player-stats rebuild."
+        required: false
+        default: "false"
+      skip_team_stats:
+        description: "Set to 'true' to skip the team-stats rebuild."
+        required: false
+        default: "false"
+      player_stats_seasons:
+        description: >
+          player-stats season range, e.g. "1999:2024". Defaults to the full
+          historical range through the current NFL season (resolved at run time).
+        required: false
+        default: ""
+      team_stats_seasons:
+        description: >
+          team-stats season range, e.g. "1999:2024". Defaults to the full
+          historical range through the current NFL season (resolved at run time).
+        required: false
+        default: ""
 
   schedule:
     # Mondays 09:00 UTC, September through February (active NFL season window).
@@ -39,7 +64,7 @@ concurrency:
 
 jobs:
   build-and-publish:
-    name: Build + publish nfl_rosters / nfl_players
+    name: Build + publish nfl_rosters / nfl_players / nfl_player_stats / nfl_team_stats
     runs-on: ubuntu-latest
 
     steps:
@@ -72,7 +97,7 @@ jobs:
       - name: Verify builders import
         working-directory: nfl-data/python
         run: |
-          uv run python -c "from sportsdataverse.nfl import build_nfl_rosters, build_nfl_players; print('builders OK')"
+          uv run python -c "from sportsdataverse.nfl import build_nfl_rosters, build_nfl_players, build_nfl_player_stats, build_nfl_team_stats; print('builders OK')"
 
       # Resolve roster season: workflow_dispatch input wins; otherwise the
       # current NFL season (Jan–Jul roll back one year).
@@ -116,4 +141,73 @@ jobs:
           uv run python -m nfl_model_publish players \
             --out out/players \
             --tag nfl_players \
+            --repo sportsdataverse/sportsdataverse-data
+
+      # Resolve the player-stats season range: workflow_dispatch input wins;
+      # otherwise the full historical range 1999..<current NFL season>.
+      - name: Resolve player-stats seasons
+        id: ps_seasons
+        run: |
+          INPUT="${{ github.event.inputs.player_stats_seasons }}"
+          if [ -n "$INPUT" ]; then
+            echo "seasons=$INPUT" >> "$GITHUB_OUTPUT"
+          else
+            MONTH=$(date -u +%m)
+            YEAR=$(date -u +%Y)
+            if [ "$MONTH" -le 7 ]; then
+              END=$((YEAR - 1))
+            else
+              END=$YEAR
+            fi
+            echo "seasons=1999:$END" >> "$GITHUB_OUTPUT"
+          fi
+
+      # player-stats: rebuild the full combined week-level parquet (all seasons,
+      # REG+POST, offense) from the SDV-native play-by-play and publish to the
+      # nfl_player_stats release. --clobber upload is idempotent.
+      - name: Publish nfl_player_stats
+        if: ${{ github.event.inputs.skip_player_stats != 'true' }}
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python -m nfl_model_publish player-stats \
+            --seasons "${{ steps.ps_seasons.outputs.seasons }}" \
+            --out out/player_stats \
+            --tag nfl_player_stats \
+            --repo sportsdataverse/sportsdataverse-data
+
+      # Resolve the team-stats season range: workflow_dispatch input wins;
+      # otherwise the full historical range 1999..<current NFL season>.
+      - name: Resolve team-stats seasons
+        id: ts_seasons
+        run: |
+          INPUT="${{ github.event.inputs.team_stats_seasons }}"
+          if [ -n "$INPUT" ]; then
+            echo "seasons=$INPUT" >> "$GITHUB_OUTPUT"
+          else
+            MONTH=$(date -u +%m)
+            YEAR=$(date -u +%Y)
+            if [ "$MONTH" -le 7 ]; then
+              END=$((YEAR - 1))
+            else
+              END=$YEAR
+            fi
+            echo "seasons=1999:$END" >> "$GITHUB_OUTPUT"
+          fi
+
+      # team-stats: rebuild the full combined week-level parquet (all seasons,
+      # REG+POST, offense + defense + kicking + returns) from the SDV-native
+      # play-by-play and publish to the nfl_team_stats release. --clobber upload
+      # is idempotent.
+      - name: Publish nfl_team_stats
+        if: ${{ github.event.inputs.skip_team_stats != 'true' }}
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python -m nfl_model_publish team-stats \
+            --seasons "${{ steps.ts_seasons.outputs.seasons }}" \
+            --out out/team_stats \
+            --tag nfl_team_stats \
             --repo sportsdataverse/sportsdataverse-data

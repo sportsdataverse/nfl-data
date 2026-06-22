@@ -26,7 +26,22 @@ Usage::
         [--tag nfl_players] \\
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
+
+    python -m nfl_model_publish player-stats \\
+        --out <dir> \\
+        [--seasons 1999:2024] \\
+        [--tag nfl_player_stats] \\
+        [--repo sportsdataverse/sportsdataverse-data] \\
+        [--dry-run]
+
+    python -m nfl_model_publish team-stats \\
+        --out <dir> \\
+        [--seasons 1999:2024] \\
+        [--tag nfl_team_stats] \\
+        [--repo sportsdataverse/sportsdataverse-data] \\
+        [--dry-run]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,13 +98,23 @@ def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="nfl_model_publish")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    a = sub.add_parser("artifacts", help="Upload NFL model artifacts (.ubj + cards) to a release.")
-    a.add_argument("--models", required=True, help="Directory containing *.ubj model files.")
+    a = sub.add_parser(
+        "artifacts", help="Upload NFL model artifacts (.ubj + cards) to a release."
+    )
+    a.add_argument(
+        "--models", required=True, help="Directory containing *.ubj model files."
+    )
     a.add_argument("--tag", default="nfl_model_artifacts", help="GitHub release tag.")
     _add_repo_dry(a)
 
-    pbp = sub.add_parser("pbp", help="Upload compiled model-PBP parquet files to a release.")
-    pbp.add_argument("--parquet-dir", required=True, help="Directory containing model_pbp_*.parquet files.")
+    pbp = sub.add_parser(
+        "pbp", help="Upload compiled model-PBP parquet files to a release."
+    )
+    pbp.add_argument(
+        "--parquet-dir",
+        required=True,
+        help="Directory containing model_pbp_*.parquet files.",
+    )
     pbp.add_argument("--tag", default="nfl_model_pbp", help="GitHub release tag.")
     _add_repo_dry(pbp)
 
@@ -100,14 +125,52 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_seasons,
         help="Season range 'YYYY:YYYY' (inclusive) or a single 'YYYY'.",
     )
-    r.add_argument("--out", required=True, help="Output directory for roster_{season}.parquet files.")
+    r.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for roster_{season}.parquet files.",
+    )
     r.add_argument("--tag", default="nfl_rosters", help="GitHub release tag.")
     _add_repo_dry(r)
 
-    pl = sub.add_parser("players", help="Build + upload the SDV-native NFL player index.")
-    pl.add_argument("--out", required=True, help="Output directory for players.parquet.")
+    pl = sub.add_parser(
+        "players", help="Build + upload the SDV-native NFL player index."
+    )
+    pl.add_argument(
+        "--out", required=True, help="Output directory for players.parquet."
+    )
     pl.add_argument("--tag", default="nfl_players", help="GitHub release tag.")
     _add_repo_dry(pl)
+
+    ps = sub.add_parser(
+        "player-stats", help="Build + upload SDV-native NFL week-level player stats."
+    )
+    ps.add_argument(
+        "--seasons",
+        type=_parse_seasons,
+        default=list(range(1999, 2025)),
+        help="Season range 'YYYY:YYYY' (inclusive) or a single 'YYYY' (default 1999:2024).",
+    )
+    ps.add_argument(
+        "--out", required=True, help="Output directory for player_stats.parquet."
+    )
+    ps.add_argument("--tag", default="nfl_player_stats", help="GitHub release tag.")
+    _add_repo_dry(ps)
+
+    ts = sub.add_parser(
+        "team-stats", help="Build + upload SDV-native NFL week-level team stats."
+    )
+    ts.add_argument(
+        "--seasons",
+        type=_parse_seasons,
+        default=list(range(1999, 2025)),
+        help="Season range 'YYYY:YYYY' (inclusive) or a single 'YYYY' (default 1999:2024).",
+    )
+    ts.add_argument(
+        "--out", required=True, help="Output directory for team_stats.parquet."
+    )
+    ts.add_argument("--tag", default="nfl_team_stats", help="GitHub release tag.")
+    _add_repo_dry(ts)
 
     return ap
 
@@ -169,6 +232,44 @@ def main(argv=None) -> int:
         suffix = " (dry-run)" if args.dry_run else ""
         print(
             f"publish: rows={built['rows']} "
+            f"uploaded={res['uploaded']} files={len(res['files'])} "
+            f"-> {args.repo}:{res['tag']}{created}{suffix}"
+        )
+    elif args.cmd == "player-stats":
+        from .builders import build_player_stats
+
+        built = build_player_stats(args.seasons, args.out)
+        res = upload_artifacts(
+            args.out,
+            args.tag,
+            args.repo,
+            pattern="player_stats.parquet",
+            dry_run=args.dry_run,
+        )
+        created = " (created release)" if res.get("created_release") else ""
+        suffix = " (dry-run)" if args.dry_run else ""
+        seasons = built["seasons"]
+        print(
+            f"publish: seasons={min(seasons)}-{max(seasons)} rows={built['rows']} "
+            f"uploaded={res['uploaded']} files={len(res['files'])} "
+            f"-> {args.repo}:{res['tag']}{created}{suffix}"
+        )
+    elif args.cmd == "team-stats":
+        from .builders import build_team_stats
+
+        built = build_team_stats(args.seasons, args.out)
+        res = upload_artifacts(
+            args.out,
+            args.tag,
+            args.repo,
+            pattern="team_stats.parquet",
+            dry_run=args.dry_run,
+        )
+        created = " (created release)" if res.get("created_release") else ""
+        suffix = " (dry-run)" if args.dry_run else ""
+        seasons = built["seasons"]
+        print(
+            f"publish: seasons={min(seasons)}-{max(seasons)} rows={built['rows']} "
             f"uploaded={res['uploaded']} files={len(res['files'])} "
             f"-> {args.repo}:{res['tag']}{created}{suffix}"
         )

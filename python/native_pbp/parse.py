@@ -142,12 +142,59 @@ _BASE_INDICATORS = [
     "extra_point_attempt", "two_point_attempt", "punt_attempt",
     "kickoff_attempt", "penalty", "fumble", "fumble_lost", "qb_hit", "safety", "timeout",
     "first_down_rush", "first_down_pass", "first_down_penalty",
+    # --- defensive / tackling indicators (team_stats enablement) ---
+    "solo_tackle", "assist_tackle", "tackle_with_assist", "tackled_for_loss",
+    "fumble_forced", "fumble_not_forced", "fumble_out_of_bounds",
+    # --- extra-point sub-results (drive extra_point_result) ---
+    "extra_point_good", "extra_point_failed", "extra_point_blocked",
+    "extra_point_safety", "extra_point_aborted",
+    # --- two-point sub-results (drive two_point_conv_result) ---
+    "two_point_rush_good", "two_point_rush_failed", "two_point_rush_safety",
+    "two_point_pass_good", "two_point_pass_failed", "two_point_pass_safety",
+    "two_point_pass_reception_good", "two_point_pass_reception_failed",
+    "two_point_return",
 ]
 _BASE_NUMERICS = ["yards_gained", "air_yards", "yards_after_catch", "passing_yards",
-                  "rushing_yards", "receiving_yards", "penalty_yards", "kick_distance"]
+                  "rushing_yards", "receiving_yards", "penalty_yards", "kick_distance",
+                  "return_yards"]
 _BASE_PLAYERS = ["passer_player_id", "passer_player_name", "rusher_player_id",
                  "rusher_player_name", "receiver_player_id", "receiver_player_name",
-                 "td_player_id", "td_player_name", "td_team", "penalty_team", "timeout_team"]
+                 "td_player_id", "td_player_name", "td_team", "penalty_team", "timeout_team",
+                 # --- kicking / punting / returns ---
+                 "kicker_player_id", "kicker_player_name",
+                 "punter_player_id", "punter_player_name",
+                 "punt_returner_player_id", "punt_returner_player_name",
+                 "kickoff_returner_player_id", "kickoff_returner_player_name",
+                 "return_team",
+                 # --- defensive single-writer slots ---
+                 "interception_player_id", "interception_player_name",
+                 "sack_player_id", "sack_player_name",
+                 "safety_player_id", "safety_player_name",
+                 "blocked_player_id", "blocked_player_name",
+                 "penalty_player_id", "penalty_player_name",
+                 # --- defensive FILL-group slots (de-duped multi-participant) ---
+                 "solo_tackle_1_player_id", "solo_tackle_1_player_name", "solo_tackle_1_team",
+                 "solo_tackle_2_player_id", "solo_tackle_2_player_name", "solo_tackle_2_team",
+                 "assist_tackle_1_player_id", "assist_tackle_1_player_name", "assist_tackle_1_team",
+                 "assist_tackle_2_player_id", "assist_tackle_2_player_name", "assist_tackle_2_team",
+                 "assist_tackle_3_player_id", "assist_tackle_3_player_name", "assist_tackle_3_team",
+                 "assist_tackle_4_player_id", "assist_tackle_4_player_name", "assist_tackle_4_team",
+                 "tackle_with_assist_1_player_id", "tackle_with_assist_1_player_name", "tackle_with_assist_1_team",
+                 "tackle_with_assist_2_player_id", "tackle_with_assist_2_player_name", "tackle_with_assist_2_team",
+                 "tackle_for_loss_1_player_id", "tackle_for_loss_1_player_name",
+                 "tackle_for_loss_2_player_id", "tackle_for_loss_2_player_name",
+                 "half_sack_1_player_id", "half_sack_1_player_name",
+                 "half_sack_2_player_id", "half_sack_2_player_name",
+                 "qb_hit_1_player_id", "qb_hit_1_player_name",
+                 "qb_hit_2_player_id", "qb_hit_2_player_name",
+                 "pass_defense_1_player_id", "pass_defense_1_player_name",
+                 "pass_defense_2_player_id", "pass_defense_2_player_name",
+                 "forced_fumble_player_1_player_id", "forced_fumble_player_1_player_name", "forced_fumble_player_1_team",
+                 "forced_fumble_player_2_player_id", "forced_fumble_player_2_player_name", "forced_fumble_player_2_team",
+                 "fumbled_1_player_id", "fumbled_1_player_name", "fumbled_1_team",
+                 "fumbled_2_player_id", "fumbled_2_player_name", "fumbled_2_team",
+                 "fumble_recovery_1_player_id", "fumble_recovery_1_player_name", "fumble_recovery_1_team", "fumble_recovery_1_yards",
+                 "fumble_recovery_2_player_id", "fumble_recovery_2_player_name", "fumble_recovery_2_team", "fumble_recovery_2_yards"]
 
 # Points scored ON a play by its scoringPlayType (attributed to scoringTeamId).
 # Drives the per-play running score, which steps correctly at each scoring play
@@ -201,9 +248,11 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
             defteam = away_abbr if posteam == home_abbr else home_abbr
 
         stat_row = sum_play_stats(p.get("stats") or [])
-        # Resolve teamId-valued stat columns to abbrs.
-        for tcol in ("td_team", "penalty_team", "timeout_team", "return_team"):
-            if stat_row.get(tcol) in team_by_id:
+        # Resolve every teamId-valued stat column to an nflverse abbr. Covers the
+        # scalar team cols (td/penalty/timeout/return) plus the FILL-group ``*_team``
+        # slots (tackles, fumbles, forced fumbles, recoveries) used by team_stats.
+        for tcol in stat_row:
+            if tcol.endswith("_team") and stat_row.get(tcol) in team_by_id:
                 stat_row[tcol] = team_by_id[stat_row[tcol]]
 
         quarter = p.get("quarter")
@@ -264,4 +313,75 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
     # for the first 100+ plays in many games, which would otherwise be inferred as
     # Null dtype and then fail when a later string value appears.
     df = pl.DataFrame(rows, infer_schema_length=None)
+    df = _add_special_teams_derivations(df)
     return df.sort("play_seq")
+
+
+# nflverse play_types that count as special teams (helper_additional_functions.R).
+_SPECIAL_PLAY_TYPES = ("extra_point", "field_goal", "kickoff", "punt")
+
+
+def _add_special_teams_derivations(df: pl.DataFrame) -> pl.DataFrame:
+    """Derive ``two_point_conv_result``, ``extra_point_result`` and ``special``.
+
+    Faithful port of nflfastR's mutations:
+
+    * ``two_point_conv_result`` — from the two_point_*_good / _failed / _safety /
+      _return sub-indicators when ``two_point_attempt == 1``
+      (``helper_add_nflscrapr_mutations.R``).
+    * ``extra_point_result`` — from the extra_point_good / _failed / _blocked /
+      _safety / _aborted sub-indicators (``aggregate_game_stats_kicking.R``).
+    * ``special`` — 1 when ``play_type`` is a special-teams type
+      (``helper_additional_functions.R``).
+
+    Args:
+        df: The base play frame (post per-row stat merge), carrying the
+            two_point_* / extra_point_* sub-indicator columns.
+
+    Returns:
+        The frame with ``two_point_conv_result`` (success/failure/safety/return/
+        None), ``extra_point_result`` (good/failed/blocked/safety/aborted/None),
+        and ``special`` (Int64 0/1) added.
+    """
+    two_pt = pl.col("two_point_attempt") == 1
+    df = df.with_columns(
+        two_point_conv_result=pl.when(
+            two_pt
+            & (
+                (pl.col("two_point_rush_good") == 1)
+                | (pl.col("two_point_pass_good") == 1)
+                | (pl.col("two_point_pass_reception_good") == 1)
+            )
+        )
+        .then(pl.lit("success"))
+        .when(
+            two_pt
+            & (
+                (pl.col("two_point_rush_failed") == 1)
+                | (pl.col("two_point_pass_failed") == 1)
+                | (pl.col("two_point_pass_reception_failed") == 1)
+            )
+        )
+        .then(pl.lit("failure"))
+        .when(
+            two_pt
+            & ((pl.col("two_point_rush_safety") == 1) | (pl.col("two_point_pass_safety") == 1))
+        )
+        .then(pl.lit("safety"))
+        .when(two_pt & (pl.col("two_point_return") == 1))
+        .then(pl.lit("return"))
+        .otherwise(None),
+        extra_point_result=pl.when(pl.col("extra_point_good") == 1)
+        .then(pl.lit("good"))
+        .when(pl.col("extra_point_failed") == 1)
+        .then(pl.lit("failed"))
+        .when(pl.col("extra_point_blocked") == 1)
+        .then(pl.lit("blocked"))
+        .when(pl.col("extra_point_safety") == 1)
+        .then(pl.lit("safety"))
+        .when(pl.col("extra_point_aborted") == 1)
+        .then(pl.lit("aborted"))
+        .otherwise(None),
+        special=pl.col("play_type").is_in(_SPECIAL_PLAY_TYPES).fill_null(False).cast(pl.Int64),
+    )
+    return df

@@ -253,14 +253,22 @@ def sum_play_stats(stats: List[Dict[str, Any]]) -> Dict[str, Any]:
                 id_group_col = _FILL_ID_SLOTS[group]
                 id_slots = FILL_GROUPS[id_group_col]
                 pid = entry.get("gsisPlayerId")
-                # De-dup: skip if this player already occupies an earlier id slot.
-                if pid is not None and any(row.get(s) == pid for s in id_slots):
-                    continue
                 # Write into the first empty slot of this specific field's list.
-                for slot in slots:
-                    if row.get(slot) is None:
-                        row[slot] = value
-                        break
+                # De-dup matches nflfastR (helper_tidy_play_stats.R): slot 1 always
+                # fills; a later slot fills only when the player isn't already in a
+                # STRICTLY EARLIER id slot. Keying de-dup off the target slot's index
+                # (not "any id slot") is essential — otherwise writing the _name/_team
+                # of an entry whose _player_id just filled slot 1 would be wrongly
+                # skipped (slot-1 id == pid), nulling the companion name/team columns.
+                for idx, slot in enumerate(slots):
+                    if row.get(slot) is not None:
+                        continue
+                    if pid is not None and any(
+                        row.get(s) == pid for s in id_slots[:idx]
+                    ):
+                        break  # player already in an earlier slot — don't advance
+                    row[slot] = value
+                    break
             elif token.endswith("_IFNA"):
                 if row.get(col) is None:
                     row[col] = value

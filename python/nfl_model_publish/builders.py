@@ -12,6 +12,7 @@ The heavy lifting (ESPN scraping / crosswalking / PBP aggregation) lives in
 ``build_nfl_player_stats``; this module only sequences seasons, materializes
 frames to disk, and reports row counts so the CLI can print a one-line summary.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -117,5 +118,60 @@ def build_player_stats(
     print(
         f"player_stats: seasons={min(seasons)}-{max(seasons)} "
         f"rows={df.height} -> {path}"
+    )
+    return {"rows": df.height, "seasons": list(seasons), "path": str(path)}
+
+
+def build_team_stats(
+    seasons: list[int],
+    out_dir,
+    *,
+    season_type: str = "REG+POST",
+) -> dict:
+    """Build the SDV-native NFL team-stats table and write ``team_stats.parquet``.
+
+    Mirrors nflverse ``team_stats`` (one combined week-level parquet covering all
+    seasons, ~102 columns: offense + ``def_*`` defense + kicking + misc/returns).
+    Each season is aggregated independently with
+    :func:`sportsdataverse.nfl.build_nfl_team_stats` (``summary_level="week"``)
+    and the per-season week-level frames are stacked into one parquet.
+
+    Aggregating per-season (rather than passing the full range in one call)
+    avoids a raw play-by-play schema-drift edge: the SDV-native ``nfl_model_pbp``
+    release has a one-column width difference across some seasons, which trips
+    ``load_nfl_pbp``'s vertical concat when many seasons are read at once. The
+    aggregated week-level output, by contrast, has a stable schema, so the
+    per-season frames concat cleanly (``diagonal_relaxed`` tolerates any residual
+    column-set drift across eras).
+
+    Args:
+        seasons: Seasons to aggregate (stacked into one parquet).
+        out_dir: Output directory (created if absent).
+        season_type: Passed through to ``build_nfl_team_stats``. Defaults to
+            ``"REG+POST"`` to match nflverse week-level coverage.
+
+    Returns:
+        ``{"rows": int, "seasons": list[int], "path": str}``.
+    """
+    import polars as pl
+
+    from sportsdataverse.nfl import build_nfl_team_stats
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    frames: list[pl.DataFrame] = []
+    for season in seasons:
+        sdf = build_nfl_team_stats(
+            [season],
+            summary_level="week",
+            season_type=season_type,
+        )
+        print(f"team_stats: season={season} rows={sdf.height}")
+        frames.append(sdf)
+    df = pl.concat(frames, how="diagonal_relaxed")
+    path = out_dir / "team_stats.parquet"
+    df.write_parquet(path)
+    print(
+        f"team_stats: seasons={min(seasons)}-{max(seasons)} rows={df.height} -> {path}"
     )
     return {"rows": df.height, "seasons": list(seasons), "path": str(path)}

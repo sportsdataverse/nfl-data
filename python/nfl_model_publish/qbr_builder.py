@@ -34,6 +34,7 @@ Provenance notes (verified live against the 2024 ESPN payloads + nflverse parque
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any, Iterator
 
@@ -136,6 +137,31 @@ def reshape_week_athlete(athlete: dict, season: int, season_type_label: str) -> 
     return row
 
 
+def _get_json(params: dict, *, retries: int = 4, backoff: float = 1.0) -> dict | None:
+    """GET the QBR endpoint with retry on transient failures.
+
+    Returns parsed JSON on 200; ``None`` on 404 (a week/season with no QBR data)
+    or after exhausting retries. 429 / 5xx / connection errors are retried with
+    exponential backoff. A give-up is logged to stderr -- never a silent drop, so
+    a transient rate-limit can't quietly delete a whole week from a backfill.
+    """
+    last = ""
+    for attempt in range(retries):
+        try:
+            resp = requests.get(_QBR_URL, params=params, headers=_HEADERS, timeout=30)
+        except requests.RequestException as exc:
+            last = repr(exc)
+        else:
+            if resp.status_code == 200:
+                return resp.json()
+            if resp.status_code == 404:
+                return None  # expected: no QBR for this week/season
+            last = f"HTTP {resp.status_code}"
+        time.sleep(backoff * (2**attempt))
+    print(f"qbr: WARN gave up after {retries} retries ({last}) for {params}", file=sys.stderr)
+    return None
+
+
 def _fetch_athletes(
     qbr_type: str,
     season: int,
@@ -146,7 +172,11 @@ def _fetch_athletes(
     limit: int = 100,
     delay: float = 0.4,
 ) -> Iterator[dict]:
-    """Yield every ``athletes[]`` entry across all pages for one query (I/O)."""
+    """Yield every ``athletes[]`` entry across all pages for one query (I/O).
+
+    Transient HTTP failures are retried (see :func:`_get_json`); a 404 ends the
+    query cleanly. Pages are never silently dropped on a transient error.
+    """
     page = 1
     while page <= _PAGE_CAP:
         params: dict[str, Any] = {
@@ -156,10 +186,9 @@ def _fetch_athletes(
         }
         if week is not None:
             params["week"] = week
-        resp = requests.get(_QBR_URL, params=params, headers=_HEADERS, timeout=30)
-        if resp.status_code != 200:
+        payload = _get_json(params)
+        if payload is None:
             return
-        payload = resp.json()
         for athlete in payload.get("athletes") or []:
             yield athlete
         pages = int((payload.get("pagination") or {}).get("pages", 1) or 1)

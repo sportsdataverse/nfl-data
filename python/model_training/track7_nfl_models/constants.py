@@ -168,6 +168,74 @@ FG_ROOF_LEVELS: tuple[str, ...] = ("00", "01", "10", "11")
 FG_VALIDATION_YARDLINE_RANGE: tuple[int, int] = (10, 63)
 
 # ---------------------------------------------------------------------------
+# wp_model — win probability (home-perspective), binary:logistic
+# ---------------------------------------------------------------------------
+# The converted oracle `wp_model.ubj` (sdv-py-stats nfl4th_artifacts/official) is
+# the model `nfl4th::wp_model()` applies for 4th-down decisions — a HOME-team
+# win-probability XGBoost (11 features incl. `home_ep` + `spread_time`), NOT
+# nflfastR MODELS.R's possession-team `wp_model` (those are track6's WP models).
+#
+# The feature contract is `nfl4th` `R/apply_win_prob.R::wp_model_select()` —
+# `as.matrix()` column order (the duplicate `home_timeouts_remaining` collapses
+# to one column, so the booster is 11-wide):
+#   home_receive_2h_ko, spread_time, home_posteam, half_seconds_remaining,
+#   game_seconds_remaining, Diff_Time_Ratio, home_score_differential, home_ep,
+#   ydstogo, home_yardline_100, home_timeouts_remaining
+#
+# Home-perspective transforms (apply_win_prob.R `calculate_win_probability`):
+#   home_score_differential = posteam==home ? score_differential : -score_differential
+#   home_yardline_100       = posteam==home ? yardline_100       : 100 - yardline_100
+#   home_ep                 = posteam==home ? ep                 : -ep
+#   home_posteam            = (home_team == posteam) ? 1 : 0
+#   spread_time             = spread_line * exp(-4 * elapsed_share)   # spread_line is home-perspective
+#   Diff_Time_Ratio         = home_score_differential / exp(-4 * elapsed_share)
+#   home_receive_2h_ko      = qtr<=2 & home opened with a kickoff (== first defteam)
+#   home_timeouts_remaining = posteam==home ? posteam_timeouts : defteam_timeouts
+#   label                   = (home_team == Winner)
+#
+# (`elapsed_share` matches track6 `_add_wp_aux`: (3600 - game_sec) / 3600.)
+WP_FEATURES: list[str] = [
+    "home_receive_2h_ko",
+    "spread_time",
+    "home_posteam",
+    "half_seconds_remaining",
+    "game_seconds_remaining",
+    "Diff_Time_Ratio",
+    "home_score_differential",
+    "home_ep",
+    "ydstogo",
+    "home_yardline_100",
+    "home_timeouts_remaining",
+]
+
+# Params follow track6's WP family (binary:logistic, eta 0.025, max_depth 5,
+# gamma 1, subsample/colsample 0.8); the nfl4th oracle is unconstrained. nrounds
+# 500 maximizes corr-vs-oracle on the held-out slice (sweep 500-2000 all >=0.99;
+# parity peaks at 500 then drifts as the booster overfits the frozen cal_data).
+WP_HYPERPARAMS: dict = {
+    "booster": "gbtree",
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "eta": 0.025,
+    "gamma": 1.0,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "max_depth": 5,
+    "min_child_weight": 1,
+    "nrounds": 500,
+    "seed": 2013,
+}
+
+# Default calibration-data source (guga31bb/metrics wp_tuning/cal_data.rds, the
+# frozen frame nflfastR data-raw/MODELS.R + nfl4th read). Local copy committed
+# under nflverse-pbp/models. It carries `ep` / `Winner` / `play_type`, which are
+# not derivable from raw PBP without re-running the full EP pipeline.
+WP_CAL_DATA_RDS: str = (
+    r"C:/Users/saiem/Documents/GitHub-Data/sdv-dev/nflverse-dev/"
+    r"nflverse-pbp/models/cal_data.rds"
+)
+
+# ---------------------------------------------------------------------------
 # punt_data — empirical landing distribution (NOT a model)
 # ---------------------------------------------------------------------------
 PUNT_SEASONS_DEFAULT: tuple[int, int] = (2010, 2019)

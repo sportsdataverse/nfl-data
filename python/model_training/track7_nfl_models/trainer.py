@@ -23,6 +23,8 @@ from .constants import (
     TWO_PT_HYPERPARAMS,
     FG_FEATURES,
     FG_HYPERPARAMS,
+    WP_FEATURES,
+    WP_HYPERPARAMS,
 )
 
 __all__ = [
@@ -30,6 +32,7 @@ __all__ = [
     "train_fd",
     "train_two_pt",
     "train_fg",
+    "train_wp",
     "build_punt_data",
 ]
 
@@ -187,6 +190,46 @@ def train_fg(
     else:
         rounds = nrounds if nrounds is not None else cap
 
+    model = xgb_train(params, dmat, num_boost_round=rounds)
+    if output_path is not None:
+        model.save_model(str(output_path))
+    return model
+
+
+# ---------------------------------------------------------------------------
+# wp_model — binary:logistic (naive / no-spread win probability)
+# ---------------------------------------------------------------------------
+def train_wp(
+    df: pl.DataFrame,
+    *,
+    nrounds: Optional[int] = None,
+    output_path: Optional[Path] = None,
+) -> Booster:
+    """Train the NFL naive (no-spread) win-probability model.
+
+    Faithful port of nflfastR ``data-raw/MODELS.R`` ("WP model: no spread"):
+    ``binary:logistic`` with eta 0.2, max_depth 4, gamma 0, subsample 0.8,
+    colsample_bytree 0.8, min_child_weight 1, nrounds 65, ``set.seed(2013)``,
+    and NO monotone constraints (only the spread model is constrained). The
+    11-feature frame (``WP_FEATURES`` == track6 ``WP_NAIVE_FEATURES``) matches
+    the converted ``wp_model.ubj`` oracle's feature contract exactly.
+
+    Args:
+        df: Frame from ``prepare_wp_data`` — ``WP_FEATURES`` + ``label`` (0/1).
+        nrounds: Override canonical nrounds (default ``WP_HYPERPARAMS``).
+        output_path: If given, save the model as a ``.ubj`` file.
+
+    Returns:
+        Trained :class:`xgboost.Booster`.
+
+    Example:
+        Smoke-train on a tiny frame::
+
+            booster = train_wp(frame, nrounds=5)
+    """
+    rounds = nrounds if nrounds is not None else WP_HYPERPARAMS["nrounds"]
+    params = _strip(WP_HYPERPARAMS, "nrounds")
+    dmat = _to_dmatrix(df, WP_FEATURES, "label")
     model = xgb_train(params, dmat, num_boost_round=rounds)
     if output_path is not None:
         model.save_model(str(output_path))

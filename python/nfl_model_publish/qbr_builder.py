@@ -20,10 +20,16 @@ Provenance notes (verified live against the 2024 ESPN payloads + nflverse parque
 * ``team`` is the team nickname (``athlete.teamName``); ``opp_team`` is the full
   opponent display name and ``opp_name`` its nickname.
 * ``rank`` is NOT ESPN's integer ``ranks[0]`` -- nflverse uses R's average-tie
-  ``rank(desc(qbr_total))`` (e.g. a two-way tie for first is ``1.5``), computed
-  over the qualified rows only. We recompute it here to match.
-* Week-level is qualified-only; season-level keeps qualified + unqualified rows
-  (unqualified carry ``rank = null``).
+  ``rank(desc(qbr_total))`` (e.g. a two-way tie for first is ``1.5``). We recompute
+  it here to match.
+* Both season- and week-level use ``isqualified=true`` (ESPN's qualified-passer
+  leaderboard), so every row is ``qualified=True`` and matches nflverse's
+  *qualified* rows byte-for-byte (verified: max abs diff 0.0 on
+  qbr_total/rank/qb_plays/epa_total/pass/run). nflverse additionally carries a
+  capture-time-dependent tail of unqualified passers that is NOT reproduced here:
+  it is not derivable from a stable rule (the population inverts on qb_plays -- a
+  1-play passer is kept while a 324-play one is dropped), so the clean qualified
+  leaderboard is published instead.
 """
 
 from __future__ import annotations
@@ -96,13 +102,15 @@ def _common_fields(athlete: dict, season: int, season_type_label: str) -> dict:
     return row
 
 
-def reshape_season_athlete(
-    athlete: dict, season: int, season_type_label: str, qualified_ids: set[str]
-) -> dict:
-    """Pure reshape of one season-level ``athletes[]`` entry -> nflverse row."""
+def reshape_season_athlete(athlete: dict, season: int, season_type_label: str) -> dict:
+    """Pure reshape of one season-level ``athletes[]`` entry -> nflverse row.
+
+    Season-level is fetched with ``isqualified=true`` (the ESPN qualified-passer
+    leaderboard), so every emitted row is ``qualified=True``.
+    """
     row = _common_fields(athlete, season, season_type_label)
     row["game_week"] = "Season Total"
-    row["qualified"] = row["player_id"] in qualified_ids
+    row["qualified"] = True
     return row
 
 
@@ -161,16 +169,6 @@ def _fetch_athletes(
         time.sleep(delay)
 
 
-def _qualified_ids(qbr_type: str, season: int, seasontype: int, week: int | None = None) -> set[str]:
-    """Player-id set ESPN flags as qualified for one query (the ``isqualified=true`` list)."""
-    out: set[str] = set()
-    for athlete in _fetch_athletes(qbr_type, season, seasontype, week=week, isqualified=True):
-        pid = (athlete.get("athlete") or {}).get("id")
-        if pid is not None:
-            out.add(str(pid))
-    return out
-
-
 def _finalize(rows: list[dict], order: list[str], rank_group: list[str]) -> pl.DataFrame:
     """Type-cast, recompute average-tie ``rank`` per group, and order columns.
 
@@ -211,13 +209,18 @@ def _finalize(rows: list[dict], order: list[str], rank_group: list[str]) -> pl.D
 
 
 def build_nfl_qbr_season(seasons: list[int], *, delay: float = 0.4) -> pl.DataFrame:
-    """Build the season-level ESPN QBR frame (nflverse ``qbr_season_level`` shape)."""
+    """Build the season-level ESPN QBR frame (nflverse ``qbr_season_level`` shape).
+
+    Uses ``isqualified=true`` -- the ESPN qualified-passer leaderboard. These rows
+    match nflverse's qualified ``qbr_season_level`` rows byte-for-byte. nflverse's
+    additional capture-time tail of unqualified passers is intentionally not
+    reproduced (it is not derivable from a stable rule; see the module docstring).
+    """
     rows: list[dict] = []
     for season in seasons:
         for seasontype, label in _SEASON_TYPES.items():
-            qualified = _qualified_ids("seasons", season, seasontype)
-            for athlete in _fetch_athletes("seasons", season, seasontype, isqualified=False, delay=delay):
-                rows.append(reshape_season_athlete(athlete, season, label, qualified))
+            for athlete in _fetch_athletes("seasons", season, seasontype, isqualified=True, delay=delay):
+                rows.append(reshape_season_athlete(athlete, season, label))
     return _finalize(rows, _SEASON_ORDER, rank_group=["season", "season_type"])
 
 

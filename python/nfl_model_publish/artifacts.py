@@ -30,8 +30,9 @@ _RELEASE_BODY = {
         "SDV-native play-by-play; Python-built)."
     ),
     "nfl_espn_qbr": (
-        "SDV-native ESPN Total QBR (season-level + week-level; ESPN-sourced; "
-        "Python-built; mirrors nflverse espn_data)."
+        "SDV-native ESPN Total QBR -- qualified-passer leaderboard (season + week; "
+        "ESPN fitt/v3 isqualified=true; values byte-match nflverse espn_data's "
+        "qualified rows). Python-built."
     ),
 }
 

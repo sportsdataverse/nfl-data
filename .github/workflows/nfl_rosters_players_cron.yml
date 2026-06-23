@@ -6,6 +6,7 @@
 #   - players:      build_nfl_players()             -> players.parquet         -> "nfl_players" release
 #   - player-stats: build_nfl_player_stats(1999..N) -> player_stats.parquet     -> "nfl_player_stats" release
 #   - team-stats:   build_nfl_team_stats(1999..N)   -> team_stats.parquet       -> "nfl_team_stats" release
+#   - qbr:          build_nfl_qbr_{season,week}(2006..N) -> qbr_*_level.parquet  -> "nfl_espn_qbr" release
 #
 # rosters/players use the NFL Shield rosters API + ESPN core-v2 athletes (public
 # tiers). player-stats aggregates the SDV-native play-by-play release into one
@@ -18,7 +19,7 @@
 # Off-season runs still publish (rosters change with transactions/cuts; the
 # player index grows as new athletes are added). --clobber upload is idempotent.
 
-name: NFL rosters + players + player-stats + team-stats build + publish
+name: NFL rosters + players + player-stats + team-stats + QBR build + publish
 
 on:
   workflow_dispatch:
@@ -53,6 +54,16 @@ on:
           historical range through the current NFL season (resolved at run time).
         required: false
         default: ""
+      skip_qbr:
+        description: "Set to 'true' to skip the ESPN QBR rebuild."
+        required: false
+        default: "false"
+      qbr_seasons:
+        description: >
+          ESPN QBR season range, e.g. "2006:2024". Defaults to 2006..<current
+          NFL season> (resolved at run time). 2006 is the earliest QBR season.
+        required: false
+        default: ""
 
   schedule:
     # Mondays 09:00 UTC, September through February (active NFL season window).
@@ -64,7 +75,7 @@ concurrency:
 
 jobs:
   build-and-publish:
-    name: Build + publish nfl_rosters / nfl_players / nfl_player_stats / nfl_team_stats
+    name: Build + publish nfl_rosters / nfl_players / nfl_player_stats / nfl_team_stats / nfl_espn_qbr
     runs-on: ubuntu-latest
 
     steps:
@@ -210,4 +221,38 @@ jobs:
             --seasons "${{ steps.ts_seasons.outputs.seasons }}" \
             --out out/team_stats \
             --tag nfl_team_stats \
+            --repo sportsdataverse/sportsdataverse-data
+
+      # Resolve the QBR season range: workflow_dispatch input wins; otherwise
+      # 2006 (earliest ESPN QBR season) .. <current NFL season>.
+      - name: Resolve QBR seasons
+        id: qbr_seasons
+        run: |
+          INPUT="${{ github.event.inputs.qbr_seasons }}"
+          if [ -n "$INPUT" ]; then
+            echo "seasons=$INPUT" >> "$GITHUB_OUTPUT"
+          else
+            MONTH=$(date -u +%m)
+            YEAR=$(date -u +%Y)
+            if [ "$MONTH" -le 7 ]; then
+              END=$((YEAR - 1))
+            else
+              END=$YEAR
+            fi
+            echo "seasons=2006:$END" >> "$GITHUB_OUTPUT"
+          fi
+
+      # qbr: scrape ESPN's fitt/v3 QBR endpoint into the nflverse-shape
+      # qbr_season_level + qbr_week_level parquets and publish to the
+      # nfl_espn_qbr release. --clobber upload is idempotent.
+      - name: Publish nfl_espn_qbr
+        if: ${{ github.event.inputs.skip_qbr != 'true' }}
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run python -m nfl_model_publish qbr \
+            --seasons "${{ steps.qbr_seasons.outputs.seasons }}" \
+            --out out/qbr \
+            --tag nfl_espn_qbr \
             --repo sportsdataverse/sportsdataverse-data

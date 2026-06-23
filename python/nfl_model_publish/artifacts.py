@@ -29,6 +29,10 @@ _RELEASE_BODY = {
         "SDV-native NFL player stats (week-level, REG+POST; aggregated from "
         "SDV-native play-by-play; Python-built)."
     ),
+    "nfl_espn_qbr": (
+        "SDV-native ESPN Total QBR (season-level + week-level; ESPN-sourced; "
+        "Python-built; mirrors nflverse espn_data)."
+    ),
 }
 
 

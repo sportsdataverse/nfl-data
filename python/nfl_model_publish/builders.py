@@ -175,3 +175,49 @@ def build_team_stats(
         f"team_stats: seasons={min(seasons)}-{max(seasons)} rows={df.height} -> {path}"
     )
     return {"rows": df.height, "seasons": list(seasons), "path": str(path)}
+
+
+def build_qbr(seasons: list[int], out_dir) -> dict:
+    """Build SDV-native ESPN QBR datasets and write season + week parquet files.
+
+    Mirrors nflverse's ``espn_data`` release: the heavy lifting (scraping ESPN's
+    fitt/v3 QBR endpoint + reshaping to the nflverse ``qbr_season_level`` /
+    ``qbr_week_level`` schema) lives in :mod:`nfl_model_publish.qbr_builder`; this
+    function only materializes both frames to disk and reports row counts. The two
+    files feed ``load_nfl_espn_qbr(source="sdv")`` in sdv-py.
+
+    Args:
+        seasons: Seasons to build (2006 is the earliest ESPN QBR season).
+        out_dir: Output directory (created if absent).
+
+    Returns:
+        ``{"seasons": list[int], "season_rows": int, "week_rows": int,
+        "paths": list[str]}``.
+    """
+    from .qbr_builder import build_nfl_qbr_season, build_nfl_qbr_week
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    season_df = build_nfl_qbr_season(seasons)
+    season_path = out_dir / "qbr_season_level.parquet"
+    season_df.write_parquet(season_path)
+    print(
+        f"qbr: season_level seasons={min(seasons)}-{max(seasons)} "
+        f"rows={season_df.height} -> {season_path}"
+    )
+
+    week_df = build_nfl_qbr_week(seasons)
+    week_path = out_dir / "qbr_week_level.parquet"
+    week_df.write_parquet(week_path)
+    print(
+        f"qbr: week_level seasons={min(seasons)}-{max(seasons)} "
+        f"rows={week_df.height} -> {week_path}"
+    )
+
+    return {
+        "seasons": list(seasons),
+        "season_rows": season_df.height,
+        "week_rows": week_df.height,
+        "paths": [str(season_path), str(week_path)],
+    }

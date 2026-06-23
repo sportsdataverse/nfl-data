@@ -41,6 +41,13 @@ Usage::
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
 
+    python -m nfl_model_publish qbr \\
+        --out <dir> \\
+        [--seasons 2006:2024] \\
+        [--tag nfl_espn_qbr] \\
+        [--repo sportsdataverse/sportsdataverse-data] \\
+        [--dry-run]
+
     python -m nfl_model_publish track7-artifacts \\
         --out-dir <dir> \\
         [--train] \\
@@ -179,6 +186,23 @@ def build_parser() -> argparse.ArgumentParser:
     ts.add_argument("--tag", default="nfl_team_stats", help="GitHub release tag.")
     _add_repo_dry(ts)
 
+    q = sub.add_parser(
+        "qbr", help="Build + upload SDV-native ESPN QBR (season-level + week-level)."
+    )
+    q.add_argument(
+        "--seasons",
+        type=_parse_seasons,
+        default=list(range(2006, 2025)),
+        help="Season range 'YYYY:YYYY' (inclusive) or a single 'YYYY' (default 2006:2024).",
+    )
+    q.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for qbr_season_level.parquet + qbr_week_level.parquet.",
+    )
+    q.add_argument("--tag", default="nfl_espn_qbr", help="GitHub release tag.")
+    _add_repo_dry(q)
+
     t7 = sub.add_parser(
         "track7-artifacts",
         help="Route the self-trained track7 NFL model suite to releases + bundle.",
@@ -310,6 +334,26 @@ def main(argv=None) -> int:
         seasons = built["seasons"]
         print(
             f"publish: seasons={min(seasons)}-{max(seasons)} rows={built['rows']} "
+            f"uploaded={res['uploaded']} files={len(res['files'])} "
+            f"-> {args.repo}:{res['tag']}{created}{suffix}"
+        )
+    elif args.cmd == "qbr":
+        from .builders import build_qbr
+
+        built = build_qbr(args.seasons, args.out)
+        res = upload_artifacts(
+            args.out,
+            args.tag,
+            args.repo,
+            pattern="qbr_*_level.parquet",
+            dry_run=args.dry_run,
+        )
+        created = " (created release)" if res.get("created_release") else ""
+        suffix = " (dry-run)" if args.dry_run else ""
+        seasons = built["seasons"]
+        print(
+            f"publish: seasons={min(seasons)}-{max(seasons)} "
+            f"season_rows={built['season_rows']} week_rows={built['week_rows']} "
             f"uploaded={res['uploaded']} files={len(res['files'])} "
             f"-> {args.repo}:{res['tag']}{created}{suffix}"
         )

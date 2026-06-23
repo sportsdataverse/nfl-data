@@ -40,6 +40,13 @@ Usage::
         [--tag nfl_team_stats] \\
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
+
+    python -m nfl_model_publish track7-artifacts \\
+        --out-dir <dir> \\
+        [--train] \\
+        [--bundle-dir <dir>] \\
+        [--repo sportsdataverse/sportsdataverse-data] \\
+        [--dry-run]
 """
 
 from __future__ import annotations
@@ -172,6 +179,39 @@ def build_parser() -> argparse.ArgumentParser:
     ts.add_argument("--tag", default="nfl_team_stats", help="GitHub release tag.")
     _add_repo_dry(ts)
 
+    t7 = sub.add_parser(
+        "track7-artifacts",
+        help="Route the self-trained track7 NFL model suite to releases + bundle.",
+    )
+    t7.add_argument(
+        "--out-dir",
+        default="out",
+        help="Directory with (or to receive) the trained track7 artifacts.",
+    )
+    t7.add_argument(
+        "--train",
+        action="store_true",
+        help="Run track7 train-all into --out-dir first (else read existing).",
+    )
+    t7.add_argument(
+        "--nrounds",
+        type=int,
+        default=None,
+        help="Override nrounds when --train (smoke runs).",
+    )
+    t7.add_argument("--source", default="nflverse", help="PBP source for --train.")
+    t7.add_argument(
+        "--wp-cal-data",
+        default=None,
+        help="Override the WP cal_data.rds path when --train.",
+    )
+    t7.add_argument(
+        "--bundle-dir",
+        default=None,
+        help="Copy the sdv-py bundle artifacts (two_pt/fg/punt) here.",
+    )
+    _add_repo_dry(t7)
+
     return ap
 
 
@@ -273,4 +313,42 @@ def main(argv=None) -> int:
             f"uploaded={res['uploaded']} files={len(res['files'])} "
             f"-> {args.repo}:{res['tag']}{created}{suffix}"
         )
+    elif args.cmd == "track7-artifacts":
+        from pathlib import Path
+
+        from .track7_artifacts import publish_track7_artifacts
+
+        res = publish_track7_artifacts(
+            Path(args.out_dir),
+            args.repo,
+            train=args.train,
+            nrounds_override=args.nrounds,
+            source=args.source,
+            wp_cal_data_path=args.wp_cal_data,
+            bundle_dir=args.bundle_dir,
+            dry_run=args.dry_run,
+        )
+        suffix = " (dry-run)" if args.dry_run else ""
+        n_up = sum(1 for u in res["uploads"] if u.get("uploaded"))
+        created = (
+            f" (created {','.join(res['created_releases'])})"
+            if res["created_releases"]
+            else ""
+        )
+        print(
+            f"publish: track7 uploads={len(res['uploads'])} (uploaded={n_up}) "
+            f"bundle={len(res['bundle'])} missing={len(res['missing'])} "
+            f"-> {args.repo}{created}{suffix}"
+        )
+        for u in res["uploads"]:
+            print(
+                f"  upload  {u['name']:18s} -> {args.repo}:{u['tag']:20s} "
+                f"{u['size_bytes']:>10,}B  sha256={u['sha256'][:12]}"
+            )
+        for b in res["bundle"]:
+            dest = b.get("copied_to") or "(no --bundle-dir)"
+            print(
+                f"  bundle  {b['name']:18s} -> {dest}  "
+                f"{b['size_bytes']:>10,}B  sha256={b['sha256'][:12]}"
+            )
     return 0

@@ -12,15 +12,23 @@ from typing import Any, Dict, Optional
 
 import polars as pl
 
-from .ingest import load_training_pbp
+from .ingest import load_training_pbp, load_wp_cal_data
 from .features import (
     make_model_mutations,
     prepare_xpass_data,
     prepare_fd_data,
     prepare_two_pt_data,
     prepare_fg_data,
+    prepare_wp_data,
 )
-from .trainer import train_xpass, train_fd, train_two_pt, train_fg, build_punt_data
+from .trainer import (
+    train_xpass,
+    train_fd,
+    train_two_pt,
+    train_fg,
+    train_wp,
+    build_punt_data,
+)
 from . import validate as V
 
 __all__ = ["train_all"]
@@ -32,6 +40,9 @@ TWO_PT_SEASONS = list(range(2010, 2020))
 FG_SEASONS = list(range(2014, 2025))
 PUNT_SEASONS = list(range(2010, 2020))
 HOLDOUT_SEASONS = [2022, 2023]
+# WP trains on cal_data.rds (2001-2020 per MODELS.R); hold out the latest seasons
+# in that frame for the parity comparison vs the converted oracle.
+WP_HOLDOUT_SEASONS = [2018, 2019, 2020]
 
 
 def _fmt(d: Dict[str, Any]) -> str:
@@ -43,6 +54,7 @@ def train_all(
     out_dir: Path = Path("out"),
     nrounds_override: Optional[int] = None,
     source: str = "nflverse",
+    wp_cal_data_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Train every track7 model, build punt_data, run the parity gate, write report.
 
@@ -51,6 +63,9 @@ def train_all(
         nrounds_override: If set (e.g. 5), every booster trains with that round
             count — for fast smoke runs (will NOT pass the parity gate).
         source: PBP source passed to ``load_training_pbp`` (``"nflverse"``).
+        wp_cal_data_path: Path to ``cal_data.rds`` for the WP model; ``None`` uses
+            the default local copy (``WP_CAL_DATA_RDS``). If the file is missing,
+            the WP model is skipped (documented in report.md).
 
     Returns:
         Dict mapping model name -> parity result dict (plus ``"artifacts"``).
@@ -107,6 +122,32 @@ def train_all(
     results["fg"] = V.validate_fg(fg_model, attempts=fg_df)
     print(f"[track7] fg parity: {_fmt(results['fg'])}")
 
+    # --- wp (home-perspective; the nfl4th wp_model contract) ---
+    try:
+        print("[track7] wp: loading cal_data.rds...")
+        wp_raw = load_wp_cal_data(wp_cal_data_path)
+        wp_train_raw = (
+            wp_raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS))
+            if "season" in wp_raw.columns
+            else wp_raw
+        )
+        wp_hold_raw = (
+            wp_raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS))
+            if "season" in wp_raw.columns
+            else wp_raw
+        )
+        wp_df = prepare_wp_data(wp_train_raw)
+        print(f"[track7] wp: training on {wp_df.height:,} plays...")
+        wp_model = train_wp(
+            wp_df, nrounds=nrounds_override, output_path=out_dir / "wp_model.ubj"
+        )
+        artifacts["wp"] = out_dir / "wp_model.ubj"
+        results["wp"] = V.validate_wp(wp_model, prepare_wp_data(wp_hold_raw))
+        print(f"[track7] wp parity: {_fmt(results['wp'])}")
+    except FileNotFoundError as exc:
+        print(f"[track7] wp: SKIPPED ({exc})")
+        results["wp"] = {"skipped": True, "reason": str(exc)}
+
     # --- punt ---
     print(f"[track7] punt: loading {PUNT_SEASONS[0]}-{PUNT_SEASONS[-1]}...")
     punt_raw = load_training_pbp(PUNT_SEASONS, source=source)
@@ -147,6 +188,8 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         r = results["fd"]; row("fd", "mean-gain corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "two_pt" in results:
         r = results["two_pt"]; row("two_pt", "P(success) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
+    if "wp" in results and not results["wp"].get("skipped"):
+        r = results["wp"]; row("wp", "P(win) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "fg" in results:
         r = results["fg"]
         row("fg", f"corr ({r.get('scope','')})", f"{r['correlation']:.4f}", "≥0.98", r["gate_pass"])
@@ -161,8 +204,8 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         row("punt", "max TV dist", f"{r['max_total_variation']:.4f}", "report-only", True)
     lines.append("")
     lines.append("Feature-name checks:")
-    for m in ("xpass", "fd", "two_pt", "fg"):
-        if m in results:
+    for m in ("xpass", "fd", "two_pt", "wp", "fg"):
+        if m in results and not results[m].get("skipped"):
             lines.append(f"- {m}: feature_names_ok = {results[m].get('feature_names_ok')}")
     lines += [
         "",
@@ -177,11 +220,21 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         "  spline's extrapolation into never-attempted (yardline x roof x era) cells, so",
         "  the gate corr is scoped to cells with >=1 real FG attempt (the operating",
         "  domain). Freq-weighted corr ~0.99; full-grid corr is lower by construction.",
-        "- **wp_model** (nfl4th home-WP) is SKIPPED — its training needs the prepared",
-        "  `cal_data.rds` calibration frame (guga31bb/metrics wp_tuning / nflfastR-data",
-        "  models), which is not derivable from raw PBP and is not available locally.",
-        "  Per the track7 SPEC, wp is skip-and-document; the converted `wp_model.ubj`",
-        "  oracle stays in place. (Note: track6 already ships nflfastR's own WP model.)",
+        "- **wp_model** (home-perspective WP) is now TRAINED in Python from the",
+        "  `cal_data.rds` calibration frame (guga31bb/metrics wp_tuning — the frozen",
+        "  frame nfl4th + nflfastR read). The converted oracle is the model",
+        "  `nfl4th::wp_model()` applies for 4th-down decisions: a HOME-team WP booster",
+        "  whose 11-feature contract is `nfl4th` `R/apply_win_prob.R::wp_model_select()`",
+        "  (home_receive_2h_ko, spread_time, home_posteam, half/game_seconds_remaining,",
+        "  Diff_Time_Ratio, home_score_differential, home_ep, ydstogo, home_yardline_100,",
+        "  home_timeouts_remaining). `prepare_wp_data` ports the home-perspective",
+        "  transforms verbatim. NOTE: this is NOT nflfastR MODELS.R's possession-team",
+        "  `wp_model` (those 11/12-feature posteam models are track6's WP suite); the",
+        "  task's '11 vs 12' question resolves to nfl4th's HOME-perspective 11-feature",
+        "  contract. Params follow track6's WP family (binary:logistic, eta 0.025,",
+        "  max_depth 5, gamma 1, subsample/colsample 0.8, nrounds 500, seed 2013);",
+        "  nrounds 500 maximizes corr-vs-oracle (sweep 500-2000 all >=0.99, peak at",
+        "  500). When `cal_data.rds` is absent the WP model is skip-and-document.",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"[track7] report written -> {path}")

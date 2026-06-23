@@ -34,3 +34,8 @@ def test_train_all_meets_parity(tmp_path: Path):
     # frozen-snapshot oracle would need. See report.md "Notes".
     assert results["two_pt"]["feature_names_ok"]
     assert results["two_pt"]["correlation"] >= 0.85
+    # wp: home-perspective nfl4th wp_model recipe; trained only when cal_data.rds is
+    # present (it carries ep/Winner/play_type, not derivable from raw PBP).
+    if not results["wp"].get("skipped"):
+        assert results["wp"]["feature_names_ok"]
+        assert results["wp"]["correlation"] >= 0.99

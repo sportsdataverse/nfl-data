@@ -18,6 +18,7 @@ from .constants import (
     FD_FEATURES,
     TWO_PT_FEATURES,
     FG_FEATURES,
+    WP_FEATURES,
 )
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "prepare_fd_data",
     "prepare_two_pt_data",
     "prepare_fg_data",
+    "prepare_wp_data",
 ]
 
 
@@ -217,3 +219,89 @@ def prepare_fg_data(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns(label.cast(pl.Int32).alias("label"))
     out = out.filter(pl.col("label").is_not_null())
     return out.select([*FG_FEATURES, "label"])
+
+
+# ---------------------------------------------------------------------------
+# wp_model (home-perspective win probability — the nfl4th wp_model contract)
+# ---------------------------------------------------------------------------
+def prepare_wp_data(df: pl.DataFrame) -> pl.DataFrame:
+    """Build the wp (home-perspective win-probability) training frame.
+
+    Faithful port of ``nfl4th`` ``R/apply_win_prob.R`` (the recipe that produces
+    the converted ``wp_model.ubj`` oracle). Filters ties + nulls, applies the
+    home-perspective feature transforms, and labels by ``home_team == Winner``::
+
+        filter(Winner != "TIE", qtr <= 4, !is.na(ep/score_differential/
+               play_type/yardline_100))
+        home_score_differential = posteam==home ? score_differential : -score_differential
+        home_yardline_100       = posteam==home ? yardline_100       : 100 - yardline_100
+        home_ep                 = posteam==home ? ep                 : -ep
+        home_posteam            = (home_team == posteam)
+        spread_time             = spread_line * exp(-4 * elapsed_share)
+        Diff_Time_Ratio         = home_score_differential / exp(-4 * elapsed_share)
+        home_receive_2h_ko      = qtr<=2 & home opened with a kickoff (first defteam)
+        home_timeouts_remaining = posteam==home ? posteam_timeouts : defteam_timeouts
+        label                   = (home_team == Winner)
+
+    Output features are the 11 ``WP_FEATURES`` in the oracle's
+    ``as.matrix(wp_model_select(...))`` column order.
+
+    Args:
+        df: ``cal_data.rds`` rows. Must carry ``Winner``, ``ep``, ``play_type``,
+            ``game_id``, ``defteam``, ``home_team``, ``posteam``, ``spread_line``.
+
+    Returns:
+        Frame with ``WP_FEATURES`` columns + ``label`` (0/1).
+    """
+    is_home = pl.col("posteam") == pl.col("home_team")
+    out = df.filter(
+        (pl.col("Winner") != "TIE")
+        & (pl.col("qtr") <= 4)
+        & pl.col("ep").is_not_null()
+        & pl.col("score_differential").is_not_null()
+        & pl.col("play_type").is_not_null()
+        & pl.col("yardline_100").is_not_null()
+    )
+    # home-perspective transforms + elapsed_share (matches track6 _add_wp_aux)
+    out = out.with_columns(
+        is_home.cast(pl.Int32).alias("home_posteam"),
+        ((3600.0 - pl.col("game_seconds_remaining")) / 3600.0).alias("elapsed_share"),
+        pl.when(is_home)
+        .then(pl.col("score_differential"))
+        .otherwise(-pl.col("score_differential"))
+        .alias("home_score_differential"),
+        pl.when(is_home)
+        .then(pl.col("yardline_100"))
+        .otherwise(100.0 - pl.col("yardline_100"))
+        .alias("home_yardline_100"),
+        pl.when(is_home).then(pl.col("ep")).otherwise(-pl.col("ep")).alias("home_ep"),
+        pl.when(is_home)
+        .then(pl.col("posteam_timeouts_remaining"))
+        .otherwise(pl.col("defteam_timeouts_remaining"))
+        .alias("home_timeouts_remaining"),
+    )
+    out = out.with_columns(
+        # spread_line is already home-perspective in nflfastR (negative = home favored)
+        (pl.col("spread_line") * (pl.col("elapsed_share") * -4.0).exp()).alias("spread_time"),
+        (pl.col("home_score_differential") / (pl.col("elapsed_share") * -4.0).exp()).alias(
+            "Diff_Time_Ratio"
+        ),
+    )
+    # home_receive_2h_ko: home opened the game on defense (i.e. kicked off) -> they
+    # receive the 2nd-half kickoff. First non-null defteam in the game == kicking team.
+    first_defteam = (
+        out.filter(pl.col("defteam").is_not_null())
+        .group_by("game_id")
+        .agg(pl.col("defteam").first().alias("_first_defteam"))
+    )
+    out = out.join(first_defteam, on="game_id", how="left")
+    out = out.with_columns(
+        pl.when((pl.col("qtr") <= 2) & (pl.col("home_team") == pl.col("_first_defteam")))
+        .then(pl.lit(1))
+        .otherwise(pl.lit(0))
+        .alias("home_receive_2h_ko")
+    )
+    out = out.with_columns(
+        (pl.col("home_team") == pl.col("Winner")).cast(pl.Int32).alias("label")
+    )
+    return out.select([*WP_FEATURES, "label"])

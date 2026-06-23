@@ -17,6 +17,7 @@ from model_training.track7_nfl_models.constants import (
     FD_NUM_CLASSES,
     TWO_PT_FEATURES,
     FG_FEATURES,
+    WP_FEATURES,
     PUNT_OUTPUT_COLUMNS,
 )
 from model_training.track7_nfl_models.trainer import (
@@ -24,6 +25,7 @@ from model_training.track7_nfl_models.trainer import (
     train_fd,
     train_two_pt,
     train_fg,
+    train_wp,
     build_punt_data,
 )
 from model_training.track7_nfl_models.features import (
@@ -32,6 +34,7 @@ from model_training.track7_nfl_models.features import (
     prepare_fd_data,
     prepare_two_pt_data,
     prepare_fg_data,
+    prepare_wp_data,
     add_spread_total_features,
 )
 
@@ -88,6 +91,18 @@ class TestTrainFg:
     def test_feature_names_pinned_rounds(self):
         m = train_fg(_bin_frame(FG_FEATURES), nrounds=5, cv_select=False)
         assert m.feature_names == FG_FEATURES
+
+
+class TestTrainWp:
+    def test_returns_booster_with_feature_names(self):
+        m = train_wp(_bin_frame(WP_FEATURES), nrounds=5)
+        assert isinstance(m, Booster)
+        assert m.feature_names == WP_FEATURES
+        assert m.num_features() == len(WP_FEATURES) == 11
+
+    def test_saves(self, tmp_path: Path):
+        train_wp(_bin_frame(WP_FEATURES), nrounds=5, output_path=tmp_path / "wp.ubj")
+        assert (tmp_path / "wp.ubj").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +179,48 @@ class TestFeatureBuilders:
         assert out["fg_roof"][0] == 1  # outdoors
         assert out["fg_era"][0] == 0   # 2015 < 2020
         assert out["label"][0] == 1    # sp == 1
+
+
+def _wp_cal_frame() -> pl.DataFrame:
+    """Tiny cal_data-shaped frame exercising the home-perspective WP recipe."""
+    return pl.DataFrame(
+        {
+            "game_id": ["G1", "G1", "G2", "G2"],
+            "posteam": ["H1", "A1", "H2", "A2"],
+            "defteam": ["A1", "H1", "A2", "H2"],
+            "home_team": ["H1", "H1", "H2", "H2"],
+            "Winner": ["H1", "H1", "A2", "A2"],
+            "season": [2015, 2015, 2016, 2016],
+            "qtr": [1, 2, 3, 4],
+            "ep": [1.5, -0.5, 2.0, 0.3],
+            "play_type": ["pass", "run", "pass", "run"],
+            "score_differential": [7, -3, 0, -4],
+            "yardline_100": [40.0, 75.0, 50.0, 20.0],
+            "ydstogo": [5, 10, 3, 8],
+            "half_seconds_remaining": [1700.0, 600.0, 1200.0, 90.0],
+            "game_seconds_remaining": [3500.0, 1700.0, 900.0, 90.0],
+            "posteam_timeouts_remaining": [3, 2, 3, 1],
+            "defteam_timeouts_remaining": [3, 3, 2, 1],
+            "spread_line": [-3.0, -3.0, 6.0, 6.0],
+        }
+    )
+
+
+class TestWpFeatureBuilder:
+    def test_columns_and_home_perspective(self):
+        out = prepare_wp_data(_wp_cal_frame())
+        assert out.columns == [*WP_FEATURES, "label"]
+        assert out.height == 4
+        # row 0 posteam==home: home_score_differential == score_differential (7)
+        assert out["home_score_differential"][0] == pytest.approx(7.0)
+        # row 1 posteam==away: home_score_differential == -score_differential (3)
+        assert out["home_score_differential"][1] == pytest.approx(3.0)
+        # row 1 away posteam: home_yardline_100 == 100 - 75 == 25
+        assert out["home_yardline_100"][1] == pytest.approx(25.0)
+        # home_posteam flag
+        assert out["home_posteam"].to_list() == [1, 0, 1, 0]
+        # label is home_team == Winner (G1 home won -> 1, G2 home lost -> 0)
+        assert out["label"].to_list() == [1, 1, 0, 0]
 
 
 # ---------------------------------------------------------------------------

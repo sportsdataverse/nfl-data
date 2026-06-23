@@ -30,6 +30,7 @@ from .constants import (
     TWO_PT_FEATURES,
     FG_FEATURES,
     FG_VALIDATION_YARDLINE_RANGE,
+    WP_FEATURES,
 )
 
 ORACLE_DIR = Path(
@@ -43,6 +44,7 @@ __all__ = [
     "validate_fd",
     "validate_two_pt",
     "validate_fg",
+    "validate_wp",
     "validate_punt",
 ]
 
@@ -110,6 +112,34 @@ def validate_two_pt(model: Booster, df: pl.DataFrame, *, threshold: float = 0.99
     r = pearson_correlation(ours, ref)
     return {"correlation": r, "gate_pass": r >= threshold, "n": len(df),
             "feature_names_ok": model.feature_names == TWO_PT_FEATURES}
+
+
+# ---------------------------------------------------------------------------
+# wp — compare per-play P(posteam win) vs the naive wp_model oracle
+# ---------------------------------------------------------------------------
+def _wp_oracle_path() -> Path:
+    """Locate the converted naive wp_model.ubj (root or official/ subdir)."""
+    for cand in (ORACLE_DIR / "wp_model.ubj", ORACLE_DIR / "official" / "wp_model.ubj"):
+        if cand.exists():
+            return cand
+    return ORACLE_DIR / "wp_model.ubj"
+
+
+def validate_wp(model: Booster, df: pl.DataFrame, *, threshold: float = 0.99) -> Dict[str, Any]:
+    """Compare our naive WP booster to the converted oracle (per-play P(win)).
+
+    Args:
+        model: Trained WP booster.
+        df: Held-out ``prepare_wp_data`` frame (``WP_FEATURES`` + ``label``).
+        threshold: Min Pearson corr to pass.
+    """
+    X = df.select(WP_FEATURES).to_numpy()
+    ours = _predict(model, X, WP_FEATURES)
+    oracle = load_oracle_booster(_wp_oracle_path(), len(WP_FEATURES))
+    ref = _predict(oracle, X, None)
+    r = pearson_correlation(ours, ref)
+    return {"correlation": r, "gate_pass": r >= threshold, "n": len(df),
+            "feature_names_ok": model.feature_names == WP_FEATURES}
 
 
 # ---------------------------------------------------------------------------

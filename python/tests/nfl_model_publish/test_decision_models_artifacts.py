@@ -12,8 +12,8 @@ from pathlib import Path
 import pytest
 
 from nfl_model_publish.decision_models_artifacts import (
-    TRACK7_BUNDLE_ARTIFACTS,
-    TRACK7_RELEASE_MAP,
+    DECISION_MODELS_BUNDLE_ARTIFACTS,
+    DECISION_MODELS_RELEASE_MAP,
     artifact_digest,
     plan_decision_models_artifacts,
     publish_decision_models_artifacts,
@@ -58,7 +58,7 @@ def test_plan_routes_uploads_and_bundle(tmp_path: Path):
         "wp_model.ubj": "nfl_4th_down_models",
     }
     bundle = {b["name"] for b in plan["bundle"]}
-    assert bundle == set(TRACK7_BUNDLE_ARTIFACTS)
+    assert bundle == set(DECISION_MODELS_BUNDLE_ARTIFACTS)
     assert plan["missing"] == []
 
 
@@ -67,7 +67,7 @@ def test_plan_reports_missing(tmp_path: Path):
     plan = plan_decision_models_artifacts(tmp_path)
     assert {u["name"] for u in plan["uploads"]} == {"xpass_model.ubj"}
     # everything else is missing
-    expected_missing = set(TRACK7_RELEASE_MAP) | set(TRACK7_BUNDLE_ARTIFACTS)
+    expected_missing = set(DECISION_MODELS_RELEASE_MAP) | set(DECISION_MODELS_BUNDLE_ARTIFACTS)
     expected_missing.discard("xpass_model.ubj")
     assert set(plan["missing"]) == expected_missing
 
@@ -155,8 +155,8 @@ def test_bundle_copied_out(tmp_path: Path):
         exists_check=lambda tag, repo: True,
     )
     copied = {Path(b["copied_to"]).name for b in res["bundle"]}
-    assert copied == set(TRACK7_BUNDLE_ARTIFACTS)
-    for fname in TRACK7_BUNDLE_ARTIFACTS:
+    assert copied == set(DECISION_MODELS_BUNDLE_ARTIFACTS)
+    for fname in DECISION_MODELS_BUNDLE_ARTIFACTS:
         assert (bundle / fname).exists()
 
 

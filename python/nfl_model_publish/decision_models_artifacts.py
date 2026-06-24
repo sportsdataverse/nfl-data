@@ -24,8 +24,8 @@ from typing import Callable, Dict, List, Optional
 from .artifacts import _gh_release_exists, _gh_runner, _RELEASE_BODY
 
 __all__ = [
-    "TRACK7_RELEASE_MAP",
-    "TRACK7_BUNDLE_ARTIFACTS",
+    "DECISION_MODELS_RELEASE_MAP",
+    "DECISION_MODELS_BUNDLE_ARTIFACTS",
     "artifact_digest",
     "plan_decision_models_artifacts",
     "publish_decision_models_artifacts",
@@ -34,7 +34,7 @@ __all__ = [
 # Release-tagged artifacts: {filename: release tag}. xpass joins the EP/WP/CP
 # model_artifacts release; fd + wp join the 4th-down models release (the same
 # split nfl4th uses: dropback model with the core models, go/wp with 4th-down).
-TRACK7_RELEASE_MAP: Dict[str, str] = {
+DECISION_MODELS_RELEASE_MAP: Dict[str, str] = {
     "xpass_model.ubj": "nfl_model_artifacts",
     "fd_model.ubj": "nfl_4th_down_models",
     "wp_model.ubj": "nfl_4th_down_models",
@@ -43,14 +43,14 @@ TRACK7_RELEASE_MAP: Dict[str, str] = {
 # Bundled-in-sdv-py artifacts: copied to the bundle dir, never uploaded. sdv-py
 # ships these under ``sportsdataverse/nfl/models/`` (package-data) and commits
 # them directly.
-TRACK7_BUNDLE_ARTIFACTS: tuple[str, ...] = (
+DECISION_MODELS_BUNDLE_ARTIFACTS: tuple[str, ...] = (
     "two_pt_model.ubj",
     "fg_model.ubj",
     "punt_data.parquet",
 )
 
 # Release-notes body for the 4th-down models release (artifacts.py owns the rest).
-_TRACK7_RELEASE_BODY: Dict[str, str] = {
+_DECISION_MODELS_RELEASE_BODY: Dict[str, str] = {
     "nfl_4th_down_models": (
         "NFL 4th-down decision models (go-for-it gain `fd_model` + win-probability "
         "`wp_model` .ubj; Python-native decision_models retrain)."
@@ -117,7 +117,7 @@ def plan_decision_models_artifacts(out_dir) -> Dict[str, List[Dict[str, object]]
     bundle: List[Dict[str, object]] = []
     missing: List[str] = []
 
-    for fname, tag in TRACK7_RELEASE_MAP.items():
+    for fname, tag in DECISION_MODELS_RELEASE_MAP.items():
         path = out_dir / fname
         if not path.exists():
             missing.append(fname)
@@ -126,7 +126,7 @@ def plan_decision_models_artifacts(out_dir) -> Dict[str, List[Dict[str, object]]
         entry["tag"] = tag
         uploads.append(entry)
 
-    for fname in TRACK7_BUNDLE_ARTIFACTS:
+    for fname in DECISION_MODELS_BUNDLE_ARTIFACTS:
         path = out_dir / fname
         if not path.exists():
             missing.append(fname)
@@ -151,9 +151,9 @@ def publish_decision_models_artifacts(
 ) -> Dict[str, object]:
     """Train (optionally) + route the decision_models artifacts to release + bundle.
 
-    Release-tagged artifacts (``TRACK7_RELEASE_MAP``) are uploaded to their tag on
+    Release-tagged artifacts (``DECISION_MODELS_RELEASE_MAP``) are uploaded to their tag on
     ``repo`` (release auto-created if missing). Bundle artifacts
-    (``TRACK7_BUNDLE_ARTIFACTS``) are copied to ``bundle_dir`` (when given) for
+    (``DECISION_MODELS_BUNDLE_ARTIFACTS``) are copied to ``bundle_dir`` (when given) for
     sdv-py to commit. ``runner`` / ``exists_check`` are injectable for hermetic
     testing.
 
@@ -204,7 +204,7 @@ def publish_decision_models_artifacts(
     # Ensure each distinct release exists, then upload its artifacts.
     created_releases: List[str] = []
     tags = sorted({str(u["tag"]) for u in uploads})
-    body_map = {**_RELEASE_BODY, **_TRACK7_RELEASE_BODY}
+    body_map = {**_RELEASE_BODY, **_DECISION_MODELS_RELEASE_BODY}
     if dry_run:
         for tag in tags:
             print(f"[dry-run] would ensure release {repo}:{tag} exists")

@@ -1,0 +1,48 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "NFL Models"
+  description: >-
+    Model cards for the SportsDataverse / nflverse NFL models (EP, WP, CP/CPOE,
+    xYAC, the fourth-down decision suite, xPass, QBR, dakota) — recipe, features,
+    calibration, nflfastR parity, and limitations for each.
+  navbar:
+    background: "#013369"
+    left:
+      - href: index.qmd
+        text: Home
+  sidebar:
+    style: docked
+    contents:
+      - index.qmd
+      - parity.md
+      - section: "Core play-level models"
+        contents:
+          - ep.md
+          - wp_spread.md
+          - wp_naive.md
+          - cpoe.md
+      - section: "Yards after catch"
+        contents:
+          - xyac.md
+      - section: "Fourth-down decision"
+        contents:
+          - fourth_down.md
+          - fg.md
+          - two_pt.md
+          - punt.md
+          - nfl4th_wp.md
+      - section: "Tendency & quarterback efficiency"
+        contents:
+          - xpass.md
+          - qbr.md
+          - dakota.md
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+    toc-depth: 2

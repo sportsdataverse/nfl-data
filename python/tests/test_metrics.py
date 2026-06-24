@@ -6,14 +6,14 @@ import json
 import numpy as np
 import polars as pl
 
-from model_training.track6_nfl_ep_wp.metrics import (
+from model_training.play_level.metrics import (
     brier_score,
     calibration_table,
     ep_expected_points,
     pearson_correlation,
     weighted_cal_error,
 )
-from model_training.track6_nfl_ep_wp.model_card import write_model_card
+from model_training.play_level.model_card import write_model_card
 
 
 def test_calibration_table_binary_single_panel():

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 import polars as pl
 
-from model_training.track6_nfl_ep_wp.fetcher import _nflverse_abbr, _team_abbr, nflverse_game_id
+from model_training.play_level.fetcher import _nflverse_abbr, _team_abbr, nflverse_game_id
 from native_pbp.stat_ids import sum_play_stats
 
 

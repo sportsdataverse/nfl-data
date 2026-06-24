@@ -10,13 +10,13 @@ import polars as pl
 import pytest
 from xgboost import Booster
 
-from model_training.track6_nfl_ep_wp.constants import (
+from model_training.play_level.constants import (
     EP_FEATURES,
     WP_SPREAD_FEATURES,
     WP_NAIVE_FEATURES,
     EP_NUM_CLASSES,
 )
-from model_training.track6_nfl_ep_wp.trainer import (
+from model_training.play_level.trainer import (
     train_ep,
     train_wp_spread,
     train_wp_naive,

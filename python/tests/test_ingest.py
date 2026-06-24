@@ -8,7 +8,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from model_training.track6_nfl_ep_wp.ingest import (
+from model_training.play_level.ingest import (
     validate_pbp,
     REQUIRED_COLUMNS,
 )
@@ -98,21 +98,21 @@ class TestValidatePbp:
 
 class TestDownloadPbpMocked:
     def test_download_saves_parquet(self, tmp_path: Path, monkeypatch):
-        import model_training.track6_nfl_ep_wp.ingest as ingest_mod
+        import model_training.play_level.ingest as ingest_mod
 
         monkeypatch.setattr(ingest_mod, "_load_nfl_pbp", lambda seasons, **kw: _minimal_pbp())
-        from model_training.track6_nfl_ep_wp.ingest import download_pbp
+        from model_training.play_level.ingest import download_pbp
 
         download_pbp([2024], output_dir=tmp_path)
         assert (tmp_path / "pbp_2024.parquet").exists()
 
     def test_download_validates_on_load(self, tmp_path: Path, monkeypatch):
-        import model_training.track6_nfl_ep_wp.ingest as ingest_mod
+        import model_training.play_level.ingest as ingest_mod
 
         # Return a frame missing a required column
         bad = _minimal_pbp().drop("game_id")
         monkeypatch.setattr(ingest_mod, "_load_nfl_pbp", lambda seasons, **kw: bad)
-        from model_training.track6_nfl_ep_wp.ingest import download_pbp
+        from model_training.play_level.ingest import download_pbp
 
         with pytest.raises(ValueError, match="game_id"):
             download_pbp([2024], output_dir=tmp_path)

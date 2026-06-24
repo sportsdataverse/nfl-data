@@ -1,6 +1,6 @@
 """Upload NFL model artifacts (.ubj + model-card .json) to a GitHub release.
 
-Card sidecar naming (from model_training.track6_nfl_ep_wp.model_card):
+Card sidecar naming (from model_training.play_level.model_card):
     ``write_model_card`` writes ``Path(model_path).with_suffix(".json")``,
     so a model file ``ep.ubj`` has its card at ``ep.json`` (same stem).
 """

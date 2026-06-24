@@ -1,11 +1,11 @@
-﻿"""Failing tests for track6_nfl_ep_wp.constants — run BEFORE implementing constants.py.
+﻿"""Failing tests for play_level.constants — run BEFORE implementing constants.py.
 
 These tests lock the NFL EP/WP/CP feature contracts derived from:
   fastrmodels/data-raw/MODELS.R + nflfastR/R/helper_add_ep_wp.R + helper_add_cp_cpoe.R
 """
 import pytest
 
-from model_training.track6_nfl_ep_wp.constants import (
+from model_training.play_level.constants import (
     EP_FEATURES,
     EP_HYPERPARAMS,
     WP_SPREAD_FEATURES,

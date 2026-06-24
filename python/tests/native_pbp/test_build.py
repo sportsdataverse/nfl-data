@@ -7,7 +7,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from model_training.track6_nfl_ep_wp.ingest import REQUIRED_COLUMNS
+from model_training.play_level.ingest import REQUIRED_COLUMNS
 from native_pbp.build import build_pbp
 
 GAME = Path(__file__).resolve().parents[2] / "nfl" / "raw" / "2024" / "2024_01_BAL_KC.json"

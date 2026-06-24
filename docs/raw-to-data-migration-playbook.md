@@ -76,7 +76,7 @@ all in one repo:
 |---|---|---|
 | `python/scrape_nfl_json.py`, `extract_nfl_games.py` | cfb-raw scrapers | **No — stays in nfl-raw** |
 | `nfl/raw/` (3.1 GB committed JSON) | cfb-raw `cfb/json/` | **No — stays in nfl-raw** |
-| `python/model_training/track6_nfl_ep_wp/` (EP/WP/CP trainer + reporting suite + model cards) | `model_training` | **Yes → nfl-data** |
+| `python/model_training/play_level/` (EP/WP/CP trainer + reporting suite + model cards) | `model_training` | **Yes → nfl-data** |
 | `python/native_pbp/` (build/features/labels/parity/parse — compiled PBP w/ nflfastR parity) | `cfb_model_pbp` | **Yes → nfl-data** |
 | `models/` (trained `.ubj`) | published artifacts | **Yes (publish from nfl-data)** |
 
@@ -96,7 +96,7 @@ Key differences from the CFB migration:
 ## 5. NFL migration shape (proposed, mirrors CFB)
 
 - **SP0 — stand up nfl-data**: repo home + `git init`/remote + uv scaffold + hermetic test marker.
-- **SP1 — lift-and-shift**: move `track6_nfl_ep_wp` + `native_pbp` → nfl-data; add URL-ingest from
+- **SP1 — lift-and-shift**: move `play_level` + `native_pbp` → nfl-data; add URL-ingest from
   nfl-raw's committed `nfl/raw/{season}/{game_id}.json`; build the compiled PBP dataset.
 - **SP2 — reports + publish**: wire the existing track-6 report CLI + a dataset-publish path to the
   chosen release repo/tags.

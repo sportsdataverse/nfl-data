@@ -10,15 +10,15 @@ import numpy as np
 import polars as pl
 import pytest
 
-import model_training.track6_nfl_ep_wp.validate as val_mod
-from model_training.track6_nfl_ep_wp.validate import (
+import model_training.play_level.validate as val_mod
+from model_training.play_level.validate import (
     brier_score,
     pearson_correlation,
     validate_ep,
     validate_wp,
     run_parity_gate,
 )
-from model_training.track6_nfl_ep_wp.constants import EP_FEATURES, WP_SPREAD_FEATURES
+from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES
 
 
 # ---------------------------------------------------------------------------

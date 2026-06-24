@@ -3,13 +3,13 @@
 > REQUIRED SUB-SKILL: subagent-driven-development. Steps use `- [ ]` checkboxes.
 
 **Goal:** Move the NFL compiled-PBP builder (`native_pbp`) and the EP/WP/CP training+reporting suite
-(`model_training/track6_nfl_ep_wp`) from `nfl-raw` into `nfl-data`, add a `nfl_data_ingest` layer that
+(`model_training/play_level`) from `nfl-raw` into `nfl-data`, add a `nfl_data_ingest` layer that
 fetches `nfl-raw`'s committed JSON by URL into a local cache, and prove the moved code builds compiled
 PBP + the hermetic test suite passes in nfl-data. (nfl-raw is NOT modified here — that's SP3.)
 
 **Architecture:** Reuse the moved code unchanged by having `nfl_data_ingest` download
 `nfl/raw/{season}/{game_id}.json` from `RAW_BASE` into a cache dir, then call the existing
-`native_pbp.build.build_season(raw_dir=<cache>)` / `track6_nfl_ep_wp.ingest.load_native_pbp(raw_dir=<cache>)`.
+`native_pbp.build.build_season(raw_dir=<cache>)` / `play_level.ingest.load_native_pbp(raw_dir=<cache>)`.
 
 ## Global Constraints
 
@@ -23,11 +23,11 @@ PBP + the hermetic test suite passes in nfl-data. (nfl-raw is NOT modified here 
 
 ### Task 1: Move `native_pbp` + `model_training` into nfl-data
 **Files:** copy `nfl-raw/python/native_pbp/` → `nfl-data/python/native_pbp/`; copy
-`nfl-raw/python/model_training/` (contains only `track6_nfl_ep_wp/`) → `nfl-data/python/model_training/`.
+`nfl-raw/python/model_training/` (contains only `play_level/`) → `nfl-data/python/model_training/`.
 
 - [ ] **Step 1:** Copy both package dirs (exclude `__pycache__`). 
 - [ ] **Step 2:** Rewrite absolute imports: in every `.py` under the two moved dirs, `from python.native_pbp` → `from native_pbp`, `from python.model_training` → `from model_training` (sed; verify no `python\.` prefix remains: `git grep -n "python\.native_pbp\|python\.model_training" python/` → empty).
-- [ ] **Step 3:** Confirm packages import: `cd python && uv run python -c "import native_pbp.build, model_training.track6_nfl_ep_wp.pipeline; print('ok')"` (after Task 3 deps).
+- [ ] **Step 3:** Confirm packages import: `cd python && uv run python -c "import native_pbp.build, model_training.play_level.pipeline; print('ok')"` (after Task 3 deps).
 
 ### Task 2: Move the tests
 **Files:** copy `nfl-raw/tests/{__init__.py, test_*.py, native_pbp/}` → `nfl-data/python/tests/`.
@@ -56,10 +56,10 @@ PBP + the hermetic test suite passes in nfl-data. (nfl-raw is NOT modified here 
 
 ### Task 5: End-to-end wire + acceptance
 - [ ] **Step 1 (integration, gated):** `python -m nfl_data_ingest --seasons 2024:2024` then `build_season(2024, raw_dir=.cache/nfl_raw)` produces a non-empty PBP frame; spot-check `native_pbp.parity` on a sample game (nflfastR parity). Mark `@pytest.mark.integration`.
-- [ ] **Step 2:** Hermetic suite green; `import native_pbp.build, model_training.track6_nfl_ep_wp.pipeline, nfl_data_ingest.fetch` all succeed.
+- [ ] **Step 2:** Hermetic suite green; `import native_pbp.build, model_training.play_level.pipeline, nfl_data_ingest.fetch` all succeed.
 - [ ] **Step 3:** Commit to a branch + PR into nfl-data `main`. Remove `test_skeleton.py` once the real suite is green.
 
 ## Acceptance
-- nfl-data has `native_pbp/`, `model_training/track6_nfl_ep_wp/`, `nfl_data_ingest/` + their tests; no `python.` import prefix remains.
+- nfl-data has `native_pbp/`, `model_training/play_level/`, `nfl_data_ingest/` + their tests; no `python.` import prefix remains.
 - Hermetic `uv run pytest` green; gated integration test ingests 2024 by URL → builds parity-checked PBP.
 - nfl-raw untouched (SP3 decommissions it).

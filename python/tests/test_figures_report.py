@@ -9,7 +9,7 @@ import pytest
 
 def test_figures_write_calibration_and_curves(tmp_path):
     pytest.importorskip("plotnine")
-    from model_training.track6_nfl_ep_wp.figures import (
+    from model_training.play_level.figures import (
         plot_cp_by_air_yards,
         plot_ep_by_yardline,
         write_calibration,
@@ -45,7 +45,7 @@ def test_figures_write_calibration_and_curves(tmp_path):
 def test_run_report_end_to_end(tmp_path):
     import json
 
-    from model_training.track6_nfl_ep_wp.report import run_report
+    from model_training.play_level.report import run_report
 
     metrics = run_report([2023, 2024], source="native", out_dir=tmp_path,
                          nrounds=30, make_figures=False)

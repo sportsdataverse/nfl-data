@@ -9,14 +9,14 @@ from unittest.mock import MagicMock, patch
 import polars as pl
 import pytest
 
-import model_training.track6_nfl_ep_wp.pipeline as pipeline_mod
-from model_training.track6_nfl_ep_wp.pipeline import (
+import model_training.play_level.pipeline as pipeline_mod
+from model_training.play_level.pipeline import (
     run_ep_pipeline,
     run_wp_pipeline,
     run_cp_pipeline,
     run_full_pipeline,
 )
-from model_training.track6_nfl_ep_wp.constants import (
+from model_training.play_level.constants import (
     EP_FEATURES,
     WP_SPREAD_FEATURES,
     CP_FEATURES,

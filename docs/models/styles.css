@@ -1,0 +1,38 @@
+/* nflverse navy theme for the NFL model-card site */
+:root {
+  --nfl-navy: #013369;
+  --nfl-steel: #2a5599;
+}
+
+.navbar {
+  background-color: var(--nfl-navy) !important;
+}
+.navbar .navbar-brand,
+.navbar .nav-link {
+  color: #eaf0f7 !important;
+}
+
+h1, h2, h3 {
+  color: var(--nfl-navy);
+}
+
+a {
+  color: var(--nfl-steel);
+}
+a:hover {
+  color: var(--nfl-navy);
+}
+
+table {
+  font-size: 0.95rem;
+}
+table thead th {
+  background-color: var(--nfl-navy);
+  color: #fff;
+}
+
+img {
+  max-width: 100%;
+  border: 1px solid #e3e3e3;
+  border-radius: 4px;
+}

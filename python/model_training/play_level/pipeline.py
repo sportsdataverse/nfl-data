@@ -6,7 +6,7 @@ module-level wrapper so tests can monkeypatch without touching the library.
 Usage::
 
     from pathlib import Path
-    from model_training.track6_nfl_ep_wp.pipeline import run_full_pipeline
+    from model_training.play_level.pipeline import run_full_pipeline
 
     paths = run_full_pipeline(
         seasons=list(range(2012, 2025)),
@@ -18,7 +18,7 @@ Usage::
 
 CLI::
 
-    uv run python -m model_training.track6_nfl_ep_wp --help
+    uv run python -m model_training.play_level --help
 """
 from __future__ import annotations
 
@@ -232,7 +232,7 @@ def run_full_pipeline(
         Full 2012–2024 training run::
 
             from pathlib import Path
-            from model_training.track6_nfl_ep_wp.pipeline import run_full_pipeline
+            from model_training.play_level.pipeline import run_full_pipeline
 
             paths = run_full_pipeline(
                 seasons=list(range(2012, 2025)),

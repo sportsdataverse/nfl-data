@@ -1,4 +1,4 @@
-"""Gated parity test for the track7 NFL model suite.
+"""Gated parity test for the decision_models NFL model suite.
 
 Marked ``integration`` (deselected by default — needs network PBP + the
 converted R oracles under sdv-py-stats). Trains every model on the full spans
@@ -12,8 +12,8 @@ pytestmark = pytest.mark.integration
 
 
 def test_train_all_meets_parity(tmp_path: Path):
-    from model_training.track7_nfl_models.pipeline import train_all
-    from model_training.track7_nfl_models.validate import ORACLE_DIR
+    from model_training.decision_models.pipeline import train_all
+    from model_training.decision_models.validate import ORACLE_DIR
 
     if not (ORACLE_DIR / "xpass_model.ubj").exists():
         pytest.skip(f"oracle artifacts not found under {ORACLE_DIR}")

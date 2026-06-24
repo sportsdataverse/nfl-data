@@ -15,7 +15,7 @@ from the NFL Shield API.  Downstream tools can read these files via
 Usage::
 
     from pathlib import Path
-    from model_training.track6_nfl_ep_wp.fetcher import build_raw_library
+    from model_training.play_level.fetcher import build_raw_library
 
     paths = build_raw_library(
         seasons=list(range(2012, 2025)),
@@ -160,7 +160,7 @@ def build_raw_library(
         Quick start (all regular-season weeks, 2020–2024)::
 
             from pathlib import Path
-            from model_training.track6_nfl_ep_wp.fetcher import build_raw_library
+            from model_training.play_level.fetcher import build_raw_library
 
             paths = build_raw_library(
                 seasons=list(range(2020, 2025)),
@@ -413,7 +413,7 @@ def extract_library_to_games(
         Extract a fetched season into the committed per-game library::
 
             from pathlib import Path
-            from model_training.track6_nfl_ep_wp.fetcher import (
+            from model_training.play_level.fetcher import (
                 extract_library_to_games,
             )
 

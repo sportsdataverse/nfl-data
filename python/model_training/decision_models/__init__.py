@@ -1,4 +1,4 @@
-"""track7 — Python training port for the NFL model suite.
+"""decision_models — Python training port for the NFL model suite.
 
 Faithful retrains of the NFL models sdv-py uses as R-converted artifacts:
 ``xpass`` (dropback), ``fd`` (go-for-it gain), ``two_pt`` (2-pt conversion),

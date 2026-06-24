@@ -1,4 +1,4 @@
-﻿"""Failing tests for track6_nfl_ep_wp.features — run BEFORE implementing features.py.
+﻿"""Failing tests for play_level.features — run BEFORE implementing features.py.
 
 Tests verify that the Python translation of nflfastR's make_model_mutations() +
 prepare_ep_data() / prepare_wp_data() / prepare_cp_data() produces correct columns
@@ -9,14 +9,14 @@ import math
 import polars as pl
 import pytest
 
-from model_training.track6_nfl_ep_wp.features import (
+from model_training.play_level.features import (
     make_model_mutations,
     prepare_ep_data,
     prepare_wp_data,
     prepare_cp_data,
     label_next_score_half,
 )
-from model_training.track6_nfl_ep_wp.constants import EP_FEATURES, WP_SPREAD_FEATURES, WP_NAIVE_FEATURES
+from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES, WP_NAIVE_FEATURES
 
 
 # ---------------------------------------------------------------------------

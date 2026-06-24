@@ -1,7 +1,7 @@
 # CLAUDE.md — nfl-data
 
 NFL **data/publish** sibling of `sportsdataverse/nfl-raw` (the scraper). Consumes raw Shield JSON
-committed in `nfl-raw`, reshapes it to nflfastR parity, trains EP/WP/CP/track7 models, and publishes
+committed in `nfl-raw`, reshapes it to nflfastR parity, trains EP/WP/CP/decision_models models, and publishes
 datasets + model artifacts to GitHub Releases on `sportsdataverse/sportsdataverse-data`. Mirrors the
 `cfbfastR-cfb-data` role for NFL. The uv project lives under `python/` (not the repo root).
 
@@ -58,7 +58,7 @@ Output: parquet uploaded to releases on `sportsdataverse/sportsdataverse-data` (
 | `nfl_model_publish player-stats` | `nfl_player_stats` | 1999– | aggregates SDV-native PBP release (week-level, REG+POST, offense) |
 | `nfl_model_publish team-stats` | `nfl_team_stats` | 1999– | aggregates SDV-native PBP (offense+defense+kicking+returns) |
 | `nfl_model_publish qbr` | `nfl_espn_qbr` | 2006– | ESPN `fitt/v3` QBR endpoint, nflverse-shape |
-| `nfl_model_publish artifacts` / `track7-artifacts` | `nfl_model_artifacts` | n/a | `.ubj` models + cards from `models/` (track6/track7 trainers) |
+| `nfl_model_publish artifacts` / `decision_models-artifacts` | `nfl_model_artifacts` | n/a | `.ubj` models + cards from `models/` (play_level/decision_models trainers) |
 
 Consumed downstream by sdv-py `load_nfl_pbp(source="sdv")`, `load_nfl_espn_qbr(source="sdv")`, etc.
 
@@ -88,7 +88,7 @@ Consumed downstream by sdv-py `load_nfl_pbp(source="sdv")`, `load_nfl_espn_qbr(s
   install sdv-py from git@main, publish with `SDV_DATA_TOKEN`.
 - `python/native_pbp/__init__.py` documents the build-module order (stat_ids → parse → players →
   description → features → labels → parity).
-- `model_training/track6_nfl_ep_wp/` (EP/WP/CP) + `track7_nfl_models/` (xpass + nfl4th 4th-down)
+- `model_training/play_level/` (EP/WP/CP) + `decision_models/` (xpass + nfl4th 4th-down)
   are the model trainers; each track validates against the converted R artifact (parity oracle).
 - `README.md`, `docs/raw-to-data-migration-playbook.md`, and the design spec under
   `docs/superpowers/specs/` cover the raw→data migration.

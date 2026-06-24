@@ -1,4 +1,4 @@
-"""Parity gate for the NFL model suite (track7).
+"""Parity gate for the NFL model suite (decision_models).
 
 For each model, predict BOTH the freshly trained booster and the converted R
 oracle on a held-out PBP slice and assert they agree:
@@ -14,6 +14,7 @@ Also asserts each booster's ``feature_names == *_FEATURES``.
 
 The oracles live under ``<sdv-py-stats>/dev/nfl4th_artifacts/``.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -33,9 +34,13 @@ from .constants import (
     WP_FEATURES,
 )
 
-ORACLE_DIR = Path(
-    r"C:/Users/saiem/Documents/GitHub-Data/sdv-dev/sdv-py-stats/dev/nfl4th_artifacts"
-)
+ORACLE_DIR = Path(r"C:/Users/saiem/Documents/GitHub-Data/sdv-dev/sdv-py-stats/dev/nfl4th_artifacts")
+
+# The era-aware full-history xpass/fd add era0/era1(/era2) on top of the converted
+# oracle's narrower contract. Predict the oracle on its OWN feature subset so the
+# (now informational) corr-vs-oracle still computes despite the contract divergence.
+_ORACLE_XPASS_FEATURES = [f for f in XPASS_FEATURES if f not in ("era0", "era1")]
+_ORACLE_FD_FEATURES = [f for f in FD_FEATURES if f not in ("era0", "era1", "era2")]
 
 __all__ = [
     "pearson_correlation",
@@ -74,11 +79,15 @@ def _predict(model: Booster, X: np.ndarray, feature_names: list[str] | None) -> 
 def validate_xpass(model: Booster, df: pl.DataFrame, *, threshold: float = 0.99) -> Dict[str, Any]:
     X = df.select(XPASS_FEATURES).to_numpy()
     ours = _predict(model, X, XPASS_FEATURES)
-    oracle = load_oracle_booster(ORACLE_DIR / "xpass_model.ubj", len(XPASS_FEATURES))
-    ref = _predict(oracle, X, None)
+    oracle = load_oracle_booster(ORACLE_DIR / "xpass_model.ubj", len(_ORACLE_XPASS_FEATURES))
+    ref = _predict(oracle, df.select(_ORACLE_XPASS_FEATURES).to_numpy(), None)
     r = pearson_correlation(ours, ref)
-    return {"correlation": r, "gate_pass": r >= threshold, "n": len(df),
-            "feature_names_ok": model.feature_names == XPASS_FEATURES}
+    return {
+        "correlation": r,
+        "gate_pass": r >= threshold,
+        "n": len(df),
+        "feature_names_ok": model.feature_names == XPASS_FEATURES,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -94,11 +103,15 @@ def _mean_gain(probs: np.ndarray) -> np.ndarray:
 def validate_fd(model: Booster, df: pl.DataFrame, *, threshold: float = 0.99) -> Dict[str, Any]:
     X = df.select(FD_FEATURES).to_numpy()
     ours = _mean_gain(_predict(model, X, FD_FEATURES))
-    oracle = load_oracle_booster(ORACLE_DIR / "fd_model.ubj", len(FD_FEATURES))
-    ref = _mean_gain(_predict(oracle, X, None))
+    oracle = load_oracle_booster(ORACLE_DIR / "fd_model.ubj", len(_ORACLE_FD_FEATURES))
+    ref = _mean_gain(_predict(oracle, df.select(_ORACLE_FD_FEATURES).to_numpy(), None))
     r = pearson_correlation(ours, ref)
-    return {"correlation": r, "gate_pass": r >= threshold, "n": len(df),
-            "feature_names_ok": model.feature_names == FD_FEATURES}
+    return {
+        "correlation": r,
+        "gate_pass": r >= threshold,
+        "n": len(df),
+        "feature_names_ok": model.feature_names == FD_FEATURES,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +123,12 @@ def validate_two_pt(model: Booster, df: pl.DataFrame, *, threshold: float = 0.99
     oracle = load_oracle_booster(ORACLE_DIR / "two_pt_model.ubj", len(TWO_PT_FEATURES))
     ref = _predict(oracle, X, None)
     r = pearson_correlation(ours, ref)
-    return {"correlation": r, "gate_pass": r >= threshold, "n": len(df),
-            "feature_names_ok": model.feature_names == TWO_PT_FEATURES}
+    return {
+        "correlation": r,
+        "gate_pass": r >= threshold,
+        "n": len(df),
+        "feature_names_ok": model.feature_names == TWO_PT_FEATURES,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +155,12 @@ def validate_wp(model: Booster, df: pl.DataFrame, *, threshold: float = 0.99) ->
     oracle = load_oracle_booster(_wp_oracle_path(), len(WP_FEATURES))
     ref = _predict(oracle, X, None)
     r = pearson_correlation(ours, ref)
-    return {"correlation": r, "gate_pass": r >= threshold, "n": len(df),
-            "feature_names_ok": model.feature_names == WP_FEATURES}
+    return {
+        "correlation": r,
+        "gate_pass": r >= threshold,
+        "n": len(df),
+        "feature_names_ok": model.feature_names == WP_FEATURES,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +195,18 @@ def validate_fg(
         pl.col("fg_model_roof").str.slice(0, 1).cast(pl.Int32).alias("fg_roof"),
         pl.col("fg_model_roof").str.slice(1, 1).cast(pl.Int32).alias("fg_era"),
     )
+    # The GAM grid carries the 2-level fg_era (>=2020); the era-aware fg uses the
+    # 5-era one-hot. Map the grid's pre/post-2020 split onto the modern eras
+    # (era4 = >=2018, era3 = 2014-2017) so the booster can be scored over the GAM
+    # grid. INFORMATIONAL only — the full-history era-aware fg no longer reproduces
+    # the narrow-window GAM oracle.
+    grid = grid.with_columns(
+        pl.lit(0).cast(pl.Int32).alias("era0"),
+        pl.lit(0).cast(pl.Int32).alias("era1"),
+        pl.lit(0).cast(pl.Int32).alias("era2"),
+        (1 - pl.col("fg_era")).cast(pl.Int32).alias("era3"),
+        pl.col("fg_era").cast(pl.Int32).alias("era4"),
+    )
 
     full_r = pearson_correlation(
         _predict(model, grid.select(FG_FEATURES).to_numpy().astype(float), FG_FEATURES),
@@ -181,30 +214,27 @@ def validate_fg(
     )
 
     if attempts is not None and attempts.height:
-        # Cast join keys to a common dtype — the grid is i32, the attempts frame
-        # carries yardline_100 as f64.
-        cnt = attempts.with_columns(
-            pl.col("yardline_100").cast(pl.Int32),
-            pl.col("fg_roof").cast(pl.Int32),
-            pl.col("fg_era").cast(pl.Int32),
-        ).group_by(["yardline_100", "fg_roof", "fg_era"]).agg(
-            pl.len().alias("attempt_n")
+        # Weight by attempted cells, keyed on era4 (the model's modern-era flag).
+        cnt = (
+            attempts.with_columns(
+                pl.col("yardline_100").cast(pl.Int32),
+                pl.col("fg_roof").cast(pl.Int32),
+                pl.col("era4").cast(pl.Int32),
+            )
+            .group_by(["yardline_100", "fg_roof", "era4"])
+            .agg(pl.len().alias("attempt_n"))
         )
         grid_keyed = grid.with_columns(
             pl.col("yardline_100").cast(pl.Int32),
             pl.col("fg_roof").cast(pl.Int32),
-            pl.col("fg_era").cast(pl.Int32),
+            pl.col("era4").cast(pl.Int32),
         )
-        grid_obs = grid_keyed.join(
-            cnt, on=["yardline_100", "fg_roof", "fg_era"], how="inner"
-        )
+        grid_obs = grid_keyed.join(cnt, on=["yardline_100", "fg_roof", "era4"], how="inner")
         weights = grid_obs["attempt_n"].to_numpy().astype(float)
         scope = "attempted-cells"
     else:
         lo, hi = FG_VALIDATION_YARDLINE_RANGE
-        grid_obs = grid.filter(
-            (pl.col("yardline_100") >= lo) & (pl.col("yardline_100") <= hi)
-        )
+        grid_obs = grid.filter((pl.col("yardline_100") >= lo) & (pl.col("yardline_100") <= hi))
         weights = np.ones(grid_obs.height)
         scope = f"yardline {FG_VALIDATION_YARDLINE_RANGE[0]}-{FG_VALIDATION_YARDLINE_RANGE[1]}"
 
@@ -261,14 +291,10 @@ def validate_punt(
     oracle = pl.read_parquet(ORACLE_DIR / "punt_data.parquet")
 
     def _marginal(df: pl.DataFrame) -> dict[float, dict[float, float]]:
-        agg = df.group_by(["yardline_100", "yardline_after"]).agg(
-            pl.col("pct").sum().alias("pct")
-        )
+        agg = df.group_by(["yardline_100", "yardline_after"]).agg(pl.col("pct").sum().alias("pct"))
         out: dict[float, dict[float, float]] = {}
         for row in agg.iter_rows(named=True):
-            out.setdefault(float(row["yardline_100"]), {})[
-                float(row["yardline_after"])
-            ] = float(row["pct"])
+            out.setdefault(float(row["yardline_100"]), {})[float(row["yardline_after"])] = float(row["pct"])
         return out
 
     o, r = _marginal(ours), _marginal(oracle)

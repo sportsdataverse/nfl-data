@@ -1,7 +1,7 @@
 ﻿"""Ingest nflverse play-by-play data for EP/WP/CP model training.
 
 Usage:
-    from model_training.track6_nfl_ep_wp.ingest import download_pbp
+    from model_training.play_level.ingest import download_pbp
     download_pbp(seasons=list(range(2012, 2025)), output_dir=Path("data"))
 """
 from __future__ import annotations
@@ -109,7 +109,7 @@ def download_pbp(
         Quick start::
 
             from pathlib import Path
-            from model_training.track6_nfl_ep_wp.ingest import download_pbp
+            from model_training.play_level.ingest import download_pbp
             paths = download_pbp([2023, 2024], output_dir=Path("data"))
             print(paths)
     """
@@ -185,8 +185,8 @@ def load_native_pbp(
     Example:
         Train EP off native data::
 
-            from model_training.track6_nfl_ep_wp.ingest import load_native_pbp
-            from model_training.track6_nfl_ep_wp.label import build_ep_training_set
+            from model_training.play_level.ingest import load_native_pbp
+            from model_training.play_level.label import build_ep_training_set
             df = load_native_pbp([2022, 2023, 2024])
             ep = build_ep_training_set(df)
     """

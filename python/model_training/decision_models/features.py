@@ -1,17 +1,18 @@
-"""Feature engineering for the NFL model suite (track7).
+"""Feature engineering for the NFL model suite (decision_models).
 
-Reuses track6's :func:`make_model_mutations` (era buckets, roof one-hots, home,
+Reuses play_level's :func:`make_model_mutations` (era buckets, roof one-hots, home,
 down dummies) and adds the per-model filters / labels / spread-total features
 that the nfl4th + nflverse-pbp R training scripts apply.
 
 All functions accept and return polars DataFrames.
 """
+
 from __future__ import annotations
 
 import polars as pl
 
-# Reuse the canonical mutation engine from track6 — DO NOT re-implement.
-from model_training.track6_nfl_ep_wp.features import make_model_mutations
+# Reuse the canonical mutation engine from play_level — DO NOT re-implement.
+from model_training.play_level.features import make_model_mutations
 
 from .constants import (
     XPASS_FEATURES,
@@ -141,12 +142,9 @@ def prepare_fd_data(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns(yards.alias("_yards_gained"))
 
     out = out.filter(
-        pl.col("play_type_nfl").is_in(["RUSH", "PASS", "SACK"])
-        | (pl.col("first_down_penalty").fill_null(0) == 1)
+        pl.col("play_type_nfl").is_in(["RUSH", "PASS", "SACK"]) | (pl.col("first_down_penalty").fill_null(0) == 1)
     )
-    out = out.with_columns(
-        (pl.col("_yards_gained") + 10).cast(pl.Int32).alias("label")
-    )
+    out = out.with_columns((pl.col("_yards_gained") + 10).cast(pl.Int32).alias("label"))
     return out.select([*FD_FEATURES, "label"])
 
 
@@ -177,9 +175,7 @@ def prepare_two_pt_data(df: pl.DataFrame) -> pl.DataFrame:
         & (pl.col("week") <= 17)
     )
     out = add_spread_total_features(out)
-    out = out.with_columns(
-        (pl.col("two_point_conv_result") == "success").cast(pl.Int32).alias("label")
-    )
+    out = out.with_columns((pl.col("two_point_conv_result") == "success").cast(pl.Int32).alias("label"))
     return out.select([*TWO_PT_FEATURES, "label"])
 
 
@@ -201,17 +197,17 @@ def prepare_fg_data(df: pl.DataFrame) -> pl.DataFrame:
         Frame with ``FG_FEATURES`` columns + ``label`` (0/1).
     """
     out = df.filter(pl.col("play_type_nfl") == "FIELD_GOAL")
+    # era0..era4 come from make_model_mutations (applied upstream); fg builds only
+    # its own roof flag. The binary fg_era is retired in favour of the full era
+    # one-hot so the make-prob curve is era-aware across all kicking eras.
     out = out.with_columns(
         (pl.col("roof") == "outdoors").cast(pl.Int32).alias("fg_roof"),
-        (pl.col("season") >= 2020).cast(pl.Int32).alias("fg_era"),
     )
     # label: prefer sp, else field_goal_result == "made"
     if "sp" in out.columns:
         label = pl.when(pl.col("sp").is_not_null()).then(pl.col("sp"))
         if "field_goal_result" in out.columns:
-            label = label.otherwise(
-                (pl.col("field_goal_result") == "made").cast(pl.Int32)
-            )
+            label = label.otherwise((pl.col("field_goal_result") == "made").cast(pl.Int32))
         else:
             label = label.otherwise(pl.lit(0))
     else:
@@ -262,7 +258,7 @@ def prepare_wp_data(df: pl.DataFrame) -> pl.DataFrame:
         & pl.col("play_type").is_not_null()
         & pl.col("yardline_100").is_not_null()
     )
-    # home-perspective transforms + elapsed_share (matches track6 _add_wp_aux)
+    # home-perspective transforms + elapsed_share (matches play_level _add_wp_aux)
     out = out.with_columns(
         is_home.cast(pl.Int32).alias("home_posteam"),
         ((3600.0 - pl.col("game_seconds_remaining")) / 3600.0).alias("elapsed_share"),
@@ -283,9 +279,7 @@ def prepare_wp_data(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns(
         # spread_line is already home-perspective in nflfastR (negative = home favored)
         (pl.col("spread_line") * (pl.col("elapsed_share") * -4.0).exp()).alias("spread_time"),
-        (pl.col("home_score_differential") / (pl.col("elapsed_share") * -4.0).exp()).alias(
-            "Diff_Time_Ratio"
-        ),
+        (pl.col("home_score_differential") / (pl.col("elapsed_share") * -4.0).exp()).alias("Diff_Time_Ratio"),
     )
     # home_receive_2h_ko: home opened the game on defense (i.e. kicked off) -> they
     # receive the 2nd-half kickoff. First non-null defteam in the game == kicking team.
@@ -301,7 +295,5 @@ def prepare_wp_data(df: pl.DataFrame) -> pl.DataFrame:
         .otherwise(pl.lit(0))
         .alias("home_receive_2h_ko")
     )
-    out = out.with_columns(
-        (pl.col("home_team") == pl.col("Winner")).cast(pl.Int32).alias("label")
-    )
+    out = out.with_columns((pl.col("home_team") == pl.col("Winner")).cast(pl.Int32).alias("label"))
     return out.select([*WP_FEATURES, "label"])

@@ -1,4 +1,4 @@
-"""XGBoost trainers + punt-distribution builder for the NFL model suite (track7).
+"""XGBoost trainers + punt-distribution builder for the NFL model suite (decision_models).
 
 Each ``train_*`` accepts a feature-engineered polars DataFrame and returns a
 trained Booster. Pass ``nrounds`` to override the canonical value (smoke tests
@@ -211,7 +211,7 @@ def train_wp(
     ``binary:logistic`` with eta 0.2, max_depth 4, gamma 0, subsample 0.8,
     colsample_bytree 0.8, min_child_weight 1, nrounds 65, ``set.seed(2013)``,
     and NO monotone constraints (only the spread model is constrained). The
-    11-feature frame (``WP_FEATURES`` == track6 ``WP_NAIVE_FEATURES``) matches
+    11-feature frame (``WP_FEATURES`` == play_level ``WP_NAIVE_FEATURES``) matches
     the converted ``wp_model.ubj`` oracle's feature contract exactly.
 
     Args:

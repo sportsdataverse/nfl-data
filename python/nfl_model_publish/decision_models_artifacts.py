@@ -1,7 +1,7 @@
-"""Publish path for the self-trained track7 NFL model suite.
+"""Publish path for the self-trained decision_models NFL model suite.
 
 Mirrors :mod:`nfl_model_publish.artifacts` but routes the *Python-native*
-track7 artifacts to their correct destinations:
+decision_models artifacts to their correct destinations:
 
 - **Uploaded to releases** (the repoint mechanism):
     - ``xpass_model.ubj`` -> ``nfl_model_artifacts``
@@ -10,7 +10,7 @@ track7 artifacts to their correct destinations:
   ``sportsdataverse/nfl/models/``; not uploaded to any release):
     - ``two_pt_model.ubj``, ``fg_model.ubj``, ``punt_data.parquet``
 
-The artifacts come from ``model_training.track7_nfl_models`` — either trained
+The artifacts come from ``model_training.decision_models`` — either trained
 fresh (``train-all``) or read from an existing ``out/`` directory. ``--dry-run``
 plans the uploads + copies without touching the network or the bundle dir.
 """
@@ -27,8 +27,8 @@ __all__ = [
     "TRACK7_RELEASE_MAP",
     "TRACK7_BUNDLE_ARTIFACTS",
     "artifact_digest",
-    "plan_track7_artifacts",
-    "publish_track7_artifacts",
+    "plan_decision_models_artifacts",
+    "publish_decision_models_artifacts",
 ]
 
 # Release-tagged artifacts: {filename: release tag}. xpass joins the EP/WP/CP
@@ -53,7 +53,7 @@ TRACK7_BUNDLE_ARTIFACTS: tuple[str, ...] = (
 _TRACK7_RELEASE_BODY: Dict[str, str] = {
     "nfl_4th_down_models": (
         "NFL 4th-down decision models (go-for-it gain `fd_model` + win-probability "
-        "`wp_model` .ubj; Python-native track7 retrain)."
+        "`wp_model` .ubj; Python-native decision_models retrain)."
     ),
 }
 
@@ -91,7 +91,7 @@ def _ensure_out_dir(
     """Train the suite into ``out_dir`` when ``train`` (else assume it exists)."""
     if not train:
         return
-    from model_training.track7_nfl_models.pipeline import train_all
+    from model_training.decision_models.pipeline import train_all
 
     train_all(
         out_dir=out_dir,
@@ -101,11 +101,11 @@ def _ensure_out_dir(
     )
 
 
-def plan_track7_artifacts(out_dir) -> Dict[str, List[Dict[str, object]]]:
-    """Classify the track7 artifacts in ``out_dir`` into upload + bundle sets.
+def plan_decision_models_artifacts(out_dir) -> Dict[str, List[Dict[str, object]]]:
+    """Classify the decision_models artifacts in ``out_dir`` into upload + bundle sets.
 
     Args:
-        out_dir: Directory holding the trained track7 ``.ubj`` / ``.parquet``.
+        out_dir: Directory holding the trained decision_models ``.ubj`` / ``.parquet``.
 
     Returns:
         ``{"uploads": [{...release...}], "bundle": [{...}], "missing": [str]}``
@@ -136,7 +136,7 @@ def plan_track7_artifacts(out_dir) -> Dict[str, List[Dict[str, object]]]:
     return {"uploads": uploads, "bundle": bundle, "missing": missing}
 
 
-def publish_track7_artifacts(
+def publish_decision_models_artifacts(
     out_dir,
     repo: str,
     *,
@@ -149,7 +149,7 @@ def publish_track7_artifacts(
     runner: Optional[Callable[[list], None]] = None,
     exists_check: Optional[Callable[[str, str], bool]] = None,
 ) -> Dict[str, object]:
-    """Train (optionally) + route the track7 artifacts to release + bundle.
+    """Train (optionally) + route the decision_models artifacts to release + bundle.
 
     Release-tagged artifacts (``TRACK7_RELEASE_MAP``) are uploaded to their tag on
     ``repo`` (release auto-created if missing). Bundle artifacts
@@ -190,14 +190,14 @@ def publish_track7_artifacts(
         wp_cal_data_path=wp_cal_data_path,
     )
 
-    plan = plan_track7_artifacts(out_dir)
+    plan = plan_decision_models_artifacts(out_dir)
     uploads = plan["uploads"]
     bundle = plan["bundle"]
     missing = plan["missing"]
 
     if not train and missing:
         raise FileNotFoundError(
-            f"track7 artifacts missing from {out_dir}: {missing}. "
+            f"decision_models artifacts missing from {out_dir}: {missing}. "
             f"Pass train=True (--train) to build them first."
         )
 

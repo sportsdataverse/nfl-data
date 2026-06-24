@@ -1,4 +1,4 @@
-"""Feature contracts and hyperparameters for the NFL model suite (track7).
+"""Feature contracts and hyperparameters for the NFL model suite (decision_models).
 
 Faithful Python port of the R training scripts:
 
@@ -13,6 +13,7 @@ orders mirror the R ``select(...)`` order, which is the column order R's
 ``model.matrix(~.+0, ...)`` produces (and therefore the order the booster
 expects). Era cuts + roof one-hots come from ``features.make_model_mutations``.
 """
+
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,8 @@ XPASS_FEATURES: list[str] = [
     "qtr",
     "wp",
     "vegas_wp",
+    "era0",
+    "era1",
     "era2",
     "era3",
     "era4",
@@ -65,6 +68,9 @@ FD_FEATURES: list[str] = [
     "down",
     "ydstogo",
     "yardline_100",
+    "era0",
+    "era1",
+    "era2",
     "era3",
     "era4",
     "outdoors",
@@ -133,8 +139,12 @@ TWO_PT_HYPERPARAMS: dict = {
 # levels {"00","01","10","11"} as fg_roof_outdoors x fg_era_2020 dummies.
 FG_FEATURES: list[str] = [
     "yardline_100",
-    "fg_roof",   # 1 if roof == "outdoors"
-    "fg_era",    # 1 if season >= 2020
+    "fg_roof",  # 1 if roof == "outdoors"
+    "era0",  # full era one-hot (cuts 2001/2005/2013/2017) replaces the binary
+    "era1",  # fg_era — the full-history fg is era-aware across all kicking eras,
+    "era2",  # and the PAT path (fg @ yardline_100=15) reads the modern era.
+    "era3",
+    "era4",
 ]
 
 # The FG make-probability curve is a smooth monotone decline in distance; the
@@ -142,7 +152,7 @@ FG_FEATURES: list[str] = [
 # keep stumps (max_depth=2), a low eta with many rounds, and a monotone
 # decreasing constraint on yardline_100 (the parity lever — without it the booster
 # wiggles and corr-vs-GAM caps ~0.97; with it it reaches ~0.985 on the FG range).
-FG_MONOTONE_CONSTRAINTS: tuple[int, ...] = (-1, 0, 0)  # yardline_100 ↓, fg_roof, fg_era
+FG_MONOTONE_CONSTRAINTS: tuple[int, ...] = (-1, 0, 0, 0, 0, 0, 0)  # yardline_100 ↓, fg_roof, era0..era4
 
 FG_HYPERPARAMS: dict = {
     "booster": "gbtree",
@@ -173,7 +183,7 @@ FG_VALIDATION_YARDLINE_RANGE: tuple[int, int] = (10, 63)
 # The converted oracle `wp_model.ubj` (sdv-py-stats nfl4th_artifacts/official) is
 # the model `nfl4th::wp_model()` applies for 4th-down decisions — a HOME-team
 # win-probability XGBoost (11 features incl. `home_ep` + `spread_time`), NOT
-# nflfastR MODELS.R's possession-team `wp_model` (those are track6's WP models).
+# nflfastR MODELS.R's possession-team `wp_model` (those are play_level's WP models).
 #
 # The feature contract is `nfl4th` `R/apply_win_prob.R::wp_model_select()` —
 # `as.matrix()` column order (the duplicate `home_timeouts_remaining` collapses
@@ -193,7 +203,7 @@ FG_VALIDATION_YARDLINE_RANGE: tuple[int, int] = (10, 63)
 #   home_timeouts_remaining = posteam==home ? posteam_timeouts : defteam_timeouts
 #   label                   = (home_team == Winner)
 #
-# (`elapsed_share` matches track6 `_add_wp_aux`: (3600 - game_sec) / 3600.)
+# (`elapsed_share` matches play_level `_add_wp_aux`: (3600 - game_sec) / 3600.)
 WP_FEATURES: list[str] = [
     "home_receive_2h_ko",
     "spread_time",
@@ -208,7 +218,7 @@ WP_FEATURES: list[str] = [
     "home_timeouts_remaining",
 ]
 
-# Params follow track6's WP family (binary:logistic, eta 0.025, max_depth 5,
+# Params follow play_level's WP family (binary:logistic, eta 0.025, max_depth 5,
 # gamma 1, subsample/colsample 0.8); the nfl4th oracle is unconstrained. nrounds
 # 500 maximizes corr-vs-oracle on the held-out slice (sweep 500-2000 all >=0.99;
 # parity peaks at 500 then drifts as the booster overfits the frozen cal_data).

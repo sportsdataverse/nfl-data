@@ -1,9 +1,10 @@
-"""Training + parity-gate orchestrator for the NFL model suite (track7).
+"""Training + parity-gate orchestrator for the NFL model suite (decision_models).
 
 ``train_all`` loads the per-model PBP spans, builds each training frame, trains
 every model (xpass / fd / two_pt / fg), builds the punt distribution, runs the
 parity gate against the converted R oracles, and writes a ``report.md``.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -33,12 +34,22 @@ from . import validate as V
 
 __all__ = ["train_all"]
 
-# Per-model training spans (R scripts). FG is 2014:current-ish; we cap at 2024.
-XPASS_SEASONS = list(range(2006, 2020))
-FD_SEASONS = list(range(2014, 2020))
-TWO_PT_SEASONS = list(range(2010, 2020))
-FG_SEASONS = list(range(2014, 2025))
-PUNT_SEASONS = list(range(2010, 2020))
+# Full-history training spans (1999-2025). This departs from the upstream
+# nfl4th/nflverse recipe windows (xpass 2006+, fd 2014-2019, two_pt 2010-2019,
+# fg 2014+, punt 2010-2019): the models are now full-history nflverse-data
+# retrains, so parity-vs-oracle below is INFORMATIONAL, not a reproduction gate.
+# None of these models use air_yards, so 1999 is a valid floor; the era one-hots
+# cover the post-2005 cuts only, so pre-2006 plays train as the baseline era.
+FULL_HISTORY = list(range(1999, 2026))
+XPASS_SEASONS = FULL_HISTORY
+FD_SEASONS = FULL_HISTORY
+FG_SEASONS = FULL_HISTORY
+PUNT_SEASONS = FULL_HISTORY
+# two_pt keeps the nfl4th 2010 start (pre-2010 2-pt attempts are sparse + a
+# different strategic era) but EXTENDS through 2025 so the modern analytics-driven
+# go-for-2 era is included. Not full-history (no era0/era1): 2010-2025 spans
+# era2/era3/era4 only.
+TWO_PT_SEASONS = list(range(2010, 2026))
 HOLDOUT_SEASONS = [2022, 2023]
 # WP trains on cal_data.rds (2001-2020 per MODELS.R); hold out the latest seasons
 # in that frame for the parity comparison vs the converted oracle.
@@ -56,7 +67,7 @@ def train_all(
     source: str = "nflverse",
     wp_cal_data_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Train every track7 model, build punt_data, run the parity gate, write report.
+    """Train every decision_models model, build punt_data, run the parity gate, write report.
 
     Args:
         out_dir: Directory for the ``.ubj`` / ``.parquet`` artifacts + report.md.
@@ -76,42 +87,42 @@ def train_all(
     artifacts: Dict[str, Path] = {}
 
     # --- holdout slice for the booster parity comparisons ---
-    print(f"[track7] loading holdout PBP {HOLDOUT_SEASONS} (source={source})...")
+    print(f"[decision_models] loading holdout PBP {HOLDOUT_SEASONS} (source={source})...")
     hold_raw = make_model_mutations(load_training_pbp(HOLDOUT_SEASONS, source=source))
 
     # --- xpass ---
-    print(f"[track7] xpass: loading {XPASS_SEASONS[0]}-{XPASS_SEASONS[-1]}...")
+    print(f"[decision_models] xpass: loading {XPASS_SEASONS[0]}-{XPASS_SEASONS[-1]}...")
     xp_df = prepare_xpass_data(make_model_mutations(load_training_pbp(XPASS_SEASONS, source=source)))
-    print(f"[track7] xpass: training on {xp_df.height:,} plays...")
+    print(f"[decision_models] xpass: training on {xp_df.height:,} plays...")
     xp_model = train_xpass(xp_df, nrounds=nrounds_override, output_path=out_dir / "xpass_model.ubj")
     artifacts["xpass"] = out_dir / "xpass_model.ubj"
     results["xpass"] = V.validate_xpass(xp_model, prepare_xpass_data(hold_raw))
-    print(f"[track7] xpass parity: {_fmt(results['xpass'])}")
+    print(f"[decision_models] xpass parity: {_fmt(results['xpass'])}")
 
     # --- fd ---
-    print(f"[track7] fd: loading {FD_SEASONS[0]}-{FD_SEASONS[-1]}...")
+    print(f"[decision_models] fd: loading {FD_SEASONS[0]}-{FD_SEASONS[-1]}...")
     fd_df = prepare_fd_data(make_model_mutations(load_training_pbp(FD_SEASONS, source=source)))
-    print(f"[track7] fd: training on {fd_df.height:,} plays...")
+    print(f"[decision_models] fd: training on {fd_df.height:,} plays...")
     fd_model = train_fd(fd_df, nrounds=nrounds_override, output_path=out_dir / "fd_model.ubj")
     artifacts["fd"] = out_dir / "fd_model.ubj"
     results["fd"] = V.validate_fd(fd_model, prepare_fd_data(hold_raw))
-    print(f"[track7] fd parity: {_fmt(results['fd'])}")
+    print(f"[decision_models] fd parity: {_fmt(results['fd'])}")
 
     # --- two_pt ---
-    print(f"[track7] two_pt: loading {TWO_PT_SEASONS[0]}-{TWO_PT_SEASONS[-1]}...")
+    print(f"[decision_models] two_pt: loading {TWO_PT_SEASONS[0]}-{TWO_PT_SEASONS[-1]}...")
     tp_df = prepare_two_pt_data(make_model_mutations(load_training_pbp(TWO_PT_SEASONS, source=source)))
-    print(f"[track7] two_pt: training on {tp_df.height:,} plays...")
+    print(f"[decision_models] two_pt: training on {tp_df.height:,} plays...")
     tp_model = train_two_pt(tp_df, nrounds=nrounds_override, output_path=out_dir / "two_pt_model.ubj")
     artifacts["two_pt"] = out_dir / "two_pt_model.ubj"
     # two_pt holdout is tiny (yardline_100==2); validate on a multi-season slice
     tp_hold = prepare_two_pt_data(make_model_mutations(load_training_pbp(TWO_PT_SEASONS, source=source)))
     results["two_pt"] = V.validate_two_pt(tp_model, tp_hold)
-    print(f"[track7] two_pt parity: {_fmt(results['two_pt'])}")
+    print(f"[decision_models] two_pt parity: {_fmt(results['two_pt'])}")
 
     # --- fg ---
-    print(f"[track7] fg: loading {FG_SEASONS[0]}-{FG_SEASONS[-1]}...")
-    fg_df = prepare_fg_data(load_training_pbp(FG_SEASONS, source=source))
-    print(f"[track7] fg: training on {fg_df.height:,} attempts...")
+    print(f"[decision_models] fg: loading {FG_SEASONS[0]}-{FG_SEASONS[-1]}...")
+    fg_df = prepare_fg_data(make_model_mutations(load_training_pbp(FG_SEASONS, source=source)))
+    print(f"[decision_models] fg: training on {fg_df.height:,} attempts...")
     fg_model = train_fg(
         fg_df,
         nrounds=nrounds_override,
@@ -120,36 +131,30 @@ def train_all(
     )
     artifacts["fg"] = out_dir / "fg_model.ubj"
     results["fg"] = V.validate_fg(fg_model, attempts=fg_df)
-    print(f"[track7] fg parity: {_fmt(results['fg'])}")
+    print(f"[decision_models] fg parity: {_fmt(results['fg'])}")
 
     # --- wp (home-perspective; the nfl4th wp_model contract) ---
     try:
-        print("[track7] wp: loading cal_data.rds...")
+        print("[decision_models] wp: loading cal_data.rds...")
         wp_raw = load_wp_cal_data(wp_cal_data_path)
         wp_train_raw = (
-            wp_raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS))
-            if "season" in wp_raw.columns
-            else wp_raw
+            wp_raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS)) if "season" in wp_raw.columns else wp_raw
         )
         wp_hold_raw = (
-            wp_raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS))
-            if "season" in wp_raw.columns
-            else wp_raw
+            wp_raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS)) if "season" in wp_raw.columns else wp_raw
         )
         wp_df = prepare_wp_data(wp_train_raw)
-        print(f"[track7] wp: training on {wp_df.height:,} plays...")
-        wp_model = train_wp(
-            wp_df, nrounds=nrounds_override, output_path=out_dir / "wp_model.ubj"
-        )
+        print(f"[decision_models] wp: training on {wp_df.height:,} plays...")
+        wp_model = train_wp(wp_df, nrounds=nrounds_override, output_path=out_dir / "wp_model.ubj")
         artifacts["wp"] = out_dir / "wp_model.ubj"
         results["wp"] = V.validate_wp(wp_model, prepare_wp_data(wp_hold_raw))
-        print(f"[track7] wp parity: {_fmt(results['wp'])}")
+        print(f"[decision_models] wp parity: {_fmt(results['wp'])}")
     except FileNotFoundError as exc:
-        print(f"[track7] wp: SKIPPED ({exc})")
+        print(f"[decision_models] wp: SKIPPED ({exc})")
         results["wp"] = {"skipped": True, "reason": str(exc)}
 
     # --- punt ---
-    print(f"[track7] punt: loading {PUNT_SEASONS[0]}-{PUNT_SEASONS[-1]}...")
+    print(f"[decision_models] punt: loading {PUNT_SEASONS[0]}-{PUNT_SEASONS[-1]}...")
     punt_raw = load_training_pbp(PUNT_SEASONS, source=source)
     punt_df = build_punt_data(punt_raw, output_path=out_dir / "punt_data.parquet")
     artifacts["punt"] = out_dir / "punt_data.parquet"
@@ -161,7 +166,7 @@ def train_all(
         .iter_rows(named=True)
     }
     results["punt"] = V.validate_punt(punt_df, punt_weights=punt_w)
-    print(f"[track7] punt parity: {_fmt(results['punt'])}")
+    print(f"[decision_models] punt parity: {_fmt(results['punt'])}")
 
     results["artifacts"] = artifacts
     _write_report(out_dir / "report.md", results, nrounds_override)
@@ -171,7 +176,7 @@ def train_all(
 def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optional[int]) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
-        "# track7 — NFL model suite parity report",
+        "# decision_models — NFL model suite parity report",
         "",
         f"Generated: {ts}",
         f"nrounds_override: {nrounds_override}",
@@ -179,20 +184,25 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         "| model | metric | value | gate | pass |",
         "|---|---|---|---|---|",
     ]
+
     def row(name, metric, value, gate, ok):
         lines.append(f"| {name} | {metric} | {value} | {gate} | {'OK' if ok else 'FAIL'} |")
 
     if "xpass" in results:
-        r = results["xpass"]; row("xpass", "P(pass) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
+        r = results["xpass"]
+        row("xpass", "P(pass) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "fd" in results:
-        r = results["fd"]; row("fd", "mean-gain corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
+        r = results["fd"]
+        row("fd", "mean-gain corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "two_pt" in results:
-        r = results["two_pt"]; row("two_pt", "P(success) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
+        r = results["two_pt"]
+        row("two_pt", "P(success) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "wp" in results and not results["wp"].get("skipped"):
-        r = results["wp"]; row("wp", "P(win) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
+        r = results["wp"]
+        row("wp", "P(win) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "fg" in results:
         r = results["fg"]
-        row("fg", f"corr ({r.get('scope','')})", f"{r['correlation']:.4f}", "≥0.98", r["gate_pass"])
+        row("fg", f"corr ({r.get('scope', '')})", f"{r['correlation']:.4f}", "≥0.98", r["gate_pass"])
         row("fg", "freq-weighted corr", f"{r.get('weighted_correlation', float('nan')):.4f}", "report-only", True)
         row("fg", "full-grid corr", f"{r.get('full_grid_correlation', float('nan')):.4f}", "report-only", True)
         row("fg", "max abs FG% diff", f"{r['max_abs_fg_pct_diff']:.4f}", "report-only", True)
@@ -229,12 +239,12 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         "  Diff_Time_Ratio, home_score_differential, home_ep, ydstogo, home_yardline_100,",
         "  home_timeouts_remaining). `prepare_wp_data` ports the home-perspective",
         "  transforms verbatim. NOTE: this is NOT nflfastR MODELS.R's possession-team",
-        "  `wp_model` (those 11/12-feature posteam models are track6's WP suite); the",
+        "  `wp_model` (those 11/12-feature posteam models are play_level's WP suite); the",
         "  task's '11 vs 12' question resolves to nfl4th's HOME-perspective 11-feature",
-        "  contract. Params follow track6's WP family (binary:logistic, eta 0.025,",
+        "  contract. Params follow play_level's WP family (binary:logistic, eta 0.025,",
         "  max_depth 5, gamma 1, subsample/colsample 0.8, nrounds 500, seed 2013);",
         "  nrounds 500 maximizes corr-vs-oracle (sweep 500-2000 all >=0.99, peak at",
         "  500). When `cal_data.rds` is absent the WP model is skip-and-document.",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"[track7] report written -> {path}")
+    print(f"[decision_models] report written -> {path}")

@@ -21,13 +21,13 @@ pytestmark = [
 
 
 def test_native_training_produces_models(tmp_path):
-    from model_training.track6_nfl_ep_wp.ingest import load_native_pbp
-    from model_training.track6_nfl_ep_wp.label import (
+    from model_training.play_level.ingest import load_native_pbp
+    from model_training.play_level.label import (
         build_cp_training_set,
         build_ep_training_set,
         build_wp_training_set,
     )
-    from model_training.track6_nfl_ep_wp.trainer import (
+    from model_training.play_level.trainer import (
         train_cp,
         train_ep,
         train_wp_naive,

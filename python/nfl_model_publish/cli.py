@@ -48,7 +48,7 @@ Usage::
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
 
-    python -m nfl_model_publish track7-artifacts \\
+    python -m nfl_model_publish decision_models-artifacts \\
         --out-dir <dir> \\
         [--train] \\
         [--bundle-dir <dir>] \\
@@ -204,18 +204,18 @@ def build_parser() -> argparse.ArgumentParser:
     _add_repo_dry(q)
 
     t7 = sub.add_parser(
-        "track7-artifacts",
-        help="Route the self-trained track7 NFL model suite to releases + bundle.",
+        "decision_models-artifacts",
+        help="Route the self-trained decision_models NFL model suite to releases + bundle.",
     )
     t7.add_argument(
         "--out-dir",
         default="out",
-        help="Directory with (or to receive) the trained track7 artifacts.",
+        help="Directory with (or to receive) the trained decision_models artifacts.",
     )
     t7.add_argument(
         "--train",
         action="store_true",
-        help="Run track7 train-all into --out-dir first (else read existing).",
+        help="Run decision_models train-all into --out-dir first (else read existing).",
     )
     t7.add_argument(
         "--nrounds",
@@ -357,12 +357,12 @@ def main(argv=None) -> int:
             f"uploaded={res['uploaded']} files={len(res['files'])} "
             f"-> {args.repo}:{res['tag']}{created}{suffix}"
         )
-    elif args.cmd == "track7-artifacts":
+    elif args.cmd == "decision_models-artifacts":
         from pathlib import Path
 
-        from .track7_artifacts import publish_track7_artifacts
+        from .decision_models_artifacts import publish_decision_models_artifacts
 
-        res = publish_track7_artifacts(
+        res = publish_decision_models_artifacts(
             Path(args.out_dir),
             args.repo,
             train=args.train,
@@ -380,7 +380,7 @@ def main(argv=None) -> int:
             else ""
         )
         print(
-            f"publish: track7 uploads={len(res['uploads'])} (uploaded={n_up}) "
+            f"publish: decision_models uploads={len(res['uploads'])} (uploaded={n_up}) "
             f"bundle={len(res['bundle'])} missing={len(res['missing'])} "
             f"-> {args.repo}{created}{suffix}"
         )

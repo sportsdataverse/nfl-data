@@ -10,7 +10,7 @@ Gate criteria (from HANDOFF.md):
 
 Usage::
 
-    uv run python -m model_training.track6_nfl_ep_wp.validate \\
+    uv run python -m model_training.play_level.validate \\
         --ep-model models/ep_model.ubj \\
         --wp-model models/wp_spread.ubj \\
         --sample-seasons 2022 2023
@@ -239,7 +239,7 @@ def run_parity_gate(
         Run the gate after training::
 
             from pathlib import Path
-            from model_training.track6_nfl_ep_wp.validate import run_parity_gate
+            from model_training.play_level.validate import run_parity_gate
 
             result = run_parity_gate(
                 ep_model_path=Path("models/ep_model.ubj"),

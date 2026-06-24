@@ -5,14 +5,14 @@ All tests use deterministic synthetic plays — no real PBP required.
 import polars as pl
 import pytest
 
-from model_training.track6_nfl_ep_wp.label import (
+from model_training.play_level.label import (
     compute_next_score_half,
     compute_winner,
     build_ep_training_set,
     build_wp_training_set,
     SCORE_LABEL_TO_CLASS,
 )
-from model_training.track6_nfl_ep_wp.constants import EP_CLASS_ORDER
+from model_training.play_level.constants import EP_CLASS_ORDER
 
 
 # ---------------------------------------------------------------------------
@@ -237,7 +237,7 @@ class TestComputeWinner:
 
 class TestBuildEpTrainingSet:
     def test_contains_ep_features_and_label(self):
-        from model_training.track6_nfl_ep_wp.constants import EP_FEATURES
+        from model_training.play_level.constants import EP_FEATURES
 
         plays = [
             _play(game_id="T1", play_id=1, sp=0, posteam="KC"),
@@ -250,7 +250,7 @@ class TestBuildEpTrainingSet:
         assert "next_score_class" in result.columns
 
     def test_no_nulls_in_features_for_complete_plays(self):
-        from model_training.track6_nfl_ep_wp.constants import EP_FEATURES
+        from model_training.play_level.constants import EP_FEATURES
 
         plays = [_play(game_id="T2", play_id=i, sp=0, down=1.0) for i in range(5)]
         df = pl.DataFrame(plays)
@@ -266,7 +266,7 @@ class TestBuildEpTrainingSet:
 
 class TestBuildWpTrainingSet:
     def test_contains_wp_features_and_label(self):
-        from model_training.track6_nfl_ep_wp.constants import WP_SPREAD_FEATURES
+        from model_training.play_level.constants import WP_SPREAD_FEATURES
 
         plays = [_play(game_id="V1", play_id=i, qtr=min(i + 1, 4)) for i in range(4)]
         df = pl.DataFrame(plays)

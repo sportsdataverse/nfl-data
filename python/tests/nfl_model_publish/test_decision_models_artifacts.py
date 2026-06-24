@@ -1,4 +1,4 @@
-"""Hermetic tests for nfl_model_publish.track7_artifacts.
+"""Hermetic tests for nfl_model_publish.decision_models_artifacts.
 
 Network-free: every test injects runner/exists_check stubs (no gh calls) and
 seeds fake artifact files (no training). Verifies the release routing
@@ -11,17 +11,17 @@ from pathlib import Path
 
 import pytest
 
-from nfl_model_publish.track7_artifacts import (
+from nfl_model_publish.decision_models_artifacts import (
     TRACK7_BUNDLE_ARTIFACTS,
     TRACK7_RELEASE_MAP,
     artifact_digest,
-    plan_track7_artifacts,
-    publish_track7_artifacts,
+    plan_decision_models_artifacts,
+    publish_decision_models_artifacts,
 )
 
 
 def _seed(tmp_path: Path) -> Path:
-    """Seed all six track7 artifacts with distinct fake bytes."""
+    """Seed all six decision_models artifacts with distinct fake bytes."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "xpass_model.ubj").write_bytes(b"xpass-bytes")
     (tmp_path / "fd_model.ubj").write_bytes(b"fd-bytes")
@@ -50,7 +50,7 @@ def test_artifact_digest(tmp_path: Path):
 
 
 def test_plan_routes_uploads_and_bundle(tmp_path: Path):
-    plan = plan_track7_artifacts(_seed(tmp_path))
+    plan = plan_decision_models_artifacts(_seed(tmp_path))
     up = {u["name"]: u["tag"] for u in plan["uploads"]}
     assert up == {
         "xpass_model.ubj": "nfl_model_artifacts",
@@ -64,7 +64,7 @@ def test_plan_routes_uploads_and_bundle(tmp_path: Path):
 
 def test_plan_reports_missing(tmp_path: Path):
     (tmp_path / "xpass_model.ubj").write_bytes(b"x")
-    plan = plan_track7_artifacts(tmp_path)
+    plan = plan_decision_models_artifacts(tmp_path)
     assert {u["name"] for u in plan["uploads"]} == {"xpass_model.ubj"}
     # everything else is missing
     expected_missing = set(TRACK7_RELEASE_MAP) | set(TRACK7_BUNDLE_ARTIFACTS)
@@ -79,7 +79,7 @@ def test_dry_run_uploads_nothing_and_no_copy(tmp_path: Path):
     out = _seed(tmp_path / "out")
     bundle = tmp_path / "bundle"
     calls = []
-    res = publish_track7_artifacts(
+    res = publish_decision_models_artifacts(
         out,
         "owner/repo",
         train=False,
@@ -101,7 +101,7 @@ def test_dry_run_uploads_nothing_and_no_copy(tmp_path: Path):
 def test_uploads_route_to_correct_releases(tmp_path: Path):
     out = _seed(tmp_path / "out")
     calls = []
-    res = publish_track7_artifacts(
+    res = publish_decision_models_artifacts(
         out,
         "owner/repo",
         train=False,
@@ -128,7 +128,7 @@ def test_uploads_route_to_correct_releases(tmp_path: Path):
 def test_skips_create_when_release_present(tmp_path: Path):
     out = _seed(tmp_path / "out")
     calls = []
-    res = publish_track7_artifacts(
+    res = publish_decision_models_artifacts(
         out,
         "owner/repo",
         train=False,
@@ -145,7 +145,7 @@ def test_skips_create_when_release_present(tmp_path: Path):
 def test_bundle_copied_out(tmp_path: Path):
     out = _seed(tmp_path / "out")
     bundle = tmp_path / "bundle"
-    res = publish_track7_artifacts(
+    res = publish_decision_models_artifacts(
         out,
         "owner/repo",
         train=False,
@@ -166,7 +166,7 @@ def test_bundle_copied_out(tmp_path: Path):
 def test_missing_without_train_raises(tmp_path: Path):
     (tmp_path / "xpass_model.ubj").write_bytes(b"x")  # only one present
     with pytest.raises(FileNotFoundError):
-        publish_track7_artifacts(
+        publish_decision_models_artifacts(
             tmp_path,
             "owner/repo",
             train=False,

@@ -1,4 +1,4 @@
-"""Fast offline smoke tests for track7 trainers + feature builders.
+"""Fast offline smoke tests for decision_models trainers + feature builders.
 
 Tiny synthetic frames only (no real PBP / network). Verify each trainer emits a
 valid .ubj with the contracted feature names, the feature builders apply the
@@ -11,7 +11,7 @@ import polars as pl
 import pytest
 from xgboost import Booster
 
-from model_training.track7_nfl_models.constants import (
+from model_training.decision_models.constants import (
     XPASS_FEATURES,
     FD_FEATURES,
     FD_NUM_CLASSES,
@@ -20,7 +20,7 @@ from model_training.track7_nfl_models.constants import (
     WP_FEATURES,
     PUNT_OUTPUT_COLUMNS,
 )
-from model_training.track7_nfl_models.trainer import (
+from model_training.decision_models.trainer import (
     train_xpass,
     train_fd,
     train_two_pt,
@@ -28,7 +28,7 @@ from model_training.track7_nfl_models.trainer import (
     train_wp,
     build_punt_data,
 )
-from model_training.track7_nfl_models.features import (
+from model_training.decision_models.features import (
     make_model_mutations,
     prepare_xpass_data,
     prepare_fd_data,

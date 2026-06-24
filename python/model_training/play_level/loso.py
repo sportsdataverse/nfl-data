@@ -8,6 +8,7 @@ the cfbfastR suite uses (cpoe/rb_eval), now matched for NFL.
 LOSO trains one model per season, so pass a reduced ``nrounds`` for a quick
 calibration pass; ``None`` uses the canonical (production) round counts.
 """
+
 from __future__ import annotations
 
 from typing import List, Optional
@@ -26,8 +27,7 @@ def _seasons(pbp: pl.DataFrame, seasons: Optional[List[int]]) -> List[int]:
     return [s for s in (seasons or present) if s in present]
 
 
-def loso_ep(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
-            nrounds: Optional[int] = None) -> pl.DataFrame:
+def loso_ep(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: Optional[int] = None) -> pl.DataFrame:
     """LOSO for EP — returns (season, pred_ep, actual_points) per play.
 
     ``actual_points`` is the realized next-score value (the class's point value),
@@ -38,10 +38,21 @@ def loso_ep(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
     from .label import build_ep_training_set
     from .trainer import train_ep
 
-    pts = np.array([ {  # class index -> point value
-        "Touchdown": 7, "Opp_Touchdown": -7, "Field_Goal": 3, "Opp_Field_Goal": -3,
-        "Safety": 2, "Opp_Safety": -2, "No_Score": 0,
-    }[c] for c in EP_CLASS_ORDER], dtype=np.float64)
+    pts = np.array(
+        [
+            {  # class index -> point value
+                "Touchdown": 7,
+                "Opp_Touchdown": -7,
+                "Field_Goal": 3,
+                "Opp_Field_Goal": -3,
+                "Safety": 2,
+                "Opp_Safety": -2,
+                "No_Score": 0,
+            }[c]
+            for c in EP_CLASS_ORDER
+        ],
+        dtype=np.float64,
+    )
 
     folds = []
     for held in _seasons(pbp, seasons):
@@ -52,18 +63,25 @@ def loso_ep(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
         ep_te = build_ep_training_set(te)
         probs = model.predict(DMatrix(ep_te.select(EP_FEATURES).to_numpy(), feature_names=EP_FEATURES))
         # Reconstruct down from the one-hot features for the EP-by-yardline curve.
-        down = (ep_te["down1"] * 1 + ep_te["down2"] * 2 + ep_te["down3"] * 3 + ep_te["down4"] * 4)
-        folds.append(pl.DataFrame({
+        down = ep_te["down1"] * 1 + ep_te["down2"] * 2 + ep_te["down3"] * 3 + ep_te["down4"] * 4
+        actual_class = ep_te["next_score_class"].to_numpy()
+        fold = {
             "pred_ep": ep_expected_points(probs).tolist(),
-            "actual_points": pts[ep_te["next_score_class"].to_numpy()].tolist(),
+            "actual_points": pts[actual_class].tolist(),
             "yardline_100": ep_te["yardline_100"].to_list(),
             "down": down.cast(pl.Int64).to_list(),
-        }).with_columns(season=pl.lit(held)))
+            # Per-class softprob + the realized class, so a calibration table can be
+            # built for EACH next-score class (the nflfastR/cfbscrapR 7-facet EP plot)
+            # — a probability-scale reliability check, unlike the points-scale scalar.
+            "actual_class": actual_class.tolist(),
+        }
+        for k, cls in enumerate(EP_CLASS_ORDER):
+            fold[f"p_{cls}"] = probs[:, k].tolist()
+        folds.append(pl.DataFrame(fold).with_columns(season=pl.lit(held)))
     return pl.concat(folds, how="diagonal_relaxed") if folds else pl.DataFrame()
 
 
-def loso_wp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
-            nrounds: Optional[int] = None) -> pl.DataFrame:
+def loso_wp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: Optional[int] = None) -> pl.DataFrame:
     """LOSO for WP-naive — returns (season, pred_wp, wp_label) per play."""
     from xgboost import DMatrix
 
@@ -78,15 +96,18 @@ def loso_wp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
         model = train_wp_naive(build_wp_training_set(tr, variant="naive"), nrounds=nrounds)
         wp_te = build_wp_training_set(te, variant="naive")
         preds = model.predict(DMatrix(wp_te.select(WP_NAIVE_FEATURES).to_numpy(), feature_names=WP_NAIVE_FEATURES))
-        folds.append(pl.DataFrame({
-            "pred_wp": preds.tolist(),
-            "wp_label": wp_te["label"].to_numpy().tolist(),
-        }).with_columns(season=pl.lit(held)))
+        folds.append(
+            pl.DataFrame(
+                {
+                    "pred_wp": preds.tolist(),
+                    "wp_label": wp_te["label"].to_numpy().tolist(),
+                }
+            ).with_columns(season=pl.lit(held))
+        )
     return pl.concat(folds, how="diagonal_relaxed") if folds else pl.DataFrame()
 
 
-def loso_cp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
-            nrounds: Optional[int] = None) -> pl.DataFrame:
+def loso_cp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: Optional[int] = None) -> pl.DataFrame:
     """LOSO for CP — returns (season, pred_cp, complete_pass, air_yards_bucket) per play."""
     from xgboost import DMatrix
 
@@ -101,13 +122,19 @@ def loso_cp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None,
         model = train_cp(build_cp_training_set(tr), nrounds=nrounds)
         cp_te = build_cp_training_set(te)
         preds = model.predict(DMatrix(cp_te.select(CP_FEATURES).to_numpy(), feature_names=CP_FEATURES))
-        fold = cp_te.with_columns(
-            pred_cp=pl.Series(preds.tolist(), dtype=pl.Float64),
-        ).with_columns(
-            air_yards_bucket=pl.when(pl.col("air_yards") <= 5).then(pl.lit("Short"))
-            .when(pl.col("air_yards") <= 15).then(pl.lit("Intermediate"))
-            .otherwise(pl.lit("Deep")),
-            season=pl.lit(held),
-        ).select(["season", "pred_cp", "complete_pass", "air_yards", "pass_middle", "air_yards_bucket"])
+        fold = (
+            cp_te.with_columns(
+                pred_cp=pl.Series(preds.tolist(), dtype=pl.Float64),
+            )
+            .with_columns(
+                air_yards_bucket=pl.when(pl.col("air_yards") <= 5)
+                .then(pl.lit("Short"))
+                .when(pl.col("air_yards") <= 15)
+                .then(pl.lit("Intermediate"))
+                .otherwise(pl.lit("Deep")),
+                season=pl.lit(held),
+            )
+            .select(["season", "pred_cp", "complete_pass", "air_yards", "pass_middle", "air_yards_bucket"])
+        )
         folds.append(fold)
     return pl.concat(folds, how="diagonal_relaxed") if folds else pl.DataFrame()

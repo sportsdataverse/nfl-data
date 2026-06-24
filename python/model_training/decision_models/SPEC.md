@@ -1,12 +1,12 @@
-# track7 — Python training port for the NFL model suite (xpass + nfl4th 4th-down)
+# decision_models — Python training port for the NFL model suite (xpass + nfl4th 4th-down)
 
 Faithful Python retrains of the NFL models that sdv-py currently uses as
 R-converted artifacts. Each trainer is validated against the converted R
 artifact (the **parity oracle**). Mirror the structure of
-`model_training/track6_nfl_ep_wp/` (constants / features / ingest / trainer /
+`model_training/play_level/` (constants / features / ingest / trainer /
 validate / pipeline). Era cuts: era0 ≤2001, era1 2002-2005, era2 2006-2013,
 era3 2014-2017, era4 >2017. Roof → retractable/dome/outdoors via
-`make_model_mutations` (already in track6 `features.py` — reuse it).
+`make_model_mutations` (already in play_level `features.py` — reuse it).
 `posteam_spread = home? spread_line : -spread_line`; `home_total=(spread+total)/2`,
 `away_total=(total-spread)/2`, `posteam_total` per posteam.
 
@@ -45,7 +45,7 @@ All XGBoost hyperparameters below are verbatim from the R training scripts —
 - Oracle: `fg_model_grid.parquet` (the GAM grid). Validate by predicting over the yardline×roof×era grid and comparing FG% to the grid; **expect ~0.99 corr, NOT exact** (XGB step-approximates the spline) — report max abs FG% diff. Gate ≥0.98 corr.
 
 ## 5. wp_model — nfl4th home-WP (binary:logistic) — ATTEMPT, else document
-- This is nfl4th's home-WP model (11 features: home_receive_2h_ko, spread_time, home_posteam, half_seconds_remaining, game_seconds_remaining, Diff_Time_Ratio, home_score_differential, home_ep, ydstogo, home_yardline_100, home_timeouts_remaining). Its exact training (cal_data + label = posteam/home won) is in `nflfastR/data-raw/MODELS.R`/`_tune_spread_wp.R` / guga31bb fourth_calculator. Dig the recipe; if cleanly reproducible, train + validate vs `wp_model.ubj`. If the recipe/cal_data is not obtainable, **skip + document** (keep the converted artifact) — do NOT block track7 on it.
+- This is nfl4th's home-WP model (11 features: home_receive_2h_ko, spread_time, home_posteam, half_seconds_remaining, game_seconds_remaining, Diff_Time_Ratio, home_score_differential, home_ep, ydstogo, home_yardline_100, home_timeouts_remaining). Its exact training (cal_data + label = posteam/home won) is in `nflfastR/data-raw/MODELS.R`/`_tune_spread_wp.R` / guga31bb fourth_calculator. Dig the recipe; if cleanly reproducible, train + validate vs `wp_model.ubj`. If the recipe/cal_data is not obtainable, **skip + document** (keep the converted artifact) — do NOT block decision_models on it.
 
 ## 6. punt_data — empirical distribution (NOT a model) → Python builder
 - Build the punt landing distribution from pbp punts: per punt `yardline_after = yardline_100 - kick_distance + return_yards` (end-zone NA→20; BLOCKED NA→yardline_100; cap 100; 0→1); flags blocked / return_td(=yardline_after==100) / muff(fumble_lost, 0 if blocked). Group by yardline_100: coarse-bin muffed/blocked/td pct; KDE (scipy.stats.gaussian_kde 2D, or a binned histogram — document the choice) over (yardline_100, yardline_after) excluding blocked+td; per yardline normalize pct; add block(yardline_after=999→yardline_100)+td(=100) outlier rows rescaled by 1-(block+td); duplicate rows for muff∈{0,1} weighted by bin_muffed_pct; renormalize per yardline; `filter(yardline_100>30)`. Output cols: yardline_100, yardline_after, pct, muff.

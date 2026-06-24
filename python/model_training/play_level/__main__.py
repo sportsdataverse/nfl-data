@@ -9,21 +9,21 @@ Supports three subcommands:
 Usage examples::
 
     # Train all models on 2012-2024 seasons, downloading PBP first:
-    uv run python -m model_training.track6_nfl_ep_wp train \\
+    uv run python -m model_training.play_level train \\
         --seasons 2012 2024 --download
 
     # Train without downloading (PBP already on disk):
-    uv run python -m model_training.track6_nfl_ep_wp train \\
+    uv run python -m model_training.play_level train \\
         --seasons 2020 2021 2022 2023 2024
 
     # Validate saved models against 2022-2023 reference seasons:
-    uv run python -m model_training.track6_nfl_ep_wp validate \\
+    uv run python -m model_training.play_level validate \\
         --ep-model models/ep_model.ubj \\
         --wp-model models/wp_spread.ubj \\
         --sample-seasons 2022 2023
 
     # Fetch raw weekly JSON from NFL API for 2023-2024:
-    uv run python -m model_training.track6_nfl_ep_wp fetch \\
+    uv run python -m model_training.play_level fetch \\
         --seasons 2023 2024 --season-types REG POST
 """
 from __future__ import annotations
@@ -177,7 +177,7 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
-        prog="python -m model_training.track6_nfl_ep_wp",
+        prog="python -m model_training.play_level",
         description="NFL EP/WP/CP model training pipeline",
     )
     sub = root.add_subparsers(dest="command", required=True)

@@ -24,7 +24,7 @@ sdv-py's placeholder CFB-shape `nfl/models/*.ubj`.
 | `python/scrape_nfl_json.py`, `python/extract_nfl_games.py` | scrape Shield API → per-game JSON | **stays in nfl-raw** |
 | `nfl/raw/{season}/{game_id}.json` (3.1 GB) | committed raw JSON | **stays in nfl-raw** |
 | `python/native_pbp/` (`build/features/labels/parity/parse/description/stat_ids`) | compiled-PBP builder w/ nflfastR parity | **moves → nfl-data** |
-| `python/model_training/track6_nfl_ep_wp/` | EP/WP/CP trainer + reporting suite + model cards + validate/CLI | **moves → nfl-data** |
+| `python/model_training/play_level/` | EP/WP/CP trainer + reporting suite + model cards + validate/CLI | **moves → nfl-data** |
 | `models/*.ubj` | trained models | **published from nfl-data** |
 | `pyproject.toml` deps `xgboost`, `numpy`, `figures` group (`plotnine`, `scikit-misc`) | modeling deps | **dropped from nfl-raw in SP3** |
 
@@ -50,7 +50,7 @@ nfl-raw  (sportsdataverse/nfl-raw)                 nfl-data (sportsdataverse/nfl
         ▼ read by raw.githubusercontent URL (RAW_BASE)
                                        nfl_data_ingest/  → cached raw JSON
                                        native_pbp/       → compiled PBP parquet (nflfastR parity)
-                                       track6_nfl_ep_wp/ → EP/WP/CP .ubj + cards + reports
+                                       play_level/ → EP/WP/CP .ubj + cards + reports
                                                 │
                             ┌───────────────────┴───────────────────┐
                 Python publisher (gh)                   R publisher (piggyback)
@@ -83,7 +83,7 @@ Each sub-project is its own plan + subagent-driven execution with review gates, 
 - **Deliverable:** both repos exist on GitHub; nfl-data has a green empty-skeleton test run.
 
 ### SP1 — lift-and-shift + ingest seam
-- `git mv` `native_pbp/` and `model_training/track6_nfl_ep_wp/` (+ their tests/fixtures) from nfl-raw
+- `git mv` `native_pbp/` and `model_training/play_level/` (+ their tests/fixtures) from nfl-raw
   into nfl-data `python/`.
 - New `nfl_data_ingest/` — reads `nfl-raw/nfl/raw/{season}/{game_id}.json` by `RAW_BASE` URL (keyed
   off the schedule master), with a local cache (mirror `cfb_data_ingest`).
@@ -105,7 +105,7 @@ Each sub-project is its own plan + subagent-driven execution with review gates, 
   committed.
 
 ### SP3 — decommission modeling from nfl-raw
-- `git rm` `native_pbp/` + `track6_nfl_ep_wp/` (+ tests/fixtures) from nfl-raw.
+- `git rm` `native_pbp/` + `play_level/` (+ tests/fixtures) from nfl-raw.
 - Drop modeling-only deps from nfl-raw `pyproject.toml`: `xgboost`, `numpy` (if only modeling used it —
   verify), the `figures` group. Keep `sportsdataverse`, `polars`. Re-lock.
 - Boundary gate: `git grep` proves no surviving scraper/test imports a removed package; the scraping

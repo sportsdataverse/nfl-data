@@ -1,4 +1,4 @@
-﻿"""Core play parser: Shield ``driveChart`` -> base nflverse-shape play frame.
+"""Core play parser: Shield ``driveChart`` -> base nflverse-shape play frame.
 
 Builds the play-level spine — one row per play with identifiers, possession,
 down/distance/field-position, clock, play_type and per-play stat outcomes
@@ -11,6 +11,7 @@ Possession is resolved by assigning each play to the drive whose
 play's ``playSequenceNumber`` (the feed's ``driveSequence`` is unreliable).
 Plays falling between drives (kickoffs / PATs / timeouts) get a null posteam.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -41,7 +42,7 @@ def _clock_to_seconds(clock: Optional[str]) -> Optional[int]:
 #   JAC -> JAX (Jaguars, 1999-2019), LAR -> LA (Rams, 2016+),
 #   BLT -> BAL / CLV -> CLE (2006). Each maps to exactly one nflverse abbr in
 #   every era it appears, so the rename is season-independent.
-_GAMEBOOK_TO_NFLVERSE = {"JAC": "JAX", "LAR": "LA", "BLT": "BAL", "CLV": "CLE"}
+_GAMEBOOK_TO_NFLVERSE: Dict[str, str] = {"JAC": "JAX", "LAR": "LA", "BLT": "BAL", "CLV": "CLE"}
 
 
 def _yardline_100(yard_line: Optional[str], posteam: Optional[str]) -> Optional[int]:
@@ -152,31 +153,78 @@ def _posteam_for(seq: Optional[float], ranges: List[tuple[float, float, Optional
 # A handful of stat columns are integer-ish indicators we want present (as 0) on
 # every row so the frame schema is stable for downstream joins.
 _BASE_INDICATORS = [
-    "pass_attempt", "complete_pass", "incomplete_pass", "interception", "rush_attempt",
-    "sack", "touchdown", "pass_touchdown", "rush_touchdown", "return_touchdown",
-    "field_goal_attempt", "field_goal_made", "field_goal_missed", "field_goal_blocked",
-    "extra_point_attempt", "two_point_attempt", "punt_attempt",
-    "kickoff_attempt", "penalty", "fumble", "fumble_lost", "qb_hit", "safety", "timeout",
-    "first_down_rush", "first_down_pass", "first_down_penalty",
+    "pass_attempt",
+    "complete_pass",
+    "incomplete_pass",
+    "interception",
+    "rush_attempt",
+    "sack",
+    "touchdown",
+    "pass_touchdown",
+    "rush_touchdown",
+    "return_touchdown",
+    "field_goal_attempt",
+    "field_goal_made",
+    "field_goal_missed",
+    "field_goal_blocked",
+    "extra_point_attempt",
+    "two_point_attempt",
+    "punt_attempt",
+    "kickoff_attempt",
+    "penalty",
+    "fumble",
+    "fumble_lost",
+    "qb_hit",
+    "safety",
+    "timeout",
+    "first_down_rush",
+    "first_down_pass",
+    "first_down_penalty",
     # --- defensive / tackling indicators (team_stats enablement) ---
-    "solo_tackle", "assist_tackle", "tackle_with_assist", "tackled_for_loss",
-    "fumble_forced", "fumble_not_forced", "fumble_out_of_bounds",
+    "solo_tackle",
+    "assist_tackle",
+    "tackle_with_assist",
+    "tackled_for_loss",
+    "fumble_forced",
+    "fumble_not_forced",
+    "fumble_out_of_bounds",
     # --- special-teams return flags (exact punt_returns / kickoff_returns inputs;
     #     calculate_stats.R assigns statIds 37/38/39 + 49/50 to the receiving team) ---
-    "punt_fair_catch", "punt_downed", "punt_out_of_bounds",
-    "kickoff_fair_catch", "kickoff_out_of_bounds",
+    "punt_fair_catch",
+    "punt_downed",
+    "punt_out_of_bounds",
+    "kickoff_fair_catch",
+    "kickoff_out_of_bounds",
     # --- extra-point sub-results (drive extra_point_result) ---
-    "extra_point_good", "extra_point_failed", "extra_point_blocked",
-    "extra_point_safety", "extra_point_aborted",
+    "extra_point_good",
+    "extra_point_failed",
+    "extra_point_blocked",
+    "extra_point_safety",
+    "extra_point_aborted",
     # --- two-point sub-results (drive two_point_conv_result) ---
-    "two_point_rush_good", "two_point_rush_failed", "two_point_rush_safety",
-    "two_point_pass_good", "two_point_pass_failed", "two_point_pass_safety",
-    "two_point_pass_reception_good", "two_point_pass_reception_failed",
+    "two_point_rush_good",
+    "two_point_rush_failed",
+    "two_point_rush_safety",
+    "two_point_pass_good",
+    "two_point_pass_failed",
+    "two_point_pass_safety",
+    "two_point_pass_reception_good",
+    "two_point_pass_reception_failed",
     "two_point_return",
 ]
-_BASE_NUMERICS = ["yards_gained", "air_yards", "yards_after_catch", "passing_yards",
-                  "rushing_yards", "receiving_yards", "penalty_yards", "kick_distance",
-                  "return_yards", "lateral_rushing_yards", "lateral_receiving_yards"]
+_BASE_NUMERICS = [
+    "yards_gained",
+    "air_yards",
+    "yards_after_catch",
+    "passing_yards",
+    "rushing_yards",
+    "receiving_yards",
+    "penalty_yards",
+    "kick_distance",
+    "return_yards",
+    "lateral_rushing_yards",
+    "lateral_receiving_yards",
+]
 # Exact per-play stat-id count / yards-sum accumulators (int, default 0) that close
 # the team_stats parity gaps. Each maps 1:1 onto a nflfastR calculate_stats.R term:
 #   def_tackles_for_loss        = sum(stat_id == 402)            (count of 402 credits)
@@ -186,47 +234,108 @@ _BASE_NUMERICS = ["yards_gained", "air_yards", "yards_after_catch", "passing_yar
 #   fumble_recovery_own_lateral_yards = sum((stat_id %in% 57:58) * yards)
 #   fumble_recovery_opp_lateral_yards = sum((stat_id %in% 61:62) * yards)
 _BASE_COUNTS = [
-    "def_tackles_for_loss", "def_tackles_for_loss_yards", "td_ids_touchdown",
-    "misc_yards", "fumble_recovery_own_lateral_yards", "fumble_recovery_opp_lateral_yards",
+    "def_tackles_for_loss",
+    "def_tackles_for_loss_yards",
+    "td_ids_touchdown",
+    "misc_yards",
+    "fumble_recovery_own_lateral_yards",
+    "fumble_recovery_opp_lateral_yards",
 ]
-_BASE_PLAYERS = ["passer_player_id", "passer_player_name", "rusher_player_id",
-                 "rusher_player_name", "receiver_player_id", "receiver_player_name",
-                 "td_player_id", "td_player_name", "td_team", "penalty_team", "timeout_team",
-                 # --- kicking / punting / returns ---
-                 "kicker_player_id", "kicker_player_name",
-                 "punter_player_id", "punter_player_name",
-                 "punt_returner_player_id", "punt_returner_player_name",
-                 "kickoff_returner_player_id", "kickoff_returner_player_name",
-                 "return_team",
-                 # --- defensive single-writer slots ---
-                 "interception_player_id", "interception_player_name",
-                 "sack_player_id", "sack_player_name",
-                 "safety_player_id", "safety_player_name",
-                 "blocked_player_id", "blocked_player_name",
-                 "penalty_player_id", "penalty_player_name",
-                 # --- defensive FILL-group slots (de-duped multi-participant) ---
-                 "solo_tackle_1_player_id", "solo_tackle_1_player_name", "solo_tackle_1_team",
-                 "solo_tackle_2_player_id", "solo_tackle_2_player_name", "solo_tackle_2_team",
-                 "assist_tackle_1_player_id", "assist_tackle_1_player_name", "assist_tackle_1_team",
-                 "assist_tackle_2_player_id", "assist_tackle_2_player_name", "assist_tackle_2_team",
-                 "assist_tackle_3_player_id", "assist_tackle_3_player_name", "assist_tackle_3_team",
-                 "assist_tackle_4_player_id", "assist_tackle_4_player_name", "assist_tackle_4_team",
-                 "tackle_with_assist_1_player_id", "tackle_with_assist_1_player_name", "tackle_with_assist_1_team",
-                 "tackle_with_assist_2_player_id", "tackle_with_assist_2_player_name", "tackle_with_assist_2_team",
-                 "tackle_for_loss_1_player_id", "tackle_for_loss_1_player_name",
-                 "tackle_for_loss_2_player_id", "tackle_for_loss_2_player_name",
-                 "half_sack_1_player_id", "half_sack_1_player_name",
-                 "half_sack_2_player_id", "half_sack_2_player_name",
-                 "qb_hit_1_player_id", "qb_hit_1_player_name",
-                 "qb_hit_2_player_id", "qb_hit_2_player_name",
-                 "pass_defense_1_player_id", "pass_defense_1_player_name",
-                 "pass_defense_2_player_id", "pass_defense_2_player_name",
-                 "forced_fumble_player_1_player_id", "forced_fumble_player_1_player_name", "forced_fumble_player_1_team",
-                 "forced_fumble_player_2_player_id", "forced_fumble_player_2_player_name", "forced_fumble_player_2_team",
-                 "fumbled_1_player_id", "fumbled_1_player_name", "fumbled_1_team",
-                 "fumbled_2_player_id", "fumbled_2_player_name", "fumbled_2_team",
-                 "fumble_recovery_1_player_id", "fumble_recovery_1_player_name", "fumble_recovery_1_team", "fumble_recovery_1_yards",
-                 "fumble_recovery_2_player_id", "fumble_recovery_2_player_name", "fumble_recovery_2_team", "fumble_recovery_2_yards"]
+_BASE_PLAYERS = [
+    "passer_player_id",
+    "passer_player_name",
+    "rusher_player_id",
+    "rusher_player_name",
+    "receiver_player_id",
+    "receiver_player_name",
+    "td_player_id",
+    "td_player_name",
+    "td_team",
+    "penalty_team",
+    "timeout_team",
+    # --- kicking / punting / returns ---
+    "kicker_player_id",
+    "kicker_player_name",
+    "punter_player_id",
+    "punter_player_name",
+    "punt_returner_player_id",
+    "punt_returner_player_name",
+    "kickoff_returner_player_id",
+    "kickoff_returner_player_name",
+    "return_team",
+    # --- defensive single-writer slots ---
+    "interception_player_id",
+    "interception_player_name",
+    "sack_player_id",
+    "sack_player_name",
+    "safety_player_id",
+    "safety_player_name",
+    "blocked_player_id",
+    "blocked_player_name",
+    "penalty_player_id",
+    "penalty_player_name",
+    # --- defensive FILL-group slots (de-duped multi-participant) ---
+    "solo_tackle_1_player_id",
+    "solo_tackle_1_player_name",
+    "solo_tackle_1_team",
+    "solo_tackle_2_player_id",
+    "solo_tackle_2_player_name",
+    "solo_tackle_2_team",
+    "assist_tackle_1_player_id",
+    "assist_tackle_1_player_name",
+    "assist_tackle_1_team",
+    "assist_tackle_2_player_id",
+    "assist_tackle_2_player_name",
+    "assist_tackle_2_team",
+    "assist_tackle_3_player_id",
+    "assist_tackle_3_player_name",
+    "assist_tackle_3_team",
+    "assist_tackle_4_player_id",
+    "assist_tackle_4_player_name",
+    "assist_tackle_4_team",
+    "tackle_with_assist_1_player_id",
+    "tackle_with_assist_1_player_name",
+    "tackle_with_assist_1_team",
+    "tackle_with_assist_2_player_id",
+    "tackle_with_assist_2_player_name",
+    "tackle_with_assist_2_team",
+    "tackle_for_loss_1_player_id",
+    "tackle_for_loss_1_player_name",
+    "tackle_for_loss_2_player_id",
+    "tackle_for_loss_2_player_name",
+    "half_sack_1_player_id",
+    "half_sack_1_player_name",
+    "half_sack_2_player_id",
+    "half_sack_2_player_name",
+    "qb_hit_1_player_id",
+    "qb_hit_1_player_name",
+    "qb_hit_2_player_id",
+    "qb_hit_2_player_name",
+    "pass_defense_1_player_id",
+    "pass_defense_1_player_name",
+    "pass_defense_2_player_id",
+    "pass_defense_2_player_name",
+    "forced_fumble_player_1_player_id",
+    "forced_fumble_player_1_player_name",
+    "forced_fumble_player_1_team",
+    "forced_fumble_player_2_player_id",
+    "forced_fumble_player_2_player_name",
+    "forced_fumble_player_2_team",
+    "fumbled_1_player_id",
+    "fumbled_1_player_name",
+    "fumbled_1_team",
+    "fumbled_2_player_id",
+    "fumbled_2_player_name",
+    "fumbled_2_team",
+    "fumble_recovery_1_player_id",
+    "fumble_recovery_1_player_name",
+    "fumble_recovery_1_team",
+    "fumble_recovery_1_yards",
+    "fumble_recovery_2_player_id",
+    "fumble_recovery_2_player_name",
+    "fumble_recovery_2_team",
+    "fumble_recovery_2_yards",
+]
 
 # Points scored ON a play by its scoringPlayType (attributed to scoringTeamId).
 # Drives the per-play running score, which steps correctly at each scoring play
@@ -400,10 +509,7 @@ def _add_special_teams_derivations(df: pl.DataFrame) -> pl.DataFrame:
             )
         )
         .then(pl.lit("failure"))
-        .when(
-            two_pt
-            & ((pl.col("two_point_rush_safety") == 1) | (pl.col("two_point_pass_safety") == 1))
-        )
+        .when(two_pt & ((pl.col("two_point_rush_safety") == 1) | (pl.col("two_point_pass_safety") == 1)))
         .then(pl.lit("safety"))
         .when(two_pt & (pl.col("two_point_return") == 1))
         .then(pl.lit("return"))
@@ -464,11 +570,7 @@ def _add_fixed_drive(df: pl.DataFrame) -> pl.DataFrame:
     change = (
         (pos != pos.shift(1).over(g))
         | ((pos != pos.shift(2).over(g)) & pos.shift(1).over(g).is_null())
-        | (
-            (pos != pos.shift(3).over(g))
-            & pos.shift(1).over(g).is_null()
-            & pos.shift(2).over(g).is_null()
-        )
+        | ((pos != pos.shift(3).over(g)) & pos.shift(1).over(g).is_null() & pos.shift(2).over(g).is_null())
     )
     df = df.with_columns(_new_drive=change.cast(pl.Int64))
 
@@ -479,9 +581,7 @@ def _add_fixed_drive(df: pl.DataFrame) -> pl.DataFrame:
         & (pl.col("posteam").shift(1).over(g) != pl.col("td_team").shift(1).over(g))
         & pl.col("posteam").shift(1).over(g).is_not_null()
     )
-    df = df.with_columns(
-        _new_drive=pl.when(prev_def_td).then(pl.lit(0)).otherwise(pl.col("_new_drive"))
-    )
+    df = df.with_columns(_new_drive=pl.when(prev_def_td).then(pl.lit(0)).otherwise(pl.col("_new_drive")))
 
     # Same team retained the ball after its own lost fumble on a scrimmage/punt play
     # (and the play was not a TD) -> a new series/drive.
@@ -491,33 +591,25 @@ def _add_fixed_drive(df: pl.DataFrame) -> pl.DataFrame:
         & pl.col("play_type").shift(1).over(g).is_in(["punt", "pass", "run", "field_goal"])
         & (pl.col("touchdown").shift(1).over(g) == 0)
     )
-    df = df.with_columns(
-        _new_drive=pl.when(retained_after_fumble).then(pl.lit(1)).otherwise(pl.col("_new_drive"))
-    )
+    df = df.with_columns(_new_drive=pl.when(retained_after_fumble).then(pl.lit(1)).otherwise(pl.col("_new_drive")))
 
     # Recovered onside kick / muffed return -> new drive.
-    ko_recovery = (pl.col("play_type") == "kickoff") & (
-        (own_ko == 1) | (pl.col("fumble_lost") == 1)
-    )
+    ko_recovery = (pl.col("play_type") == "kickoff") & ((own_ko == 1) | (pl.col("fumble_lost") == 1))
     # Kickoff right after a safety -> new drive.
     ko_after_safety = (pl.col("kickoff_attempt") == 1) & (pl.col("safety").shift(1).over(g) == 1)
     df = df.with_columns(
-        _new_drive=pl.when(ko_recovery | ko_after_safety)
-        .then(pl.lit(1))
-        .otherwise(pl.col("_new_drive"))
+        _new_drive=pl.when(ko_recovery | ko_after_safety).then(pl.lit(1)).otherwise(pl.col("_new_drive"))
     )
 
     # First play of each half is always a new drive.
     df = df.with_columns(
         _row=pl.int_range(0, pl.len()).over(g),
-    ).with_columns(
-        _new_drive=pl.when(pl.col("_row") == 0).then(pl.lit(1)).otherwise(pl.col("_new_drive"))
-    )
+    ).with_columns(_new_drive=pl.when(pl.col("_row") == 0).then(pl.lit(1)).otherwise(pl.col("_new_drive")))
 
     # Nulls (from shifts at boundaries) are not new drives.
     df = df.with_columns(_new_drive=pl.col("_new_drive").fill_null(0))
     # fixed_drive = cumulative count of new drives within the game.
-    df = df.with_columns(
-        fixed_drive=pl.col("_new_drive").cum_sum().over("game_id").cast(pl.Int64)
-    ).drop("_new_drive", "_row")
+    df = df.with_columns(fixed_drive=pl.col("_new_drive").cum_sum().over("game_id").cast(pl.Int64)).drop(
+        "_new_drive", "_row"
+    )
     return df

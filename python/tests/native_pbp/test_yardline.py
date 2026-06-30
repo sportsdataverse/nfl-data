@@ -5,6 +5,7 @@ These are intentionally NOT in ``test_parse.py``: that module is marked
 these are pure-function tests that must run in the default suite to guard the
 field-position flip.
 """
+
 from __future__ import annotations
 
 from native_pbp.parse import _yardline_100
@@ -17,11 +18,11 @@ def test_yardline_100_gamebook_abbr_fixups():
     # flip (``100 - yd``) is skipped, mis-locating the club to the opponent's red
     # zone (corrupting yardline_100 -> ep/epa/wp). Affected: LAR->LA (Rams 2016+),
     # JAC->JAX (Jaguars 1999-2019), BLT->BAL / CLV->CLE (2006).
-    assert _yardline_100("LAR 1", "LA") == 99    # Rams own 1 -> 99 to score
-    assert _yardline_100("LAR 32", "LA") == 68   # Rams own 32 -> 68
+    assert _yardline_100("LAR 1", "LA") == 99  # Rams own 1 -> 99 to score
+    assert _yardline_100("LAR 32", "LA") == 68  # Rams own 32 -> 68
     assert _yardline_100("JAC 20", "JAX") == 80  # Jaguars own 20 -> 80
-    assert _yardline_100("BLT 5", "BAL") == 95   # Ravens own 5 -> 95
-    assert _yardline_100("CLV 5", "CLE") == 95   # Browns own 5 -> 95
+    assert _yardline_100("BLT 5", "BAL") == 95  # Ravens own 5 -> 95
+    assert _yardline_100("CLV 5", "CLE") == 95  # Browns own 5 -> 95
 
 
 def test_yardline_100_gamebook_abbr_opponent_side_unchanged():
@@ -29,6 +30,8 @@ def test_yardline_100_gamebook_abbr_opponent_side_unchanged():
     # score and must NOT be flipped — the fixup must not over-apply.
     assert _yardline_100("LAR 32", "SF") == 32
     assert _yardline_100("JAC 20", "HOU") == 20
+    assert _yardline_100("BLT 20", "TEN") == 20
+    assert _yardline_100("CLV 20", "PIT") == 20
 
 
 def test_yardline_100_unaffected_clubs_still_correct():

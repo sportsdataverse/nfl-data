@@ -79,19 +79,28 @@ jobs:
       # The xYAC surface (calculate_xyac / enrich_nfl_pbp with xYAC) landed
       # on sdv-py main after the 0.0.65 PyPI release that pyproject.toml pins.
       # Install from git until a new release carries it.
+      # --reinstall --refresh is REQUIRED: step 5's `uv sync --frozen` already
+      # installed the lockfile-pinned sportsdataverse (0.0.66, which predates
+      # enrich_nfl_pbp). A plain `uv pip install <git-url>` no-ops against the
+      # already-satisfied project env, so the build silently ran on 0.0.66 and
+      # ImportError'd on enrich_nfl_pbp. --reinstall forces replacing it and
+      # --refresh re-resolves the moving @main ref to current HEAD.
       # TODO: pin to a PyPI release once sdv-py >=0.0.68 (or whichever
       #       version first ships calculate_xyac) is published.
       - name: Install sportsdataverse from git (main; xYAC fix)
         working-directory: nfl-data/python
         run: |
-          uv pip install \
+          uv pip install --reinstall --refresh \
             "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
 
-      # ── 7. Verify xYAC is importable ─────────────────────────────────────
-      - name: Verify xYAC import
+      # ── 7. Verify the sportsdataverse surface the build needs is importable ──
+      # Assert BOTH symbols build_season imports — enrich_nfl_pbp is the one the
+      # stale-pin bug hid, so verifying it here fails fast (seconds) instead of
+      # after the multi-season build.
+      - name: Verify ep_wp surface import
         working-directory: nfl-data/python
         run: |
-          uv run python -c "from sportsdataverse.nfl.ep_wp import calculate_xyac; print('xYAC OK')"
+          uv run python -c "from sportsdataverse.nfl.ep_wp import calculate_xyac, enrich_nfl_pbp; print('ep_wp surface OK')"
 
       # ── 8. Cache the sportsdataverse model artifacts (~34 MB) ────────────
       # enrich_nfl_pbp downloads the EP/WP/CP/xYAC model files on first use

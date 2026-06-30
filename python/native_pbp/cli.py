@@ -10,6 +10,7 @@ Pass ``--enrich`` to run the EP/WP/CP/xYAC enrichment (the canonical
     python -m native_pbp build --seasons 2023:2024 --raw-dir nfl/raw \\
         --out out/model_pbp --enrich
 """
+
 from __future__ import annotations
 
 import argparse
@@ -41,6 +42,8 @@ def _build_schedule_lookup(season: int) -> dict[str, dict]:
         keep = [c for c in ("game_id", "roof", "spread_line", "total_line") if c in sched.columns]
         if "game_id" not in keep:
             return {}
+        # `keep` drops any column absent from the schedule, so row.get(...) below
+        # returns None for a missing field (the intended null-degrade).
         return {
             row["game_id"]: {
                 "roof": row.get("roof"),

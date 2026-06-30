@@ -32,10 +32,25 @@ def _clock_to_seconds(clock: Optional[str]) -> Optional[int]:
         return None
 
 
+# The feed's ``yardLine`` string uses NFL *gamebook* club abbreviations, which
+# differ from nflverse's club abbreviation (used for ``posteam``) for four clubs.
+# Without this normalization ``side == posteam`` is False for these clubs, the
+# own-side flip (``100 - yd``) is skipped, and the club is mis-located to the
+# opponent's red zone — corrupting ``yardline_100`` and every model that consumes
+# it (ep/epa/wp). Enumerated across the 1999-2025 raw corpus:
+#   JAC -> JAX (Jaguars, 1999-2019), LAR -> LA (Rams, 2016+),
+#   BLT -> BAL / CLV -> CLE (2006). Each maps to exactly one nflverse abbr in
+#   every era it appears, so the rename is season-independent.
+_GAMEBOOK_TO_NFLVERSE = {"JAC": "JAX", "LAR": "LA", "BLT": "BAL", "CLV": "CLE"}
+
+
 def _yardline_100(yard_line: Optional[str], posteam: Optional[str]) -> Optional[int]:
     """Distance (yards) from the possession team to the opponent's goal line.
 
-    ``"50"`` -> 50. ``"BAL 32"`` -> 68 if posteam is BAL (own 32), else 32.
+    ``"50"`` -> 50. ``"BAL 32"`` -> 68 if posteam is BAL (own 32), else 32. The
+    parsed side abbreviation is normalized from the feed's gamebook scheme to
+    nflverse (e.g. ``"LAR" -> "LA"``) before the own-side comparison, so the flip
+    fires for clubs whose gamebook abbr differs from ``posteam``.
     Returns None when the field position or possession is unknown.
     """
     if not yard_line or posteam is None:
@@ -47,6 +62,7 @@ def _yardline_100(yard_line: Optional[str], posteam: Optional[str]) -> Optional[
     if len(parts) != 2:
         return None
     side, num = parts
+    side = _GAMEBOOK_TO_NFLVERSE.get(side, side)
     try:
         yd = int(num)
     except ValueError:

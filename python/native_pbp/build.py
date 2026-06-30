@@ -2,8 +2,8 @@
 
 Chains the module pipeline (parse -> description -> features -> labels) into a
 single frame carrying the Track 6 ``REQUIRED_COLUMNS`` (and more), reconstructed
-entirely from the committed ``nfl/raw`` Shield feed (plus a game-level roof /
-spread_line that come from a schedules join).
+entirely from the committed ``nfl/raw`` Shield feed (plus game-level roof /
+spread_line / total_line that come from a schedules join).
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ def build_pbp(
     *,
     roof: Optional[str] = None,
     spread_line: Optional[float] = None,
+    total_line: Optional[float] = None,
     game_id: Optional[str] = None,
 ) -> pl.DataFrame:
     """Reconstruct one game's nflverse-shape play-by-play from a Shield payload.
@@ -32,6 +33,7 @@ def build_pbp(
         game: A single Shield game object.
         roof: Game roof from a schedules join (the Shield feed omits it).
         spread_line: Closing spread (home-relative) from a schedules join.
+        total_line: Game over/under from a schedules join (the Shield feed omits it).
         game_id: Override the nflverse game_id (computed from the payload if None).
 
     Returns:
@@ -42,7 +44,7 @@ def build_pbp(
     if df.height == 0:
         return df
     df = add_description_features(df)
-    df = add_game_state(df, roof=roof, spread_line=spread_line)
+    df = add_game_state(df, roof=roof, spread_line=spread_line, total_line=total_line)
     df = add_labels(df, game)
     # Drop TIMEOUT rows (timeouts + two-minute warnings) to match nflverse's row
     # set — done AFTER add_game_state so the timeout cumsum already counted them.
@@ -57,11 +59,14 @@ def build_pbp_from_file(
     *,
     roof: Optional[str] = None,
     spread_line: Optional[float] = None,
+    total_line: Optional[float] = None,
 ) -> pl.DataFrame:
     """Load a ``nfl/raw/{season}/{game_id}.json`` file and build its PBP frame."""
     path = Path(path)
     game = json.loads(path.read_text(encoding="utf-8"))
-    return build_pbp(game, roof=roof, spread_line=spread_line, game_id=path.stem)
+    return build_pbp(
+        game, roof=roof, spread_line=spread_line, total_line=total_line, game_id=path.stem
+    )
 
 
 def build_season(
@@ -76,9 +81,10 @@ def build_season(
     Args:
         season: NFL season year.
         raw_dir: Root of the committed per-game library.
-        schedule_lookup: Optional ``{game_id: {"roof": ..., "spread_line": ...}}``
-            map (from a schedules join) supplying the game-level fields the Shield
-            feed omits. Missing games fall back to ``roof=None``, ``spread_line=None``.
+        schedule_lookup: Optional ``{game_id: {"roof": ..., "spread_line": ...,
+            "total_line": ...}}`` map (from a schedules join) supplying the
+            game-level fields the Shield feed omits. Missing games fall back to
+            ``roof=None``, ``spread_line=None``, ``total_line=None``.
         game_ids: Optional subset of game_ids to build (default: all in the season).
 
     Returns:
@@ -91,7 +97,12 @@ def build_season(
         if wanted is not None and path.stem not in wanted:
             continue
         meta = (schedule_lookup or {}).get(path.stem, {})
-        df = build_pbp_from_file(path, roof=meta.get("roof"), spread_line=meta.get("spread_line"))
+        df = build_pbp_from_file(
+            path,
+            roof=meta.get("roof"),
+            spread_line=meta.get("spread_line"),
+            total_line=meta.get("total_line"),
+        )
         if df.height:
             frames.append(df)
     if not frames:

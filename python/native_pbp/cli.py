@@ -10,14 +10,56 @@ Pass ``--enrich`` to run the EP/WP/CP/xYAC enrichment (the canonical
     python -m native_pbp build --seasons 2023:2024 --raw-dir nfl/raw \\
         --out out/model_pbp --enrich
 """
+
 from __future__ import annotations
 
 import argparse
+import warnings
 from pathlib import Path
 
 import polars as pl
 
 from native_pbp.build import build_season as _build_season
+
+
+def _build_schedule_lookup(season: int) -> dict[str, dict]:
+    """Build a ``{game_id: {roof, spread_line, total_line}}`` map for *season*.
+
+    These game-level fields are absent from the Shield feed ``native_pbp`` parses;
+    nflverse sources them from the schedule (Lee Sharpe's games file). Without
+    them ``spread_line``/``total_line`` are null and ``vegas_wp`` falls back to a
+    default spread (the 4th-down decision step is also skipped). Degrades to an
+    empty map — leaving the fields null, the prior behavior — with a
+    ``RuntimeWarning`` if the schedule can't be loaded; a betting-line lookup must
+    never fail the build.
+    """
+    try:
+        from sportsdataverse.nfl import load_nfl_schedule
+
+        sched = load_nfl_schedule([season])
+        if not isinstance(sched, pl.DataFrame):
+            sched = pl.from_pandas(sched)
+        keep = [c for c in ("game_id", "roof", "spread_line", "total_line") if c in sched.columns]
+        if "game_id" not in keep:
+            return {}
+        # `keep` drops any column absent from the schedule, so row.get(...) below
+        # returns None for a missing field (the intended null-degrade).
+        return {
+            row["game_id"]: {
+                "roof": row.get("roof"),
+                "spread_line": row.get("spread_line"),
+                "total_line": row.get("total_line"),
+            }
+            for row in sched.select(keep).iter_rows(named=True)
+        }
+    except Exception as exc:  # network / schema / loader failure → degrade, never fail the build
+        warnings.warn(
+            f"native_pbp build: schedule lookup failed for {season} "
+            f"({type(exc).__name__}: {exc}); spread_line/total_line will be null",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return {}
 
 
 def build_season(
@@ -26,6 +68,7 @@ def build_season(
     out_dir: str | Path,
     *,
     enrich: bool = False,
+    schedule_lookup: dict | None = None,
 ) -> Path:
     """Build one season's model-PBP parquet and write it to *out_dir*.
 
@@ -41,6 +84,10 @@ def build_season(
             The build frame already satisfies enrich's
             ``NFLVERSE_FRAME_CONTRACT``.  When ``False`` (default), the raw
             build frame is written unchanged.
+        schedule_lookup: Optional ``{game_id: {roof, spread_line, total_line}}``
+            map supplying the game-level fields the Shield feed omits. ``None``
+            (default) leaves them null — kept null-by-default so unit tests stay
+            hermetic; ``main()`` builds it from the nflverse schedule.
 
     Returns:
         Path to the written parquet file.
@@ -49,7 +96,7 @@ def build_season(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    df = _build_season(season, raw_dir=raw_dir)
+    df = _build_season(season, raw_dir=raw_dir, schedule_lookup=schedule_lookup)
 
     if enrich and df.height:
         from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp
@@ -106,7 +153,11 @@ def main(argv=None) -> int:
         seasons = _parse_season_range(args.seasons)
         for season in seasons:
             out_path = build_season(
-                season, raw_dir=args.raw_dir, out_dir=args.out, enrich=args.enrich
+                season,
+                raw_dir=args.raw_dir,
+                out_dir=args.out,
+                enrich=args.enrich,
+                schedule_lookup=_build_schedule_lookup(season),
             )
             print(f"wrote {out_path}")
     return 0

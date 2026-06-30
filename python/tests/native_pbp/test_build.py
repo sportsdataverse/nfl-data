@@ -19,7 +19,7 @@ pytestmark = [
 
 def _df():
     game = json.loads(GAME.read_text(encoding="utf-8"))
-    return build_pbp(game, roof="outdoors", spread_line=-3.0)
+    return build_pbp(game, roof="outdoors", spread_line=-3.0, total_line=44.5)
 
 
 def test_required_columns_present():
@@ -58,6 +58,7 @@ def test_field_goal_result_and_roof_spread():
     assert "made" in fg
     assert df["roof"].unique().to_list() == ["outdoors"]
     assert df["spread_line"].unique().to_list() == [-3.0]
+    assert df["total_line"].unique().to_list() == [44.5]
 
 
 def test_pass_location_populated_on_completions():

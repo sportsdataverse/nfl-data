@@ -97,10 +97,15 @@ jobs:
       # Assert BOTH symbols build_season imports — enrich_nfl_pbp is the one the
       # stale-pin bug hid, so verifying it here fails fast (seconds) instead of
       # after the multi-season build.
+      # NOTE: every `uv run` below uses --no-sync. `uv run` otherwise re-syncs
+      # the venv to uv.lock (pinned sportsdataverse 0.0.66) BEFORE running,
+      # which would silently revert step 6's git@main (0.0.71) reinstall and
+      # reintroduce the enrich_nfl_pbp ImportError. --no-sync runs against the
+      # venv as step 6 left it.
       - name: Verify ep_wp surface import
         working-directory: nfl-data/python
         run: |
-          uv run python -c "from sportsdataverse.nfl.ep_wp import calculate_xyac, enrich_nfl_pbp; print('ep_wp surface OK')"
+          uv run --no-sync python -c "from sportsdataverse.nfl.ep_wp import calculate_xyac, enrich_nfl_pbp; print('ep_wp surface OK')"
 
       # ── 8. Cache the sportsdataverse model artifacts (~34 MB) ────────────
       # enrich_nfl_pbp downloads the EP/WP/CP/xYAC model files on first use
@@ -143,7 +148,7 @@ jobs:
       - name: Build model_pbp parquets
         working-directory: nfl-data/python
         run: |
-          uv run python -m native_pbp build \
+          uv run --no-sync python -m native_pbp build \
             --enrich \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --raw-dir "${{ github.workspace }}/nfl-raw/nfl/raw" \
@@ -160,7 +165,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run python -m nfl_model_publish pbp \
+          uv run --no-sync python -m nfl_model_publish pbp \
             --parquet-dir out/model_pbp \
             --tag nfl_model_pbp \
             --repo sportsdataverse/sportsdataverse-data

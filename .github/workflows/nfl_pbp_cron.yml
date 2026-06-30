@@ -56,7 +56,7 @@ jobs:
           # No explicit ref → checks out the default branch (main).
           # A token is only required if the repo is private; remove the
           # `token:` line if nfl-raw is public.
-          token: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SDV_GH_TOKEN || secrets.GITHUB_TOKEN }}
           path: nfl-raw
 
       # ── 3. Set up Python 3.12 ────────────────────────────────────────────
@@ -155,15 +155,15 @@ jobs:
             --out out/model_pbp
 
       # ── 11. Publish to sportsdataverse/sportsdataverse-data ───────────────
-      # SDV_DATA_TOKEN must be a PAT (classic or fine-grained) with
+      # SDV_GH_TOKEN must be a PAT (classic or fine-grained) with
       # Contents: write  on sportsdataverse/sportsdataverse-data.
       # The fallback to GITHUB_TOKEN will fail for cross-repo uploads unless
       # the nfl-data repo has been granted explicit permission — set up
-      # SDV_DATA_TOKEN in repository secrets for reliable operation.
+      # SDV_GH_TOKEN in repository secrets for reliable operation.
       - name: Publish model_pbp to sportsdataverse-data
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_model_publish pbp \
             --parquet-dir out/model_pbp \

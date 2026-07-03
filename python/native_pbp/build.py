@@ -17,6 +17,7 @@ from native_pbp.description import add_description_features
 from native_pbp.features import add_game_state
 from native_pbp.labels import add_labels
 from native_pbp.parse import parse_game
+from native_pbp.repairs import apply_game_repairs
 
 
 def build_pbp(
@@ -41,6 +42,7 @@ def build_pbp(
     df = parse_game(game, game_id=game_id)
     if df.height == 0:
         return df
+    df = apply_game_repairs(df)
     df = add_description_features(df)
     df = add_game_state(df, roof=roof, spread_line=spread_line)
     df = add_labels(df, game)

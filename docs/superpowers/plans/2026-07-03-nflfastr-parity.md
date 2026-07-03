@@ -134,7 +134,7 @@ def test_unaffected_game_passes_through_unchanged():
 
 **Interfaces:**
 - Consumes: raw Shield JSON games (same input as `parse_game`) and `stat_ids.py` decode tables.
-- Produces: `build_playstats_frame(game: dict, game_id: str) -> pl.DataFrame` with schema per reference **§13** (`build_playstats` output: one row per (play, stat) — `game_id`, `season`, `week`, `play_id`, `stat_id`, `yards`, `team_abbr`, `gsis_player_id`, `player_name` — use the exact nflfastR/nflverse column names from the reference); `build_playstats_season(...)` iterating a season dir like `build.py::build_season` does.
+- Produces: `build_playstats_frame(game: dict, game_id: str | None = None) -> pl.DataFrame` with schema per reference **§13** (`build_playstats` output: one row per (play, stat) — `game_id`, `season`, `week`, `play_id`, `stat_id`, `yards`, `team_abbr`, `player_name`, `gsis_player_id` — use the exact nflfastR/nflverse column names from the reference); `build_playstats_season(...)` iterating a season dir like `build.py::build_season` does.
 
 **Requirements:** Reference **§13**. This is a reshape of the same `stats` arrays `sum_play_stats` consumes — long format instead of wide pivot. Reuse the existing raw-JSON iteration pattern from `build.py`; do NOT duplicate `stat_ids` decode logic — import it.
 

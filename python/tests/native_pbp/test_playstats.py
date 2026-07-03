@@ -165,6 +165,19 @@ def test_empty_game_returns_zero_row_schema_frame():
 # ---------------------------------------------------------------------------
 
 
+def test_seasonless_payload_with_explicit_game_id_resolves_era_abbr():
+    # season recovered from the caller-supplied game_id must feed the team
+    # resolver: _nflverse_abbr's relocation fixup is season-aware (LV is OAK
+    # through 2019), and with season=None it raises on the None <= int compare.
+    game = _make_game()
+    del game["season"]
+    game["awayTeam"]["currentLogo"] = "https://static.nfl.com/clubs/logos/LV"
+    df = build_playstats_frame(game, "2019_01_OAK_BAL")
+    assert df["season"].unique().to_list() == [2019]
+    away_rows = df.filter(pl.col("team_abbr") == "OAK")
+    assert away_rows.height > 0  # era-correct abbr, not LV
+
+
 def test_known_rush_row_resolves_team_and_player():
     df = build_playstats_frame(_make_game(), "2024_01_KC_BAL")
     row = df.filter(pl.col("play_id") == 101).row(0, named=True)

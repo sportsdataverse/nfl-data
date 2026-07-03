@@ -102,10 +102,12 @@ def build_playstats_frame(
     dc = game.get("driveChart") or {}
     plays = dc.get("plays") or []
 
-    _, _, team_by_id, game_id = _resolve_teams_and_game_id(game, season, game_id)
-
     # game_id carries season/week when the payload itself is missing them
     # (mirrors R's `season = substr(game_id, 1, 4)`, `week = substr(game_id, 6, 7)`).
+    # Runs BEFORE the team resolver: _nflverse_abbr's relocation fixup is
+    # season-aware, so a caller-supplied game_id must feed season into the
+    # team_by_id mapping. (When game_id is None the resolver derives it from
+    # the payload, which then must carry season itself — nothing to recover.)
     if season is None and game_id:
         try:
             season = int(game_id[:4])
@@ -116,6 +118,8 @@ def build_playstats_frame(
             week = int(game_id[5:7])
         except ValueError:
             week = None
+
+    _, _, team_by_id, game_id = _resolve_teams_and_game_id(game, season, game_id)
 
     keep_ids = set(stat_ids)
 

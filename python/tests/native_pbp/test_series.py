@@ -198,3 +198,19 @@ def test_add_series_data_noop_without_required_columns():
     assert_frame_equal(out.select("game_id", "desc"), df)
     for col in _OUTPUT_SCHEMA:
         assert col in out.columns
+
+
+def test_add_series_data_degraded_rerun_preserves_existing_columns():
+    # A frame already carrying series (e.g. a re-run after a required input
+    # column was dropped) must NOT have its real values nulled out.
+    df = pl.DataFrame(
+        {
+            "game_id": ["2023_01_BUF_NYJ"],
+            "desc": ["some play"],
+            "series": pl.Series([5], dtype=pl.Int32),
+        }
+    )
+    out = add_series_data(df)
+    assert out["series"].to_list() == [5]
+    for col in _OUTPUT_SCHEMA:
+        assert col in out.columns

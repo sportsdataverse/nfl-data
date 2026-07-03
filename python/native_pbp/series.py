@@ -111,11 +111,15 @@ def add_series_data(df: pl.DataFrame) -> pl.DataFrame:
         ``"Turnover on downs"``, ``"QB kneel"``, ``"End of half"``, or ``None``),
         and ``series_success`` (Int32 0/1 -- 1 iff
         ``series_result in {"Touchdown", "First down"}``) added. Empty input or
-        missing required columns returns the input frame with those columns
-        added as typed nulls (never raises).
+        missing required columns returns the input frame with the *absent*
+        output columns added as typed nulls (never raises); output columns
+        already present on the input are left untouched, so a degraded re-run
+        cannot null out real values.
     """
     if df.height == 0 or not _REQUIRED_SERIES_COLUMNS <= set(df.columns):
-        return df.with_columns(**{c: pl.lit(None, dtype=t) for c, t in _OUTPUT_SCHEMA.items()})
+        return df.with_columns(
+            **{c: pl.lit(None, dtype=t) for c, t in _OUTPUT_SCHEMA.items() if c not in df.columns}
+        )
 
     df = df.sort(["game_id", "play_seq"])
     g = _HALF_GROUP

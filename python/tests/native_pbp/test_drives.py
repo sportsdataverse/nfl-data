@@ -539,3 +539,19 @@ def test_add_drive_detail_noop_without_required_columns():
     assert_frame_equal(out.select("game_id", "desc"), df)
     for col in _OUTPUT_SCHEMA:
         assert col in out.columns
+
+
+def test_add_drive_detail_degraded_rerun_preserves_existing_columns():
+    # A frame already carrying fixed_drive (e.g. a re-run after a column was
+    # dropped) must NOT have its real values nulled out by the degraded path.
+    df = pl.DataFrame(
+        {
+            "game_id": ["2023_01_BUF_NYJ"],
+            "desc": ["some play"],
+            "fixed_drive": pl.Series([3], dtype=pl.Int32),
+        }
+    )
+    out = add_drive_detail(df)
+    assert out["fixed_drive"].to_list() == [3]
+    for col in _OUTPUT_SCHEMA:
+        assert col in out.columns

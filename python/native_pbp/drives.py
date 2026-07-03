@@ -224,11 +224,14 @@ def add_drive_detail(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         The frame with ``fixed_drive`` (Int64) + every column in
         :data:`_OUTPUT_SCHEMA` added. Empty input or missing required columns
-        returns the input frame with those columns added as typed nulls (never
-        raises).
+        returns the input frame with the *absent* output columns added as typed
+        nulls (never raises); output columns already present on the input are
+        left untouched, so a degraded re-run cannot null out real values.
     """
     if df.height == 0 or not _REQUIRED_DRIVE_COLUMNS <= set(df.columns):
-        return df.with_columns(**{c: pl.lit(None, dtype=t) for c, t in _OUTPUT_SCHEMA.items()})
+        return df.with_columns(
+            **{c: pl.lit(None, dtype=t) for c, t in _OUTPUT_SCHEMA.items() if c not in df.columns}
+        )
 
     df = df.sort(["game_id", "play_seq"])
     # strict=False: some callers' ``play_id`` (or other numeric-ish columns) may

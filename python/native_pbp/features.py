@@ -5,9 +5,10 @@ model-feature engineering (era / down one-hots / elapsed_share / spread_time /
 Diff_Time_Ratio / receive_2h_ko) lives in Track 6's own ``features.py`` and is
 derived from these base columns — so it is intentionally NOT done here.
 
-``roof`` and ``spread_line`` are game-level and come from a schedules join
-(nflverse schedules / Lee Sharpe games, the same source nflfastR uses); they are
-passed in as scalars rather than parsed from the Shield feed, which omits them.
+``roof``, ``spread_line``, and ``total_line`` are game-level and come from a
+schedules join (nflverse schedules / Lee Sharpe games, the same source nflfastR
+uses); they are passed in as scalars rather than parsed from the Shield feed,
+which omits them.
 """
 from __future__ import annotations
 
@@ -21,8 +22,9 @@ def add_game_state(
     *,
     roof: Optional[str] = None,
     spread_line: Optional[float] = None,
+    total_line: Optional[float] = None,
 ) -> pl.DataFrame:
-    """Add score_differential, posteam/defteam timeouts, roof, spread_line.
+    """Add score_differential, posteam/defteam timeouts, roof, spread_line, total_line.
 
     Args:
         df: Base play frame (post parse, ideally post description) — must carry
@@ -32,11 +34,16 @@ def add_game_state(
         roof: Game roof (``outdoors``/``dome``/``closed``/``open``/``retractable``)
             from a schedules join; ``None`` left as-is for downstream model_roof
             handling.
-        spread_line: Closing spread (home-relative) from a schedules join.
+        spread_line: Closing spread (home-relative) from a schedules join. Feeds
+            the spread-aware win-probability model (``vegas_wp``); ``None`` leaves
+            the column null and ``vegas_wp`` falls back to a default spread.
+        total_line: Game over/under from a schedules join. Required by the
+            fourth-down decision step; ``None`` leaves the column null (the
+            decision step is then skipped downstream).
 
     Returns:
         The frame with ``score_differential``, ``posteam_timeouts_remaining``,
-        ``defteam_timeouts_remaining``, ``roof``, ``spread_line`` added.
+        ``defteam_timeouts_remaining``, ``roof``, ``spread_line``, ``total_line`` added.
     """
     if df.height == 0:
         return df
@@ -83,5 +90,6 @@ def add_game_state(
     df = df.with_columns(
         roof=pl.lit(roof),
         spread_line=pl.lit(spread_line, dtype=pl.Float64),
+        total_line=pl.lit(total_line, dtype=pl.Float64),
     )
     return df

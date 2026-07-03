@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-import polars as pl
 
 from native_pbp.build import build_season as _build_season
 

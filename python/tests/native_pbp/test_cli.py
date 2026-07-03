@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 
 import polars as pl
-import pytest
 
 from native_pbp.cli import _parse_season_range, build_season
 

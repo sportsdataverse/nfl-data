@@ -49,18 +49,14 @@ lines 641-661):
   ``play_id`` / ``qb_scramble`` aren't all present.
 * ``fix_weird_pass_plays`` force-zeroes a hardcoded 15-row ``pass`` false-
   positive list (garbled play descriptions nflfastR's own regex-based ``pass``
-  classifier misclassified). **Deferred wiring, not deferred implementation**:
-  the function itself is a complete, tested, faithful port, but it is only a
-  documented no-op inside :func:`native_pbp.build.build_pbp` today, because
-  the native Shield pipeline has no equivalent to nflfastR's ``clean_pbp``-era
-  ``pass``/``rush`` 0/1 classification columns — the native frame's analogous
-  signal is the categorical ``play_type`` (built from structured Shield stat
-  flags, not regex over ``desc``), which nflfastR's ``pass`` override was
-  never applied to. Retrofitting a ``pass`` column onto the native frame is
-  out of scope for this port (no consumer of it currently exists in
-  ``native_pbp``); the function is written to operate on a ``pass`` column
-  exactly like nflfastR's port contract, and gates gracefully (no-ops) when
-  that column is absent, ready to engage the moment a future task adds one.
+  classifier misclassified). The native pipeline derives the ``pass``/``rush``
+  0/1 classification columns in :func:`native_pbp.description.add_pass_rush`
+  (a faithful port of nflfastR ``clean_pbp``'s derivation, reference §6),
+  which applies this override at nflfastR's exact position — after the
+  ``pass`` derivation and BEFORE the ``rush`` derivation, so ``rush`` is
+  computed from the fixed ``pass`` value. The function still gates gracefully
+  (no-ops) when the ``pass`` column is absent, so it stays safe to call on a
+  pre-classification frame.
 """
 from __future__ import annotations
 
@@ -112,6 +108,22 @@ def _load_scramble_fix() -> frozenset[str]:
         in a season build don't re-read the CSV from disk.
     """
     return frozenset(pl.read_csv(_SCRAMBLE_FIX_PATH)["scramble_id"].to_list())
+
+
+def _play_key_expr() -> pl.Expr:
+    """``"{game_id}_{play_id}"`` key expression matching nflfastR's paste0 keys.
+
+    ``play_id`` is routed through a NON-strict ``Int64`` cast so every dtype
+    the native frame ships renders the way nflfastR's numeric play_id prints:
+    floats drop the ``.0`` (``1611.0`` -> ``"1611"``), numeric strings pass
+    through (``"1611"`` -> ``"1611"``), and non-numeric strings (synthetic
+    test ids like ``"p1"``) become null — a null key matches nothing and the
+    row falls through untouched instead of raising.
+    """
+    return pl.concat_str(
+        [pl.col("game_id"), pl.col("play_id").cast(pl.Int64, strict=False).cast(pl.Utf8)],
+        separator="_",
+    )
 
 
 def fix_posteams(df: pl.DataFrame) -> pl.DataFrame:
@@ -275,11 +287,8 @@ def fix_scrambles(df: pl.DataFrame) -> pl.DataFrame:
         return df
 
     scramble_fix = _load_scramble_fix()
-    scramble_id = pl.concat_str(
-        [pl.col("game_id"), pl.col("play_id").cast(pl.Int64).cast(pl.Utf8)], separator="_"
-    )
     return df.with_columns(
-        qb_scramble=pl.when(scramble_id.is_in(scramble_fix))
+        qb_scramble=pl.when(_play_key_expr().is_in(scramble_fix))
         .then(1)
         .otherwise(pl.col("qb_scramble"))
     )
@@ -291,19 +300,18 @@ def fix_weird_pass_plays(df: pl.DataFrame) -> pl.DataFrame:
     Faithful port of ``helper_additional_functions.R :: fix_weird_pass_plays``.
     Only ever forces ``pass`` from ``1`` to ``0`` on the fixed
     :data:`_WEIRD_PASS_FALSE_POSITIVES` game_id/play_id list; never sets
-    ``pass`` to ``1``.
+    ``pass`` to ``1``. Called by :func:`native_pbp.description.add_pass_rush`
+    between its ``pass`` and ``rush`` derivations (nflfastR's exact position —
+    ``rush`` must be computed from the fixed ``pass``).
 
     Args:
         df: A play-level frame carrying (a subset of) ``game_id``,
             ``play_id``, ``pass``.
 
     Returns:
-        ``df`` unchanged if empty or if ``pass`` / ``game_id`` / ``play_id``
-        aren't all present — see the module docstring: the native Shield
-        pipeline doesn't (yet) produce a standalone ``pass`` 0/1 column, so
-        this is currently always a documented no-op in the real build
-        pipeline, exercised directly by its unit tests. Otherwise ``df`` with
-        ``pass`` zeroed on the matching rows.
+        ``df`` with ``pass`` zeroed on the matching rows; unchanged if empty
+        or if ``pass`` / ``game_id`` / ``play_id`` aren't all present (a
+        defensive gate for pre-classification frames).
     """
     if df.height == 0:
         return df
@@ -312,12 +320,9 @@ def fix_weird_pass_plays(df: pl.DataFrame) -> pl.DataFrame:
     if not required <= set(df.columns):
         return df
 
-    combined_id = pl.concat_str(
-        [pl.col("game_id"), pl.col("play_id").cast(pl.Int64).cast(pl.Utf8)], separator="_"
-    )
     return df.with_columns(
         **{
-            "pass": pl.when(combined_id.is_in(_WEIRD_PASS_FALSE_POSITIVES))
+            "pass": pl.when(_play_key_expr().is_in(_WEIRD_PASS_FALSE_POSITIVES))
             .then(0)
             .otherwise(pl.col("pass"))
         }

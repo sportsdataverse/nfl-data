@@ -5,12 +5,21 @@ Adds the text-derived columns the models / nflverse schema expect — chiefly
 ``run_gap``, and the qb_kneel / qb_spike / qb_scramble / shotgun / no_huddle
 indicators — and refines ``play_type`` to ``qb_kneel`` / ``qb_spike``.
 
+:func:`add_pass_rush` (separate from :func:`add_description_features` because
+it must run AFTER :func:`native_pbp.repairs.fix_scrambles` has backfilled
+``qb_scramble``) ports nflfastR ``clean_pbp``'s ``pass``/``rush`` 0/1
+classification (reference §6), including the §3 ``fix_weird_pass_plays``
+override applied at nflfastR's exact position — between the ``pass`` and
+``rush`` derivations, so ``rush`` is computed from the *fixed* ``pass``.
+
 ``air_yards`` is NOT parsed here — it comes from the stats feed (statType
 111/112) in :mod:`native_pbp.stat_ids`.
 """
 from __future__ import annotations
 
 import polars as pl
+
+from native_pbp.repairs import fix_weird_pass_plays
 
 
 def add_description_features(df: pl.DataFrame) -> pl.DataFrame:
@@ -48,5 +57,92 @@ def add_description_features(df: pl.DataFrame) -> pl.DataFrame:
         play_type=pl.when(pl.col("qb_kneel") == 1).then(pl.lit("qb_kneel"))
         .when(pl.col("qb_spike") == 1).then(pl.lit("qb_spike"))
         .otherwise(pl.col("play_type"))
+    )
+    return df
+
+
+def add_pass_rush(df: pl.DataFrame) -> pl.DataFrame:
+    """Derive the nflverse ``pass`` / ``rush`` 0/1 classification columns.
+
+    Faithful port of nflfastR ``clean_pbp``'s derivation (reference §6, the
+    block around ``helper_additional_functions.R`` lines 162-191), in its
+    exact mutate order:
+
+    1. ``pass = 1`` when ``desc`` matches ``( pass )|(sacked)|(scramble)``
+       (case-sensitive, as in the R source) OR ``qb_scramble == 1``, else 0.
+    2. ...unless a lowercase ``desc`` contains ``backward pass`` /
+       ``backwards pass`` / ``lateral pass`` AND there is a rusher — then 0.
+    3. ...and never on a kickoff (``kickoff_attempt == 1`` forces 0).
+    4. :func:`native_pbp.repairs.fix_weird_pass_plays` — the hardcoded 15-row
+       false-positive override (reference §3) — applied HERE, before ``rush``,
+       exactly where nflfastR applies it, so step 5 sees the fixed value.
+    5. ``rush = 1`` when there is a rusher, ``qb_kneel == 0`` and the (fixed)
+       ``pass == 0``, else 0.
+
+    nflfastR's "is there a rusher" input is ``clean_pbp``'s regex-extracted
+    ``rusher`` name; the native frame's equivalent is the structured-stats
+    ``rusher_player_name`` (statIds 10-13 etc.). The two converge for this
+    purpose: clean_pbp itself backfills/overwrites ``rusher`` from
+    ``rusher_player_name`` on aborted/abnormal plays, and the one branch where
+    they differ — 1999-2005 charting-fixed scrambles, where clean_pbp nulls
+    ``rusher`` after promoting it to ``passer`` — is neutralized here because
+    those rows have ``pass == 1`` (via ``qb_scramble``), which already forces
+    ``rush = 0`` regardless of the rusher column.
+
+    Must run AFTER :func:`native_pbp.repairs.fix_scrambles`: the 1999-2005
+    scramble backfill feeds step 1's ``qb_scramble == 1`` condition (in
+    nflfastR, ``clean_pbp`` likewise runs long after ``fix_scrambles``).
+
+    Args:
+        df: A play frame carrying ``desc``, ``qb_scramble``, ``qb_kneel``,
+            ``kickoff_attempt``, ``rusher_player_name`` (plus ``game_id`` /
+            ``play_id`` for the step-4 override).
+
+    Returns:
+        ``df`` with ``pass`` and ``rush`` (Int64 0/1) added. Unchanged if
+        empty or if any required input column is absent.
+    """
+    if df.height == 0:
+        return df
+    required = {"desc", "qb_scramble", "qb_kneel", "kickoff_attempt", "rusher_player_name"}
+    if not required <= set(df.columns):
+        return df
+
+    d = pl.col("desc").fill_null("")
+    has_rusher = pl.col("rusher_player_name").is_not_null()
+
+    # Steps 1-3: base detection, backward/lateral exclusion, kickoff exclusion.
+    df = df.with_columns(
+        **{
+            "pass": pl.when(
+                d.str.contains(r"( pass )|(sacked)|(scramble)") | (pl.col("qb_scramble") == 1)
+            )
+            .then(1)
+            .otherwise(0)
+            .cast(pl.Int64)
+        }
+    )
+    df = df.with_columns(
+        **{
+            "pass": pl.when(
+                d.str.to_lowercase().str.contains(
+                    r"(backward pass)|(backwards pass)|(lateral pass)"
+                )
+                & has_rusher
+            )
+            .then(0)
+            .when(pl.col("kickoff_attempt") == 1)
+            .then(0)
+            .otherwise(pl.col("pass"))
+        }
+    )
+    # Step 4: hardcoded false-positive override — BEFORE rush, per nflfastR.
+    df = fix_weird_pass_plays(df)
+    # Step 5: rush from the fixed pass.
+    df = df.with_columns(
+        rush=pl.when(has_rusher & (pl.col("qb_kneel") == 0) & (pl.col("pass") == 0))
+        .then(1)
+        .otherwise(0)
+        .cast(pl.Int64)
     )
     return df

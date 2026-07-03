@@ -243,17 +243,21 @@ def test_fix_scrambles_noop_for_season_after_2005():
 
 
 def test_fix_scrambles_preserves_existing_flag_when_not_in_list():
+    # Three rows chosen so this test CANNOT pass under an always-no-op
+    # implementation: row1 (in the vendored list, currently 0) must flip to 1,
+    # while row0 (in-list, already 1) and row2 (not in list, already 1) both
+    # stay 1 — preserve is only distinguishable from no-op when a flip is
+    # asserted in the same frame.
     df = pl.DataFrame(
         {
-            "season": [1999],
-            "game_id": ["1999_01_MIN_ATL"],
-            "play_id": [999999.0],
-            "qb_scramble": [1],
+            "season": [1999, 1999, 1999],
+            "game_id": ["1999_01_MIN_ATL", "1999_01_MIN_ATL", "1999_01_MIN_ATL"],
+            "play_id": [133.0, 1372.0, 999999.0],  # 133 + 1372 are in the vendored list
+            "qb_scramble": [1, 0, 1],
         }
     )
     out = fix_scrambles(df)
-    # already 1 and not in the fix list -> untouched (still 1, not flipped to 0).
-    assert out["qb_scramble"].to_list() == [1]
+    assert out["qb_scramble"].to_list() == [1, 1, 1]
 
 
 def test_fix_scrambles_noop_without_required_columns():
@@ -266,6 +270,23 @@ def test_fix_scrambles_noop_on_empty_frame():
         schema={"season": pl.Int64, "game_id": pl.Utf8, "play_id": pl.Float64, "qb_scramble": pl.Int64}
     )
     assert_frame_equal(fix_scrambles(df), df)
+
+
+def test_fix_scrambles_handles_string_play_ids():
+    # play_id dtype varies across fixtures/feeds: numeric strings must still
+    # match the vendored keys, and non-numeric synthetic ids (e.g. "p1" in the
+    # CLI test fixture) must fall through untouched instead of raising on the
+    # Int64 cast.
+    df = pl.DataFrame(
+        {
+            "season": [1999, 1999],
+            "game_id": ["1999_01_MIN_ATL", "1999_01_MIN_ATL"],
+            "play_id": ["133", "p1"],
+            "qb_scramble": [0, 0],
+        }
+    )
+    out = fix_scrambles(df)
+    assert out["qb_scramble"].to_list() == [1, 0]
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +320,8 @@ def test_fix_weird_pass_plays_never_sets_pass_to_one():
 
 
 def test_fix_weird_pass_plays_noop_without_pass_column():
-    # The native pipeline does not (yet) produce a standalone pass 0/1 column
-    # (see module docstring) -- must no-op rather than raise.
+    # Defensive gate: a frame that hasn't been through add_pass_rush yet has
+    # no pass column -- must no-op rather than raise.
     df = pl.DataFrame(
         {
             "game_id": ["1999_01_ARI_PHI"],
@@ -313,3 +334,47 @@ def test_fix_weird_pass_plays_noop_without_pass_column():
 def test_fix_weird_pass_plays_noop_on_empty_frame():
     df = pl.DataFrame(schema={"game_id": pl.Utf8, "play_id": pl.Float64, "pass": pl.Int64})
     assert_frame_equal(fix_weird_pass_plays(df), df)
+
+
+def test_fix_weird_pass_plays_handles_string_play_ids():
+    # Same key-dtype robustness as fix_scrambles: numeric string matches, a
+    # non-numeric synthetic id never raises and never matches.
+    df = pl.DataFrame(
+        {
+            "game_id": ["1999_01_ARI_PHI", "1999_01_ARI_PHI"],
+            "play_id": ["1611", "p1"],
+            "pass": [1, 1],
+        }
+    )
+    out = fix_weird_pass_plays(df)
+    assert out["pass"].to_list() == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# End-to-end activation — the build-order chain (fix_scrambles -> pass
+# derivation -> fix_weird_pass_plays, the last two inside add_pass_rush)
+# actually fires on a verbatim §3 false positive.
+# ---------------------------------------------------------------------------
+
+def test_build_order_chain_zeroes_false_positive_and_keeps_normal_pass():
+    from native_pbp.description import add_pass_rush
+
+    df = pl.DataFrame(
+        {
+            "season": [1999, 1999],
+            "game_id": ["1999_01_ARI_PHI", "1999_01_ARI_PHI"],
+            "play_id": [1611.0, 42.0],
+            "desc": [
+                "(2:00) garbled play description with pass keyword.",
+                "(1:30) J.Plummer pass short left to R.Moore for 12 yards.",
+            ],
+            "qb_scramble": [0, 0],
+            "qb_kneel": [0, 0],
+            "kickoff_attempt": [0, 0],
+            "rusher_player_name": ["A.Murrell", None],
+        }
+    )
+    out = add_pass_rush(fix_scrambles(df))
+    # row0 (1999_01_ARI_PHI_1611, on the verbatim false_positives list) had its
+    # desc-detected pass=1 forced to 0; the normal pass row stays 1.
+    assert out["pass"].to_list() == [0, 1]

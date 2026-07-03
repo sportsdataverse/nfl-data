@@ -397,6 +397,31 @@ _BASE_PLAYERS = [
 _SCORING_POINTS = {"TOUCHDOWN": 6, "PAT": 1, "PAT2": 2, "FIELD_GOAL": 3, "SAFETY": 2}
 
 
+def _resolve_teams_and_game_id(
+    game: Dict[str, Any], season: Optional[int], game_id: Optional[str]
+) -> tuple[Optional[str], Optional[str], Dict[str, str], Optional[str]]:
+    """Resolve home/away nflverse abbrs, a teamId->abbr map, and the game_id.
+
+    Shared by :func:`parse_game` and :func:`native_pbp.playstats.build_playstats_frame`
+    (both need the same ``teamId`` (UUID) -> nflverse abbr resolution to turn a
+    Shield stat entry's raw ``teamId`` into a ``team_abbr`` column).
+    """
+    summary = game.get("summary") or {}
+    home_abbr = _nflverse_abbr(_team_abbr(game["homeTeam"]), season) if game.get("homeTeam") else None
+    away_abbr = _nflverse_abbr(_team_abbr(game["awayTeam"]), season) if game.get("awayTeam") else None
+    team_by_id: Dict[str, str] = {}
+    for side, abbr in (("homeTeam", home_abbr), ("awayTeam", away_abbr)):
+        tid = (summary.get(side) or {}).get("teamId")
+        if tid is not None and abbr is not None:
+            team_by_id[tid] = abbr
+
+    if game_id is None:
+        reg_weeks = 17 if (season is not None and season <= 2020) else 18
+        game_id = nflverse_game_id(game, reg_weeks=reg_weeks) if game.get("homeTeam") else None
+
+    return home_abbr, away_abbr, team_by_id, game_id
+
+
 def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFrame:
     """Parse one Shield game payload into a base play-level polars frame.
 
@@ -413,21 +438,10 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
     season = int(game.get("season")) if game.get("season") is not None else None
     week = game.get("week")
     season_type = game.get("seasonType")
-    summary = game.get("summary") or {}
     dc = game.get("driveChart") or {}
     plays = dc.get("plays") or []
 
-    home_abbr = _nflverse_abbr(_team_abbr(game["homeTeam"]), season) if game.get("homeTeam") else None
-    away_abbr = _nflverse_abbr(_team_abbr(game["awayTeam"]), season) if game.get("awayTeam") else None
-    team_by_id: Dict[str, str] = {}
-    for side, abbr in (("homeTeam", home_abbr), ("awayTeam", away_abbr)):
-        tid = (summary.get(side) or {}).get("teamId")
-        if tid is not None and abbr is not None:
-            team_by_id[tid] = abbr
-
-    if game_id is None:
-        reg_weeks = 17 if (season is not None and season <= 2020) else 18
-        game_id = nflverse_game_id(game, reg_weeks=reg_weeks) if game.get("homeTeam") else None
+    home_abbr, away_abbr, team_by_id, game_id = _resolve_teams_and_game_id(game, season, game_id)
 
     ranges = _drive_ranges(dc.get("drives") or [])
 

@@ -9,6 +9,12 @@ Pass ``--enrich`` to run the EP/WP/CP/xYAC enrichment (the canonical
 
     python -m native_pbp build --seasons 2023:2024 --raw-dir nfl/raw \\
         --out out/model_pbp --enrich
+
+``build-playstats`` builds the long-format play-stats table (reference §13's
+``build_playstats`` port) instead of the wide pbp frame::
+
+    python -m native_pbp build-playstats --seasons 2022:2024 \\
+        --raw-dir nfl/raw --out out/playstats
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ from pathlib import Path
 import polars as pl
 
 from native_pbp.build import build_season as _build_season
+from native_pbp.playstats import build_playstats_season as _build_playstats_season
 
 
 def _build_schedule_lookup(season: int) -> dict[str, dict]:
@@ -108,6 +115,35 @@ def build_season(
     return out_path
 
 
+def build_playstats_season(
+    season: int,
+    raw_dir: str | Path,
+    out_dir: str | Path,
+) -> Path:
+    """Build one season's long-format play-stats parquet and write it to *out_dir*.
+
+    Args:
+        season: NFL season year (e.g. 2024).
+        raw_dir: Root directory of the committed per-game JSON library.
+            Per-game files are expected at ``{raw_dir}/{season}/*.json``.
+        out_dir: Output directory. The file is written as
+            ``{out_dir}/play_stats_{season}.parquet`` (parity with nflverse's
+            released ``play_stats_{season}.rds`` naming — reference §13).
+
+    Returns:
+        Path to the written parquet file.
+    """
+    raw_dir = Path(raw_dir)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    df = _build_playstats_season(season, raw_dir=raw_dir)
+
+    out_path = out_dir / f"play_stats_{season}.parquet"
+    df.write_parquet(out_path)
+    return out_path
+
+
 def _parse_season_range(s: str) -> list[int]:
     """Parse ``'A:B'`` or ``'A'`` into a list of season integers (inclusive)."""
     if ":" in s:
@@ -144,6 +180,26 @@ def build_parser() -> argparse.ArgumentParser:
             "on each season before writing — the canonical nfl_model_pbp dataset."
         ),
     )
+
+    ps = sub.add_parser(
+        "build-playstats",
+        help="Build long-format play-stats parquet for a range of seasons (reference §13).",
+    )
+    ps.add_argument(
+        "--seasons",
+        required=True,
+        help="Season or range, e.g. '2024' or '2010:2024' (inclusive).",
+    )
+    ps.add_argument(
+        "--raw-dir",
+        default=".cache/nfl_raw",
+        help="Root of the committed per-game JSON library (default: .cache/nfl_raw).",
+    )
+    ps.add_argument(
+        "--out",
+        required=True,
+        help="Output directory for the play_stats_{season}.parquet files.",
+    )
     return ap
 
 
@@ -159,5 +215,10 @@ def main(argv=None) -> int:
                 enrich=args.enrich,
                 schedule_lookup=_build_schedule_lookup(season),
             )
+            print(f"wrote {out_path}")
+    elif args.cmd == "build-playstats":
+        seasons = _parse_season_range(args.seasons)
+        for season in seasons:
+            out_path = build_playstats_season(season, raw_dir=args.raw_dir, out_dir=args.out)
             print(f"wrote {out_path}")
     return 0

@@ -33,6 +33,7 @@ rows at specific lags — so the exclusion is scoped to
 :func:`_add_drive_summary` alone. A drive consisting solely of marker rows
 (degenerate) gets null aggregates via the left join.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -86,7 +87,14 @@ _REQUIRED_DRIVE_COLUMNS = {
 # must be a concrete numeric dtype before arithmetic -- an all-``None`` column
 # built from Python literals infers as polars ``Null`` dtype, on which even
 # null-propagating ops like ``.abs()``/floor-division raise. Cast defensively.
-_NUMERIC_DRIVE_COLUMNS = ("qtr", "yardline_100", "penalty_yards", "play_id", "quarter_seconds_remaining", "game_seconds_remaining")
+_NUMERIC_DRIVE_COLUMNS = (
+    "qtr",
+    "yardline_100",
+    "penalty_yards",
+    "play_id",
+    "quarter_seconds_remaining",
+    "game_seconds_remaining",
+)
 
 # Output schema (dtype) for the degenerate-input / empty-frame fallback, so
 # callers always see a stable column set (never a KeyError downstream).
@@ -166,11 +174,7 @@ def drive_level_tmp_result(pos: pl.Expr) -> pl.Expr:
         .then(pl.lit("Punt"))
         .when((pl.col("interception") == 1) | (pl.col("fumble_lost") == 1))
         .then(pl.lit("Turnover"))
-        .when(
-            (pl.col("down") == 4)
-            & (pl.col("yards_gained") < pl.col("ydstogo"))
-            & (pl.col("play_type") != "no_play")
-        )
+        .when((pl.col("down") == 4) & (pl.col("yards_gained") < pl.col("ydstogo")) & (pl.col("play_type") != "no_play"))
         .then(pl.lit("Turnover on downs"))
         .when(pl.col("desc").fill_null("").str.contains("(END QUARTER 2)|(END QUARTER 4)|(END GAME)"))
         .then(pl.lit("End of half"))
@@ -195,11 +199,7 @@ def last_or_first_result(df: pl.DataFrame, group: list[str], tmp_col: str, out_c
         .group_by(group, maintain_order=True)
         .agg(_first=pl.col(tmp_col).first(), _last=pl.col(tmp_col).last())
         .with_columns(
-            **{
-                out_col: pl.when(pl.col("_last") == "End of half")
-                .then(pl.col("_first"))
-                .otherwise(pl.col("_last"))
-            }
+            **{out_col: pl.when(pl.col("_last") == "End of half").then(pl.col("_first")).otherwise(pl.col("_last"))}
         )
         .select([*group, out_col])
     )
@@ -357,6 +357,10 @@ def _add_drive_summary(df: pl.DataFrame) -> pl.DataFrame:
 
     summary = real_plays.group_by(grp, maintain_order=True).agg(
         drive_play_count=pl.len().cast(pl.Int64),
+        # Excluding TIMEOUT markers from `real_plays` assumes they never carry
+        # first-down flags or penalty yards (empirically true in captured
+        # fixtures, not asserted here); a real-game parity run is the
+        # eventual assertion.
         drive_first_downs=pl.col("_fd_play").sum().cast(pl.Int64),
         drive_inside20=(pl.col("yardline_100").min() <= 20).fill_null(False).cast(pl.Int64),
         drive_ended_with_score=pl.col("fixed_drive_result").first().is_in(["Touchdown", "Field goal"]).cast(pl.Int64),

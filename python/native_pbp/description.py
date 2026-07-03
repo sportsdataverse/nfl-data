@@ -15,6 +15,7 @@ override applied at nflfastR's exact position — between the ``pass`` and
 ``air_yards`` is NOT parsed here — it comes from the stats feed (statType
 111/112) in :mod:`native_pbp.stat_ids`.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -54,8 +55,10 @@ def add_description_features(df: pl.DataFrame) -> pl.DataFrame:
     ).drop("run_location_raw", "run_gap_raw")
     # Refine play_type: kneels/spikes override the rush/pass base class.
     df = df.with_columns(
-        play_type=pl.when(pl.col("qb_kneel") == 1).then(pl.lit("qb_kneel"))
-        .when(pl.col("qb_spike") == 1).then(pl.lit("qb_spike"))
+        play_type=pl.when(pl.col("qb_kneel") == 1)
+        .then(pl.lit("qb_kneel"))
+        .when(pl.col("qb_spike") == 1)
+        .then(pl.lit("qb_spike"))
         .otherwise(pl.col("play_type"))
     )
     return df
@@ -108,6 +111,11 @@ def add_pass_rush(df: pl.DataFrame) -> pl.DataFrame:
         uses the raw ``rusher_player_name``; the two can theoretically diverge
         on lateral/direct-snap plays, where the abnormal-play overwrite can null
         the cleaned ``rusher`` without ``pass`` being forced to 1.
+
+        Null-``desc`` divergence: step 1's ``d = pl.col("desc").fill_null("")``
+        makes a null ``desc`` match none of the base regexes, so ``pass`` comes
+        out ``0``, whereas nflfastR's R regex propagates ``NA`` through to
+        ``pass`` on the same row.
     """
     if df.height == 0:
         return df
@@ -121,9 +129,7 @@ def add_pass_rush(df: pl.DataFrame) -> pl.DataFrame:
     # Steps 1-3: base detection, backward/lateral exclusion, kickoff exclusion.
     df = df.with_columns(
         **{
-            "pass": pl.when(
-                d.str.contains(r"( pass )|(sacked)|(scramble)") | (pl.col("qb_scramble") == 1)
-            )
+            "pass": pl.when(d.str.contains(r"( pass )|(sacked)|(scramble)") | (pl.col("qb_scramble") == 1))
             .then(1)
             .otherwise(0)
             .cast(pl.Int64)
@@ -132,10 +138,7 @@ def add_pass_rush(df: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns(
         **{
             "pass": pl.when(
-                d.str.to_lowercase().str.contains(
-                    r"(backward pass)|(backwards pass)|(lateral pass)"
-                )
-                & has_rusher
+                d.str.to_lowercase().str.contains(r"(backward pass)|(backwards pass)|(lateral pass)") & has_rusher
             )
             .then(0)
             .when(pl.col("kickoff_attempt") == 1)
@@ -147,10 +150,7 @@ def add_pass_rush(df: pl.DataFrame) -> pl.DataFrame:
     df = fix_weird_pass_plays(df)
     # Step 5: rush from the fixed pass.
     df = df.with_columns(
-        rush=pl.when(has_rusher & (pl.col("qb_kneel") == 0) & (pl.col("pass") == 0))
-        .then(1)
-        .otherwise(0)
-        .cast(pl.Int64)
+        rush=pl.when(has_rusher & (pl.col("qb_kneel") == 0) & (pl.col("pass") == 0)).then(1).otherwise(0).cast(pl.Int64)
     )
     return df
 
@@ -182,9 +182,6 @@ def add_qb_dropback(df: pl.DataFrame) -> pl.DataFrame:
     if not {"pass", "qb_scramble"} <= set(df.columns):
         return df
     df = df.with_columns(
-        qb_dropback=pl.when((pl.col("pass") == 1) | (pl.col("qb_scramble") == 1))
-        .then(1)
-        .otherwise(0)
-        .cast(pl.Int32)
+        qb_dropback=pl.when((pl.col("pass") == 1) | (pl.col("qb_scramble") == 1)).then(1).otherwise(0).cast(pl.Int32)
     )
     return df

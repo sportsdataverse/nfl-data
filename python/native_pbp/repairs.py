@@ -58,6 +58,7 @@ lines 641-661):
   (no-ops) when the ``pass`` column is absent, so it stays safe to call on a
   pre-classification frame.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -118,7 +119,9 @@ def _play_key_expr() -> pl.Expr:
     floats drop the ``.0`` (``1611.0`` -> ``"1611"``), numeric strings pass
     through (``"1611"`` -> ``"1611"``), and non-numeric strings (synthetic
     test ids like ``"p1"``) become null — a null key matches nothing and the
-    row falls through untouched instead of raising.
+    row falls through untouched instead of raising. The non-strict cast also
+    truncates fractional floats (``1611.7`` -> ``"1611"``); theoretical only,
+    since GSIS play ids are integral.
     """
     return pl.concat_str(
         [pl.col("game_id"), pl.col("play_id").cast(pl.Int64, strict=False).cast(pl.Utf8)],
@@ -177,7 +180,7 @@ def fix_bad_games(df: pl.DataFrame) -> pl.DataFrame:
                 .then(pl.col("away_team"))
                 .otherwise(pl.col("home_team"))
             )
-            .otherwise(pl.col("return_team"))
+            .otherwise(pl.col("return_team").cast(pl.Utf8))
             .alias("return_team")
         )
 
@@ -250,9 +253,7 @@ def apply_game_repairs(df: pl.DataFrame) -> pl.DataFrame:
         & (pl.col("home_team") == pl.col("away_team"))
     )
     fixed = fix_bad_games(df)
-    return df.with_columns(
-        [pl.when(bad_game).then(fixed[c]).otherwise(pl.col(c)).alias(c) for c in repair_cols]
-    )
+    return df.with_columns([pl.when(bad_game).then(fixed[c]).otherwise(pl.col(c)).alias(c) for c in repair_cols])
 
 
 def fix_scrambles(df: pl.DataFrame) -> pl.DataFrame:
@@ -288,9 +289,7 @@ def fix_scrambles(df: pl.DataFrame) -> pl.DataFrame:
 
     scramble_fix = _load_scramble_fix()
     return df.with_columns(
-        qb_scramble=pl.when(_play_key_expr().is_in(scramble_fix))
-        .then(1)
-        .otherwise(pl.col("qb_scramble"))
+        qb_scramble=pl.when(_play_key_expr().is_in(scramble_fix)).then(1).otherwise(pl.col("qb_scramble"))
     )
 
 
@@ -321,9 +320,5 @@ def fix_weird_pass_plays(df: pl.DataFrame) -> pl.DataFrame:
         return df
 
     return df.with_columns(
-        **{
-            "pass": pl.when(_play_key_expr().is_in(_WEIRD_PASS_FALSE_POSITIVES))
-            .then(0)
-            .otherwise(pl.col("pass"))
-        }
+        **{"pass": pl.when(_play_key_expr().is_in(_WEIRD_PASS_FALSE_POSITIVES)).then(0).otherwise(pl.col("pass"))}
     )

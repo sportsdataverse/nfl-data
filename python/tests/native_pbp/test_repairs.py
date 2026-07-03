@@ -6,6 +6,7 @@ Reference: ``docs/superpowers/plans/2026-07-03-nflfastr-parity-reference.md`` §
 (``helper_add_nflscrapr_mutations.R :: fix_scrambles``), §3
 (``helper_additional_functions.R :: fix_weird_pass_plays``).
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -23,6 +24,7 @@ from native_pbp.repairs import (
 # ---------------------------------------------------------------------------
 # Passthrough — the common case (no bad_game condition, no legacy column)
 # ---------------------------------------------------------------------------
+
 
 def test_unaffected_game_passes_through_unchanged():
     df = pl.DataFrame(
@@ -67,6 +69,7 @@ def test_normal_game_with_home_away_columns_untouched():
 # fix_bad_games — return_team rule
 # ---------------------------------------------------------------------------
 
+
 def test_fix_bad_games_return_team_home_has_ball():
     # posteam == home_team -> return_team should become away_team.
     df = pl.DataFrame(
@@ -101,6 +104,7 @@ def test_fix_bad_games_return_team_away_has_ball():
 # fix_bad_games — fumble_recovery_1_team rule (4-branch case_when)
 # ---------------------------------------------------------------------------
 
+
 def test_fix_bad_games_fumble_recovery_all_branches():
     df = pl.DataFrame(
         {
@@ -125,6 +129,7 @@ def test_fix_bad_games_fumble_recovery_all_branches():
 # fix_bad_games — timeout_team rule (regex re-extraction from desc)
 # ---------------------------------------------------------------------------
 
+
 def test_fix_bad_games_timeout_team_extracted_from_desc():
     df = pl.DataFrame(
         {
@@ -142,6 +147,23 @@ def test_fix_bad_games_timeout_team_extracted_from_desc():
     )
     out = fix_bad_games(df)
     assert out["timeout_team"].to_list() == ["BUF", None, "NYJ"]
+
+
+def test_fix_bad_games_never_touches_td_team():
+    # td_team is explicitly deferred (see fix_bad_games docstring): even on a
+    # bad-game-matched row (home_team == away_team), a present td_team column
+    # must pass through byte-identical — this repair must not fire on it.
+    df = pl.DataFrame(
+        {
+            "game_id": ["1999_01_FAKE_FAKE"],
+            "posteam": ["NYJ"],
+            "home_team": ["NYJ"],
+            "away_team": ["NYJ"],
+            "td_team": ["NYJ"],
+        }
+    )
+    out = fix_bad_games(df)
+    assert out["td_team"].to_list() == ["NYJ"]
 
 
 def test_fix_bad_games_leaves_missing_columns_alone():
@@ -163,6 +185,7 @@ def test_fix_bad_games_leaves_missing_columns_alone():
 # row's own home_team/away_team)
 # ---------------------------------------------------------------------------
 
+
 def test_apply_game_repairs_only_touches_bad_game_rows():
     df = pl.DataFrame(
         {
@@ -182,6 +205,7 @@ def test_apply_game_repairs_only_touches_bad_game_rows():
 # fix_posteams — defensive no-op gate (the native Shield pipeline never emits
 # a pre_play_by_play column; see module docstring for the deferred branch)
 # ---------------------------------------------------------------------------
+
 
 def test_fix_posteams_noop_without_pre_play_by_play():
     df = pl.DataFrame(
@@ -212,6 +236,7 @@ def test_fix_posteams_noop_even_when_column_present():
 # fix_scrambles — 1999-2005 charting-data qb_scramble backfill (vendored
 # scramble_fix.csv, §2)
 # ---------------------------------------------------------------------------
+
 
 def test_fix_scrambles_backfills_row_in_vendored_list():
     # 1999_01_MIN_ATL_133 is a real row from the vendored scramble_fix.csv.
@@ -266,9 +291,7 @@ def test_fix_scrambles_noop_without_required_columns():
 
 
 def test_fix_scrambles_noop_on_empty_frame():
-    df = pl.DataFrame(
-        schema={"season": pl.Int64, "game_id": pl.Utf8, "play_id": pl.Float64, "qb_scramble": pl.Int64}
-    )
+    df = pl.DataFrame(schema={"season": pl.Int64, "game_id": pl.Utf8, "play_id": pl.Float64, "qb_scramble": pl.Int64})
     assert_frame_equal(fix_scrambles(df), df)
 
 
@@ -292,6 +315,7 @@ def test_fix_scrambles_handles_string_play_ids():
 # ---------------------------------------------------------------------------
 # fix_weird_pass_plays — hardcoded 15-row false-positive override (§3)
 # ---------------------------------------------------------------------------
+
 
 def test_fix_weird_pass_plays_zeroes_known_false_positive():
     df = pl.DataFrame(
@@ -355,6 +379,7 @@ def test_fix_weird_pass_plays_handles_string_play_ids():
 # derivation -> fix_weird_pass_plays, the last two inside add_pass_rush)
 # actually fires on a verbatim §3 false positive.
 # ---------------------------------------------------------------------------
+
 
 def test_build_order_chain_zeroes_false_positive_and_keeps_normal_pass():
     from native_pbp.description import add_pass_rush

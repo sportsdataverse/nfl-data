@@ -30,9 +30,9 @@ quirks of nflfastR's *own* raw source, which this port does not share:
   ``driveChart.plays[].stats[]``-shaped across every season back to 1999
   (verified against the committed 1999 fixture), so one code path already
   handles every season — no branch needed.
-- **``playDeleted`` guard ADDED** (no equivalent in the R source, whose raw
-  feed doesn't carry deleted plays): deleted plays are skipped, matching
-  :func:`native_pbp.parse.parse_game`, so this table never emits a
+- **``playDeleted`` guard ADDED** (no equivalent in the R source): deleted
+  plays are skipped for parity with :func:`native_pbp.parse.parse_game`'s own
+  ``playDeleted`` handling, so this table never emits a
   ``(game_id, play_id)`` with no matching row in the wide pbp frame. The one
   other row build_pbp drops -- ``shield_play_type == "TIMEOUT"`` markers -- is
   NOT filtered here; those markers empirically carry empty ``stats`` arrays,

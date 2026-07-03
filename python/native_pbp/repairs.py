@@ -35,14 +35,83 @@ Column availability at this pipeline stage (called immediately after
   the trailing lookahead each bind to only one alternative in the team-abbr
   disjunction, not all of them) with no real ``pre_play_by_play`` fixture to
   validate against would be guessing rather than porting.
+
+Port of reference doc §2 (``helper_add_nflscrapr_mutations.R :: fix_scrambles``,
+lines 797-818) and §3 (``helper_additional_functions.R :: fix_weird_pass_plays``,
+lines 641-661):
+
+* ``fix_scrambles`` backfills ``qb_scramble`` to ``1`` for the 1999-2005
+  charting-data-identified scrambles the NFL's raw feed didn't mark in the
+  play description (see :data:`_SCRAMBLE_FIX_PATH` / ``data/README.md`` for
+  provenance of the vendored 5,830-row key list). No-ops on frames whose
+  minimum ``season`` is after 2005 (matching the R source's own early
+  ``return(pbp)``), and defensively no-ops when ``season`` / ``game_id`` /
+  ``play_id`` / ``qb_scramble`` aren't all present.
+* ``fix_weird_pass_plays`` force-zeroes a hardcoded 15-row ``pass`` false-
+  positive list (garbled play descriptions nflfastR's own regex-based ``pass``
+  classifier misclassified). **Deferred wiring, not deferred implementation**:
+  the function itself is a complete, tested, faithful port, but it is only a
+  documented no-op inside :func:`native_pbp.build.build_pbp` today, because
+  the native Shield pipeline has no equivalent to nflfastR's ``clean_pbp``-era
+  ``pass``/``rush`` 0/1 classification columns — the native frame's analogous
+  signal is the categorical ``play_type`` (built from structured Shield stat
+  flags, not regex over ``desc``), which nflfastR's ``pass`` override was
+  never applied to. Retrofitting a ``pass`` column onto the native frame is
+  out of scope for this port (no consumer of it currently exists in
+  ``native_pbp``); the function is written to operate on a ``pass`` column
+  exactly like nflfastR's port contract, and gates gracefully (no-ops) when
+  that column is absent, ready to engage the moment a future task adds one.
 """
 from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
 
 import polars as pl
 
 # Columns fix_bad_games can actually repair with what the native frame carries
 # at this pipeline stage (td_team is deferred — see module docstring).
 _BAD_GAME_REPAIR_COLUMNS = ("return_team", "fumble_recovery_1_team", "timeout_team")
+
+# Vendored nflfastR sysdata.rda `scramble_fix` list (5,830 "{game_id}_{play_id}"
+# keys) — see data/README.md for provenance. Loaded once and cached.
+_SCRAMBLE_FIX_PATH = Path(__file__).parent / "data" / "scramble_fix.csv"
+
+# Verbatim transcription of helper_additional_functions.R's fix_weird_pass_plays
+# false_positives list (15 rows) — pre-2006-through-2020 hardcoded garbled plays
+# where the regex-based pass classifier reached its limit. Never guessed at;
+# every key here is copied character-for-character from the R source.
+_WEIRD_PASS_FALSE_POSITIVES: frozenset[str] = frozenset(
+    {
+        "1999_01_ARI_PHI_1611",
+        "1999_01_SF_JAX_1788",
+        "1999_01_SF_JAX_2081",
+        "1999_11_ATL_TB_1740",
+        "2001_09_MIN_PHI_1307",
+        "2001_14_NE_BUF_452",
+        "2002_16_PIT_TB_527",
+        "2003_02_HOU_NO_3924",
+        "2003_15_PIT_NYJ_873",
+        "2004_05_BUF_NYJ_2555",
+        "2005_07_SD_PHI_321",
+        "2011_02_STL_NYG_1369",
+        "2016_05_NE_CLE_912",
+        "2016_06_CAR_NO_2690",
+        "2020_10_BAL_NE_2013",
+    }
+)
+
+
+@lru_cache(maxsize=1)
+def _load_scramble_fix() -> frozenset[str]:
+    """Module-level cached load of the vendored ``scramble_fix`` key set.
+
+    Returns:
+        A ``frozenset`` of 5,830 ``"{game_id}_{play_id}"`` keys. Cached after
+        first call (``lru_cache``) so repeated invocations across many games
+        in a season build don't re-read the CSV from disk.
+    """
+    return frozenset(pl.read_csv(_SCRAMBLE_FIX_PATH)["scramble_id"].to_list())
 
 
 def fix_posteams(df: pl.DataFrame) -> pl.DataFrame:
@@ -171,4 +240,85 @@ def apply_game_repairs(df: pl.DataFrame) -> pl.DataFrame:
     fixed = fix_bad_games(df)
     return df.with_columns(
         [pl.when(bad_game).then(fixed[c]).otherwise(pl.col(c)).alias(c) for c in repair_cols]
+    )
+
+
+def fix_scrambles(df: pl.DataFrame) -> pl.DataFrame:
+    """Backfill ``qb_scramble`` for 1999-2005 plays the raw feed didn't mark.
+
+    Faithful port of ``helper_add_nflscrapr_mutations.R :: fix_scrambles``
+    (reference §2). Builds the row key ``f"{game_id}_{play_id}"`` and flips
+    ``qb_scramble`` to ``1`` wherever that key is in the vendored
+    :data:`_SCRAMBLE_FIX_PATH` set; never flips an existing ``1`` back to
+    ``0``, and never touches ``play_type`` / ``qb_dropback`` (those are
+    derived from the *un-fixed* ``qb_scramble`` earlier in the pipeline — see
+    the module docstring's parity-critical ordering note).
+
+    Args:
+        df: A play-level frame carrying (a subset of) ``season``, ``game_id``,
+            ``play_id``, ``qb_scramble``.
+
+    Returns:
+        ``df`` unchanged if empty, if ``min(season) > 2005`` (mirrors the R
+        source's early return), or if any of the four required columns are
+        absent. Otherwise ``df`` with ``qb_scramble`` backfilled.
+    """
+    if df.height == 0:
+        return df
+
+    required = {"season", "game_id", "play_id", "qb_scramble"}
+    if not required <= set(df.columns):
+        return df
+
+    min_season = df.select(pl.col("season").min()).item()
+    if min_season is None or min_season > 2005:
+        return df
+
+    scramble_fix = _load_scramble_fix()
+    scramble_id = pl.concat_str(
+        [pl.col("game_id"), pl.col("play_id").cast(pl.Int64).cast(pl.Utf8)], separator="_"
+    )
+    return df.with_columns(
+        qb_scramble=pl.when(scramble_id.is_in(scramble_fix))
+        .then(1)
+        .otherwise(pl.col("qb_scramble"))
+    )
+
+
+def fix_weird_pass_plays(df: pl.DataFrame) -> pl.DataFrame:
+    """Force-zero the 15 hardcoded ``pass`` false-positive plays (reference §3).
+
+    Faithful port of ``helper_additional_functions.R :: fix_weird_pass_plays``.
+    Only ever forces ``pass`` from ``1`` to ``0`` on the fixed
+    :data:`_WEIRD_PASS_FALSE_POSITIVES` game_id/play_id list; never sets
+    ``pass`` to ``1``.
+
+    Args:
+        df: A play-level frame carrying (a subset of) ``game_id``,
+            ``play_id``, ``pass``.
+
+    Returns:
+        ``df`` unchanged if empty or if ``pass`` / ``game_id`` / ``play_id``
+        aren't all present — see the module docstring: the native Shield
+        pipeline doesn't (yet) produce a standalone ``pass`` 0/1 column, so
+        this is currently always a documented no-op in the real build
+        pipeline, exercised directly by its unit tests. Otherwise ``df`` with
+        ``pass`` zeroed on the matching rows.
+    """
+    if df.height == 0:
+        return df
+
+    required = {"game_id", "play_id", "pass"}
+    if not required <= set(df.columns):
+        return df
+
+    combined_id = pl.concat_str(
+        [pl.col("game_id"), pl.col("play_id").cast(pl.Int64).cast(pl.Utf8)], separator="_"
+    )
+    return df.with_columns(
+        **{
+            "pass": pl.when(combined_id.is_in(_WEIRD_PASS_FALSE_POSITIVES))
+            .then(0)
+            .otherwise(pl.col("pass"))
+        }
     )

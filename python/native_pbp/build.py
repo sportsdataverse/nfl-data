@@ -17,7 +17,7 @@ from native_pbp.description import add_description_features
 from native_pbp.features import add_game_state
 from native_pbp.labels import add_labels
 from native_pbp.parse import parse_game
-from native_pbp.repairs import apply_game_repairs
+from native_pbp.repairs import apply_game_repairs, fix_scrambles, fix_weird_pass_plays
 
 
 def build_pbp(
@@ -44,6 +44,17 @@ def build_pbp(
         return df
     df = apply_game_repairs(df)
     df = add_description_features(df)
+    # fix_scrambles runs right after qb_scramble is string-detected from desc
+    # (add_description_features) and before play_type/qb_dropback would be
+    # re-derived from it downstream — matching nflfastR's ordering (reference
+    # §2): the 1999-2005 charting-data backfill only flips the qb_scramble
+    # flag, it must not retroactively change anything computed from the
+    # un-fixed value. fix_weird_pass_plays is nflfastR's clean_pbp-era `pass`
+    # override (reference §3); it is a documented no-op here today because the
+    # native frame has no standalone `pass` 0/1 column yet — see repairs.py's
+    # module docstring.
+    df = fix_scrambles(df)
+    df = fix_weird_pass_plays(df)
     df = add_game_state(df, roof=roof, spread_line=spread_line)
     df = add_labels(df, game)
     # Drop TIMEOUT rows (timeouts + two-minute warnings) to match nflverse's row

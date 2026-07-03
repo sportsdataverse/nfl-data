@@ -1,14 +1,23 @@
-"""Tests for the nflfastR hardcoded-game repair layer (fix_bad_games / fix_posteams).
+"""Tests for the nflfastR hardcoded-game repair layer (fix_bad_games / fix_posteams /
+fix_scrambles / fix_weird_pass_plays).
 
 Reference: ``docs/superpowers/plans/2026-07-03-nflfastr-parity-reference.md`` §1
-(``helper_scrape_nfl.R :: fix_bad_games`` + ``fix_posteams``).
+(``helper_scrape_nfl.R :: fix_bad_games`` + ``fix_posteams``), §2
+(``helper_add_nflscrapr_mutations.R :: fix_scrambles``), §3
+(``helper_additional_functions.R :: fix_weird_pass_plays``).
 """
 from __future__ import annotations
 
 import polars as pl
 from polars.testing import assert_frame_equal
 
-from native_pbp.repairs import apply_game_repairs, fix_bad_games, fix_posteams
+from native_pbp.repairs import (
+    apply_game_repairs,
+    fix_bad_games,
+    fix_posteams,
+    fix_scrambles,
+    fix_weird_pass_plays,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -197,3 +206,110 @@ def test_fix_posteams_noop_even_when_column_present():
     )
     out = fix_posteams(df)
     assert out["posteam"].to_list() == ["BUF"]
+
+
+# ---------------------------------------------------------------------------
+# fix_scrambles — 1999-2005 charting-data qb_scramble backfill (vendored
+# scramble_fix.csv, §2)
+# ---------------------------------------------------------------------------
+
+def test_fix_scrambles_backfills_row_in_vendored_list():
+    # 1999_01_MIN_ATL_133 is a real row from the vendored scramble_fix.csv.
+    df = pl.DataFrame(
+        {
+            "season": [1999, 1999],
+            "game_id": ["1999_01_MIN_ATL", "1999_01_MIN_ATL"],
+            "play_id": [133.0, 999999.0],
+            "qb_scramble": [0, 0],
+        }
+    )
+    out = fix_scrambles(df)
+    assert out["qb_scramble"].to_list() == [1, 0]
+
+
+def test_fix_scrambles_noop_for_season_after_2005():
+    # min(season) > 2005 -> R's early-return -> untouched, even though the key
+    # format would otherwise match (it doesn't here, but the season gate must
+    # fire before any lookup is attempted).
+    df = pl.DataFrame(
+        {
+            "season": [2010],
+            "game_id": ["2010_01_MIN_ATL"],
+            "play_id": [133.0],
+            "qb_scramble": [0],
+        }
+    )
+    assert_frame_equal(fix_scrambles(df), df)
+
+
+def test_fix_scrambles_preserves_existing_flag_when_not_in_list():
+    df = pl.DataFrame(
+        {
+            "season": [1999],
+            "game_id": ["1999_01_MIN_ATL"],
+            "play_id": [999999.0],
+            "qb_scramble": [1],
+        }
+    )
+    out = fix_scrambles(df)
+    # already 1 and not in the fix list -> untouched (still 1, not flipped to 0).
+    assert out["qb_scramble"].to_list() == [1]
+
+
+def test_fix_scrambles_noop_without_required_columns():
+    df = pl.DataFrame({"season": [1999], "game_id": ["1999_01_MIN_ATL"]})
+    assert_frame_equal(fix_scrambles(df), df)
+
+
+def test_fix_scrambles_noop_on_empty_frame():
+    df = pl.DataFrame(
+        schema={"season": pl.Int64, "game_id": pl.Utf8, "play_id": pl.Float64, "qb_scramble": pl.Int64}
+    )
+    assert_frame_equal(fix_scrambles(df), df)
+
+
+# ---------------------------------------------------------------------------
+# fix_weird_pass_plays — hardcoded 15-row false-positive override (§3)
+# ---------------------------------------------------------------------------
+
+def test_fix_weird_pass_plays_zeroes_known_false_positive():
+    df = pl.DataFrame(
+        {
+            "game_id": ["1999_01_ARI_PHI", "1999_01_ARI_PHI"],
+            "play_id": [1611.0, 42.0],
+            "pass": [1, 1],
+        }
+    )
+    out = fix_weird_pass_plays(df)
+    assert out["pass"].to_list() == [0, 1]
+
+
+def test_fix_weird_pass_plays_never_sets_pass_to_one():
+    # A false-positive row whose pass was already 0 stays 0 (fifelse only ever
+    # forces 1 -> 0, never the reverse).
+    df = pl.DataFrame(
+        {
+            "game_id": ["2020_10_BAL_NE"],
+            "play_id": [2013.0],
+            "pass": [0],
+        }
+    )
+    out = fix_weird_pass_plays(df)
+    assert out["pass"].to_list() == [0]
+
+
+def test_fix_weird_pass_plays_noop_without_pass_column():
+    # The native pipeline does not (yet) produce a standalone pass 0/1 column
+    # (see module docstring) -- must no-op rather than raise.
+    df = pl.DataFrame(
+        {
+            "game_id": ["1999_01_ARI_PHI"],
+            "play_id": [1611.0],
+        }
+    )
+    assert_frame_equal(fix_weird_pass_plays(df), df)
+
+
+def test_fix_weird_pass_plays_noop_on_empty_frame():
+    df = pl.DataFrame(schema={"game_id": pl.Utf8, "play_id": pl.Float64, "pass": pl.Int64})
+    assert_frame_equal(fix_weird_pass_plays(df), df)

@@ -30,7 +30,12 @@ quirks of nflfastR's *own* raw source, which this port does not share:
   ``driveChart.plays[].stats[]``-shaped across every season back to 1999
   (verified against the committed 1999 fixture), so one code path already
   handles every season — no branch needed.
+- **``playDeleted`` guard ADDED** (no equivalent in the R source, whose raw
+  feed doesn't carry deleted plays): deleted plays are skipped, matching
+  :func:`native_pbp.parse.parse_game`, so this table never emits a
+  ``(game_id, play_id)`` with no matching row in the wide pbp frame.
 """
+
 from __future__ import annotations
 
 import json
@@ -112,6 +117,10 @@ def build_playstats_frame(
 
     rows: List[Dict[str, Any]] = []
     for p in plays:
+        if p.get("playDeleted"):
+            # Same guard as parse_game: a deleted play's stats must not emit
+            # rows with no matching (game_id, play_id) in the wide pbp frame.
+            continue
         play_id = p.get("playId")
         for entry in p.get("stats") or []:
             try:
@@ -138,20 +147,14 @@ def build_playstats_frame(
     if not rows:
         return pl.DataFrame(schema=PLAYSTATS_SCHEMA)
 
-    # Build from row-dicts, then cast explicitly -- a column that happens to be
-    # all-None in every row for this game (e.g. no team_abbr resolved) would
-    # otherwise infer as pl.Null instead of the documented dtype.
-    df = pl.DataFrame(rows)
-    for col, dtype in PLAYSTATS_SCHEMA.items():
-        if col not in df.columns:
-            df = df.with_columns(pl.lit(None, dtype=dtype).alias(col))
-    df = df.select(list(PLAYSTATS_SCHEMA)).cast(PLAYSTATS_SCHEMA)
+    # Build from row-dicts (every dict carries all 9 keys), then cast
+    # explicitly -- a column that happens to be all-None in every row for this
+    # game (e.g. no team_abbr resolved) would otherwise infer as pl.Null.
+    df = pl.DataFrame(rows).select(list(PLAYSTATS_SCHEMA)).cast(PLAYSTATS_SCHEMA)
 
     # R's final step: coerce empty-string character columns to NA/null.
     str_cols = [c for c, dtype in PLAYSTATS_SCHEMA.items() if dtype == pl.Utf8]
-    df = df.with_columns(
-        [pl.when(pl.col(c) == "").then(None).otherwise(pl.col(c)).alias(c) for c in str_cols]
-    )
+    df = df.with_columns([pl.when(pl.col(c) == "").then(None).otherwise(pl.col(c)).alias(c) for c in str_cols])
     return df
 
 

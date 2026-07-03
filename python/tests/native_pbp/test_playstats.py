@@ -11,6 +11,7 @@ Two fixture strategies, matching the repo's established pattern:
   and skipped when the file isn't present (matches the existing convention;
   20 integration tests are already deselected by default in this suite).
 """
+
 from __future__ import annotations
 
 import json
@@ -20,6 +21,8 @@ import polars as pl
 import pytest
 
 from native_pbp.cli import build_parser
+from native_pbp.cli import build_playstats_season as cli_build_playstats_season
+from native_pbp.cli import main as cli_main
 from native_pbp.playstats import (
     PLAYSTATS_SCHEMA,
     build_playstats_frame,
@@ -32,6 +35,7 @@ GAME = Path(__file__).resolve().parents[2] / "nfl" / "raw" / "2024" / "2024_01_B
 # ---------------------------------------------------------------------------
 # Minimal synthetic Shield game payload
 # ---------------------------------------------------------------------------
+
 
 def _make_game() -> dict:
     """A 2024 KC(home)@... wait: BAL(home)/KC(away) synthetic game, 3 plays.
@@ -98,13 +102,22 @@ def _make_game() -> dict:
                     ],
                 },
                 {
-                    # Deleted play with an empty stats array -- contributes 0 rows,
-                    # matching the real Shield feed's deleted-play shape.
+                    # Deleted play carrying a NON-empty stats array -- must
+                    # contribute 0 rows (playDeleted guard, parity with
+                    # parse_game, which also skips deleted plays).
                     "playId": 103,
                     "playSequenceNumber": 5,
                     "playType": "UNSPECIFIED",
                     "playDeleted": True,
-                    "stats": [],
+                    "stats": [
+                        {
+                            "statType": 10,
+                            "yards": 99,
+                            "gsisPlayerId": "00-0009999",
+                            "gsisPlayerName": "Ghost Runner",
+                            "teamId": "away-uuid",
+                        },
+                    ],
                 },
             ],
         },
@@ -115,18 +128,30 @@ def _make_game() -> dict:
 # Schema + row-count
 # ---------------------------------------------------------------------------
 
+
 def test_schema_columns_and_dtypes_match_reference():
     df = build_playstats_frame(_make_game(), "2024_01_KC_BAL")
     assert list(df.columns) == list(PLAYSTATS_SCHEMA)
     assert df.schema == PLAYSTATS_SCHEMA
 
 
-def test_row_count_equals_total_stats_entries():
+def test_row_count_equals_total_stats_entries_on_non_deleted_plays():
     game = _make_game()
-    total = sum(len(p.get("stats") or []) for p in game["driveChart"]["plays"])
+    total = sum(
+        len(p.get("stats") or [])
+        for p in game["driveChart"]["plays"]
+        if not p.get("playDeleted")
+    )
     df = build_playstats_frame(game, "2024_01_KC_BAL")
     assert total == 3
     assert df.height == total
+
+
+def test_deleted_play_with_stats_emits_no_rows():
+    """A deleted play carrying stat entries must NOT produce phantom rows
+    (rows with no matching (game_id, play_id) in the wide pbp frame)."""
+    df = build_playstats_frame(_make_game(), "2024_01_KC_BAL")
+    assert df.filter(pl.col("play_id") == 103).height == 0
 
 
 def test_empty_game_returns_zero_row_schema_frame():
@@ -138,6 +163,7 @@ def test_empty_game_returns_zero_row_schema_frame():
 # ---------------------------------------------------------------------------
 # Known rows
 # ---------------------------------------------------------------------------
+
 
 def test_known_rush_row_resolves_team_and_player():
     df = build_playstats_frame(_make_game(), "2024_01_KC_BAL")
@@ -182,6 +208,7 @@ def test_empty_string_names_coerced_to_null():
 # Season build (mirrors build.py::build_season's directory-iteration pattern)
 # ---------------------------------------------------------------------------
 
+
 def test_build_playstats_season_concatenates_games(tmp_path):
     season_dir = tmp_path / "raw" / "2024"
     season_dir.mkdir(parents=True)
@@ -218,13 +245,62 @@ def test_build_playstats_season_game_ids_subset(tmp_path):
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def test_cli_registers_build_playstats_subcommand():
-    args = build_parser().parse_args(
-        ["build-playstats", "--seasons", "2024", "--out", "out"]
-    )
+    args = build_parser().parse_args(["build-playstats", "--seasons", "2024", "--out", "out"])
     assert args.cmd == "build-playstats"
     assert args.seasons == "2024"
     assert args.out == "out"
+
+
+# CLI I/O path (cli.build_playstats_season) — mirrors test_cli.py's
+# build_season I/O tests (creates parquet / filename / out-dir / empty season).
+
+
+def _seed_raw_dir(tmp_path, season: int = 2024):
+    season_dir = tmp_path / str(season)
+    season_dir.mkdir(parents=True)
+    (season_dir / f"{season}_01_KC_BAL.json").write_text(json.dumps(_make_game()), encoding="utf-8")
+    return tmp_path
+
+
+def test_cli_build_playstats_season_creates_parquet(tmp_path):
+    raw_dir = _seed_raw_dir(tmp_path / "raw")
+    out_path = cli_build_playstats_season(2024, raw_dir=raw_dir, out_dir=tmp_path / "out")
+    assert out_path.name == "play_stats_2024.parquet"
+    assert out_path.exists()
+    df = pl.read_parquet(out_path)
+    assert df.height == 3
+    assert df.schema == PLAYSTATS_SCHEMA
+
+
+def test_cli_build_playstats_season_creates_out_dir_if_missing(tmp_path):
+    raw_dir = _seed_raw_dir(tmp_path / "raw")
+    out_dir = tmp_path / "nested" / "deep" / "out"
+    assert not out_dir.exists()
+    cli_build_playstats_season(2024, raw_dir=raw_dir, out_dir=out_dir)
+    assert out_dir.exists()
+
+
+def test_cli_build_playstats_season_empty_season_writes_empty_parquet(tmp_path):
+    raw_dir = tmp_path / "raw"
+    (raw_dir / "2024").mkdir(parents=True)
+    out_path = cli_build_playstats_season(2024, raw_dir=raw_dir, out_dir=tmp_path / "out")
+    assert out_path.exists()
+    df = pl.read_parquet(out_path)
+    assert df.height == 0
+    assert df.schema == PLAYSTATS_SCHEMA
+
+
+def test_cli_main_dispatches_build_playstats(tmp_path, capsys):
+    raw_dir = _seed_raw_dir(tmp_path / "raw")
+    out_dir = tmp_path / "out"
+    rc = cli_main(
+        ["build-playstats", "--seasons", "2024", "--raw-dir", str(raw_dir), "--out", str(out_dir)]
+    )
+    assert rc == 0
+    assert (out_dir / "play_stats_2024.parquet").exists()
+    assert "play_stats_2024.parquet" in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +308,7 @@ def test_cli_registers_build_playstats_subcommand():
 # this class (not the whole module) so the hermetic tests above always collect
 # and run regardless of fixture availability (matches test_parse.py's pattern).
 # ---------------------------------------------------------------------------
+
 
 class TestRealGamePlaystats:
     pytestmark = [
@@ -248,7 +325,11 @@ class TestRealGamePlaystats:
 
     def test_row_count_matches_total_stats_entries(self):
         game = self._game()
-        total = sum(len(p.get("stats") or []) for p in game["driveChart"]["plays"])
+        total = sum(
+            len(p.get("stats") or [])
+            for p in game["driveChart"]["plays"]
+            if not p.get("playDeleted")
+        )
         df = self._frame()
         # default stat_ids=1:1000 covers every known GSIS code in this corpus.
         assert df.height == total

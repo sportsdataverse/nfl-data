@@ -47,6 +47,7 @@ def _row(
     quarter_seconds_remaining: Optional[int] = None,
     game_seconds_remaining: Optional[int] = None,
     yards_gained: int = 0,
+    shield_play_type: Optional[str] = None,
 ) -> dict[str, Any]:
     return {
         "game_id": game_id,
@@ -77,6 +78,7 @@ def _row(
         "quarter_seconds_remaining": quarter_seconds_remaining,
         "game_seconds_remaining": game_seconds_remaining,
         "yards_gained": yards_gained,
+        "shield_play_type": shield_play_type,
     }
 
 
@@ -187,6 +189,143 @@ def test_kickoff_after_safety_starts_new_drive():
     )
     out = add_drive_detail(df)
     assert out["fixed_drive"].to_list() == [1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Rule 3: PAT after a defensive TD stays the same drive even with exactly ONE
+# intervening Timeout / Two-Minute-Warning row (lag-2 TD, lag-1 timeout desc).
+# ---------------------------------------------------------------------------
+
+
+def test_rule3_pat_after_defensive_td_with_one_timeout_gap_stays_same_drive():
+    df = _frame(
+        [
+            # BUF has the ball; NYJ picks it off and scores (defensive TD).
+            _row(
+                play_seq=1,
+                posteam="BUF",
+                defteam="NYJ",
+                play_type="pass",
+                interception=1,
+                touchdown=1,
+                td_team="NYJ",
+            ),
+            # ONE timeout marker row in between (null posteam, timeout desc).
+            _row(
+                play_seq=2,
+                posteam=None,
+                defteam=None,
+                play_type=None,
+                desc="Timeout #1 by NYJ at 05:00.",
+                shield_play_type="TIMEOUT",
+            ),
+            # NYJ (the scoring team) attempts the PAT: without rule 3 the base
+            # rule's tier-2 lookback (posteam != lag2, lag1 null) would flag this
+            # as a new drive.
+            _row(play_seq=3, posteam="NYJ", defteam="BUF", play_type="extra_point"),
+        ]
+    )
+    out = add_drive_detail(df)
+    assert out["fixed_drive"].to_list() == [1, 1, 1]
+
+
+# ---------------------------------------------------------------------------
+# Rule 4: same exception with exactly TWO intervening Timeout/2-min-warning
+# rows (lag-3 TD, timeout descs at lag-1 AND lag-2).
+# ---------------------------------------------------------------------------
+
+
+def test_rule4_pat_after_defensive_td_with_two_timeout_gaps_stays_same_drive():
+    df = _frame(
+        [
+            _row(
+                play_seq=1,
+                posteam="BUF",
+                defteam="NYJ",
+                play_type="pass",
+                interception=1,
+                touchdown=1,
+                td_team="NYJ",
+            ),
+            _row(
+                play_seq=2,
+                posteam=None,
+                defteam=None,
+                play_type=None,
+                desc="Timeout #1 by NYJ at 05:00.",
+                shield_play_type="TIMEOUT",
+            ),
+            _row(
+                play_seq=3,
+                posteam=None,
+                defteam=None,
+                play_type=None,
+                desc="Two-Minute Warning.",
+                shield_play_type="TIMEOUT",
+            ),
+            # Without rule 4 the base rule's tier-3 lookback (posteam != lag3,
+            # lag1 AND lag2 null) would flag the PAT as a new drive.
+            _row(play_seq=4, posteam="NYJ", defteam="BUF", play_type="extra_point"),
+        ]
+    )
+    out = add_drive_detail(df)
+    assert out["fixed_drive"].to_list() == [1, 1, 1, 1]
+
+
+# ---------------------------------------------------------------------------
+# Rule 5, 2-play-back mirror: fumble retained by the same team, with ONE
+# intervening null-posteam row between the fumble and the retaining play.
+# ---------------------------------------------------------------------------
+
+
+def test_rule5_mirror_fumble_retained_across_null_posteam_gap_starts_new_drive():
+    df = _frame(
+        [
+            _row(play_seq=1, posteam="BUF", defteam="NYJ", play_type="run", fumble_lost=1, touchdown=0),
+            # Intervening null-posteam row (a timeout; NOT a TD at lag-2, so
+            # rules 3/4 stay silent).
+            _row(
+                play_seq=2,
+                posteam=None,
+                defteam=None,
+                play_type=None,
+                desc="Timeout #1 by BUF at 08:00.",
+                shield_play_type="TIMEOUT",
+            ),
+            # BUF still has the ball: base rule sees posteam == lag2 (no change),
+            # so only rule 5's mirror branch can flag the new drive.
+            _row(play_seq=3, posteam="BUF", defteam="NYJ", play_type="run"),
+        ]
+    )
+    out = add_drive_detail(df)
+    assert out["fixed_drive"].to_list() == [1, 1, 2]
+
+
+# ---------------------------------------------------------------------------
+# Rule 8, 2-play-back mirror: kickoff after a safety with a null/"no_play" row
+# (timeout) between the safety and the kickoff.
+# ---------------------------------------------------------------------------
+
+
+def test_rule8_mirror_kickoff_after_safety_with_no_play_gap_starts_new_drive():
+    df = _frame(
+        [
+            _row(play_seq=1, posteam="BUF", defteam="NYJ", play_type="run", safety=1),
+            # Intervening "no_play" row: rule 8's direct branch (safety at lag-1)
+            # does NOT fire on the kickoff; only the lag-2 mirror can.
+            _row(
+                play_seq=2,
+                posteam="BUF",
+                defteam="NYJ",
+                play_type="no_play",
+                desc="Timeout #2 by NYJ at 02:00.",
+                shield_play_type="TIMEOUT",
+            ),
+            _row(play_seq=3, posteam="BUF", defteam="NYJ", play_type="kickoff", kickoff_attempt=1),
+        ]
+    )
+    out = add_drive_detail(df)
+    assert out["fixed_drive"].to_list() == [1, 1, 2]
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +471,53 @@ def test_drive_start_transition_is_previous_drives_end_transition():
     )
     out = add_drive_detail(df)
     assert out["drive_start_transition"].to_list() == [None, "Punt"]
+
+
+def test_marker_rows_excluded_from_drive_summary_aggregates():
+    # A drive of 2 real plays followed by a TIMEOUT marker row (the rows
+    # build.py drops AFTER add_drive_detail runs): the marker must not count
+    # toward drive_play_count, and the drive's "last" aggregates (clock end,
+    # play_id ended) must come from the last REAL play, not the marker row.
+    df = _frame(
+        [
+            _row(
+                play_seq=1,
+                posteam="BUF",
+                defteam="NYJ",
+                play_type="run",
+                play_id=101,
+                quarter_seconds_remaining=900,
+                game_seconds_remaining=3600,
+            ),
+            _row(
+                play_seq=2,
+                posteam="BUF",
+                defteam="NYJ",
+                play_type="pass",
+                play_id=102,
+                quarter_seconds_remaining=840,
+                game_seconds_remaining=3540,
+            ),
+            _row(
+                play_seq=3,
+                posteam=None,
+                defteam=None,
+                play_type=None,
+                desc="Timeout #1 by BUF at 13:20.",
+                shield_play_type="TIMEOUT",
+                play_id=103,
+                quarter_seconds_remaining=800,
+                game_seconds_remaining=3500,
+            ),
+        ]
+    )
+    out = add_drive_detail(df)
+    assert out["fixed_drive"].to_list() == [1, 1, 1]  # marker stays IN the drive...
+    assert out["drive_play_count"].to_list() == [2, 2, 2]  # ...but is not a play
+    # Last aggregates come from play_id 102 (the last real play), not the marker.
+    assert out["drive_play_id_ended"].to_list() == [102, 102, 102]
+    assert out["drive_game_clock_end"].to_list() == ["14:00", "14:00", "14:00"]
+    assert out["drive_time_of_possession"].to_list() == ["1:00", "1:00", "1:00"]
 
 
 # ---------------------------------------------------------------------------

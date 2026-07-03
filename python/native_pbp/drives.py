@@ -22,6 +22,16 @@ equivalent for each one (documented per-column below), grouped by
 ``fixed_drive`` / ``fixed_drive_result`` (and, per ``helper_scrape_gc.R`` lines
 288/290, ``drive_play_id_started``/``drive_play_id_ended`` — those two ARE a
 ``min``/``max`` group_by aggregate even in the R source) are exact ports.
+
+Marker rows (``shield_play_type == "TIMEOUT"`` — timeouts + two-minute
+warnings, the rows ``build.py`` drops from the final frame AFTER this module
+runs) are **excluded from the drive-summary aggregation only**: they are not
+plays, so they must not inflate ``drive_play_count`` or supply a drive's
+first/last clock/yardline/play_id aggregate. The ``new_drive`` cascade, by
+contrast, MUST keep seeing them — rules 3/4 key on Timeout/Two-Minute-Warning
+rows at specific lags — so the exclusion is scoped to
+:func:`_add_drive_summary` alone. A drive consisting solely of marker rows
+(degenerate) gets null aggregates via the left join.
 """
 from __future__ import annotations
 
@@ -168,11 +178,16 @@ def drive_level_tmp_result(pos: pl.Expr) -> pl.Expr:
     )
 
 
-def _last_or_first_result(df: pl.DataFrame, group: list[str], tmp_col: str, out_col: str) -> pl.DataFrame:
+def last_or_first_result(df: pl.DataFrame, group: list[str], tmp_col: str, out_col: str) -> pl.DataFrame:
     """group_by-join resolution: last non-null ``tmp_col`` per ``group``, unless
     that last value is ``"End of half"`` -- then use the FIRST non-null value
     instead. Mirrors ``dplyr::if_else(last(na.omit(x)) == "End of half",
     first(na.omit(x)), last(na.omit(x)))`` from both §7 and §8.
+
+    Deliberately shared API between :mod:`native_pbp.drives` (for
+    ``fixed_drive_result``) and :mod:`native_pbp.series` (for
+    ``series_result``) -- the two R helpers use the identical resolution
+    pattern, so the port keeps one implementation.
     """
     agg = (
         df.select([*group, tmp_col])
@@ -215,7 +230,7 @@ def add_drive_detail(df: pl.DataFrame) -> pl.DataFrame:
     if df.height == 0 or not _REQUIRED_DRIVE_COLUMNS <= set(df.columns):
         return df.with_columns(**{c: pl.lit(None, dtype=t) for c, t in _OUTPUT_SCHEMA.items()})
 
-    df = df.sort("play_seq")
+    df = df.sort(["game_id", "play_seq"])
     # strict=False: some callers' ``play_id`` (or other numeric-ish columns) may
     # not be cleanly numeric (e.g. synthetic test fixtures) -- degenerate input
     # must never raise, so a non-numeric value becomes null rather than an error.
@@ -301,7 +316,7 @@ def add_drive_detail(df: pl.DataFrame) -> pl.DataFrame:
 
     df = df.with_columns(fixed_drive=pl.col("_new_drive").cum_sum().over("game_id").cast(pl.Int64))
     df = df.with_columns(_tmp_result=drive_level_tmp_result(pos))
-    df = _last_or_first_result(df, _DRIVE_GROUP, "_tmp_result", "fixed_drive_result")
+    df = last_or_first_result(df, _DRIVE_GROUP, "_tmp_result", "fixed_drive_result")
 
     df = df.drop("_swap", "_new_drive", "_row", "_tmp_result")
     df = _add_drive_summary(df)
@@ -312,6 +327,12 @@ def _add_drive_summary(df: pl.DataFrame) -> pl.DataFrame:
     """Aggregate-from-plays ``drive_*`` detail columns, grouped by
     ``(game_id, fixed_drive)`` -- see the module docstring for why these are
     derived here rather than lifted from a raw per-drive provider payload.
+
+    Marker rows (``shield_play_type == "TIMEOUT"`` -- the rows ``build.py``
+    later drops) are excluded from the aggregation: they aren't plays, so they
+    must not count toward ``drive_play_count`` or supply a first/last
+    clock/yardline/play_id. The exclusion lives here (not upstream) because
+    the ``new_drive`` cascade needs those rows at specific lags (rules 3/4).
     """
     grp = _DRIVE_GROUP
     df = df.with_columns(
@@ -327,7 +348,14 @@ def _add_drive_summary(df: pl.DataFrame) -> pl.DataFrame:
         .otherwise(None),
     )
 
-    summary = df.group_by(grp, maintain_order=True).agg(
+    # Aggregate only over real plays; the marker rows still receive the drive's
+    # summary values via the join below (they carry the same fixed_drive).
+    if "shield_play_type" in df.columns:
+        real_plays = df.filter(pl.col("shield_play_type").fill_null("") != "TIMEOUT")
+    else:
+        real_plays = df
+
+    summary = real_plays.group_by(grp, maintain_order=True).agg(
         drive_play_count=pl.len().cast(pl.Int64),
         drive_first_downs=pl.col("_fd_play").sum().cast(pl.Int64),
         drive_inside20=(pl.col("yardline_100").min() <= 20).fill_null(False).cast(pl.Int64),

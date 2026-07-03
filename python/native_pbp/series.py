@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import polars as pl
 
-from native_pbp.drives import _last_or_first_result, swapped_posteam
+from native_pbp.drives import last_or_first_result, swapped_posteam
 
 _HALF_GROUP = ["game_id", "game_half"]
 _SERIES_GROUP = ["game_id", "series"]
@@ -117,7 +117,7 @@ def add_series_data(df: pl.DataFrame) -> pl.DataFrame:
     if df.height == 0 or not _REQUIRED_SERIES_COLUMNS <= set(df.columns):
         return df.with_columns(**{c: pl.lit(None, dtype=t) for c, t in _OUTPUT_SCHEMA.items()})
 
-    df = df.sort("play_seq")
+    df = df.sort(["game_id", "play_seq"])
     g = _HALF_GROUP
 
     df = df.with_columns(_row=pl.int_range(0, pl.len()).over(g))
@@ -134,7 +134,7 @@ def add_series_data(df: pl.DataFrame) -> pl.DataFrame:
 
     df = df.with_columns(_swap=swapped_posteam(df))
     df = df.with_columns(_tmp_result=_series_tmp_result(pl.col("_swap")))
-    df = _last_or_first_result(df, _SERIES_GROUP, "_tmp_result", "series_result")
+    df = last_or_first_result(df, _SERIES_GROUP, "_tmp_result", "series_result")
 
     df = df.with_columns(
         series_success=pl.when(pl.col("series_result").is_in(["Touchdown", "First down"]))

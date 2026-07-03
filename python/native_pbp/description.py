@@ -101,6 +101,13 @@ def add_pass_rush(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         ``df`` with ``pass`` and ``rush`` (Int64 0/1) added. Unchanged if
         empty or if any required input column is absent.
+
+    Note:
+        The sdv-py sibling port (``sportsdataverse/nfl/nfl_clean.py``) derives
+        ``pass``/``rush`` from the CLEANED ``rusher`` column, while this module
+        uses the raw ``rusher_player_name``; the two can theoretically diverge
+        on lateral/direct-snap plays, where the abnormal-play overwrite can null
+        the cleaned ``rusher`` without ``pass`` being forced to 1.
     """
     if df.height == 0:
         return df

@@ -1,4 +1,5 @@
-﻿"""End-to-end native PBP build tests + REQUIRED_COLUMNS contract check."""
+"""End-to-end native PBP build tests + REQUIRED_COLUMNS contract check."""
+
 from __future__ import annotations
 
 import json
@@ -66,3 +67,21 @@ def test_pass_location_populated_on_completions():
     locs = set(comp.filter(pl.col("pass_location").is_not_null())["pass_location"].unique().to_list())
     assert locs <= {"left", "middle", "right"}
     assert len(locs) >= 2  # a real game has passes to multiple locations
+
+
+def test_build_pipeline_ordering_contract():
+    """Pin the build.py step order (parse -> ... -> add_labels -> add_drive_detail
+    -> add_series_data). add_drive_detail/add_series_data return typed nulls
+    instead of raising when a required column is missing (drives.py/series.py),
+    so a future reorder or upstream column rename would silently null
+    fixed_drive/series/drive columns across the whole game while every other
+    test stayed green. This asserts the columns those two steps produce are
+    actually populated on a real game."""
+    df = _df()
+    assert df["fixed_drive"].null_count() == 0
+    fixed_drive = df["fixed_drive"].to_list()
+    assert fixed_drive == sorted(fixed_drive)  # monotone non-decreasing within the game
+    assert df["series"].null_count() == 0
+    assert set(df["pass"].unique().to_list()) == {0, 1}
+    assert set(df["rush"].unique().to_list()) == {0, 1}
+    assert df["qb_dropback"].null_count() == 0

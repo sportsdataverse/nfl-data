@@ -528,6 +528,9 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
     # for the first 100+ plays in many games, which would otherwise be inferred as
     # Null dtype and then fail when a later string value appears.
     df = pl.DataFrame(rows, infer_schema_length=None)
+    # Native orders by play_seq; nflfastR's arrange() puts NA-clock rows first
+    # within quarter -- no ported rule depends on that ordering (verified in
+    # the final whole-branch review).
     df = df.sort("play_seq")
     df = _add_special_teams_derivations(df)
     return df

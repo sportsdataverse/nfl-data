@@ -11,6 +11,8 @@ Modules (build order):
     description -- play-text regex layer (pass_location, run_location, penalties)
     features    -- timeouts, score_differential, game_half, seconds, roof, era, spread join
     labels      -- EP/WP/CP label sources (sp/touchdown/td_team/field_goal_result/safety/result)
+    drives      -- fixed_drive / fixed_drive_result + drive_* detail columns
+    series      -- series / series_result / series_success
     parity      -- diff vs sportsdataverse.load_nfl_pbp for sample games
 """
 from __future__ import annotations

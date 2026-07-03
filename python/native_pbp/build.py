@@ -13,11 +13,13 @@ from typing import Any, Dict, List, Optional
 
 import polars as pl
 
-from native_pbp.description import add_description_features, add_pass_rush
+from native_pbp.description import add_description_features, add_pass_rush, add_qb_dropback
+from native_pbp.drives import add_drive_detail
 from native_pbp.features import add_game_state
 from native_pbp.labels import add_labels
 from native_pbp.parse import parse_game
 from native_pbp.repairs import apply_game_repairs, fix_scrambles
+from native_pbp.series import add_series_data
 
 
 def build_pbp(
@@ -56,8 +58,17 @@ def build_pbp(
     # pass and rush derivations — nflfastR's exact position.
     df = fix_scrambles(df)
     df = add_pass_rush(df)
+    df = add_qb_dropback(df)
     df = add_game_state(df, roof=roof, spread_line=spread_line)
     df = add_labels(df, game)
+    # add_drive_detail (fixed_drive/fixed_drive_result/drive_*) must run after
+    # add_labels (field_goal_result is a labels-stage column); add_series_data
+    # must run after add_drive_detail (its "new drive" branch reads fixed_drive)
+    # — matching nflfastR's own pipeline order: add_drive_results() |> add_series_data()
+    # (reference §7/§8), both AFTER the EP/WP/CP model application step this
+    # lighter-weight reconstruction pipeline doesn't perform.
+    df = add_drive_detail(df)
+    df = add_series_data(df)
     # Drop TIMEOUT rows (timeouts + two-minute warnings) to match nflverse's row
     # set — done AFTER add_game_state so the timeout cumsum already counted them.
     # fill_null keeps rows whose shield_play_type is null (null != "TIMEOUT" is null

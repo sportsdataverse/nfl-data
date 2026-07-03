@@ -10,7 +10,7 @@ from __future__ import annotations
 import polars as pl
 from polars.testing import assert_frame_equal
 
-from native_pbp.description import add_pass_rush
+from native_pbp.description import add_pass_rush, add_qb_dropback
 
 
 def _frame(**overrides: object) -> pl.DataFrame:
@@ -165,3 +165,30 @@ def test_add_pass_rush_noop_on_empty_frame():
         }
     )
     assert_frame_equal(add_pass_rush(df), df)
+
+
+# ---------------------------------------------------------------------------
+# qb_dropback (reference §14): 1 when pass == 1 or qb_scramble == 1, else 0.
+# ---------------------------------------------------------------------------
+
+
+def test_qb_dropback_truth_table():
+    df = pl.DataFrame(
+        {
+            "pass": [1, 0, 0],
+            "qb_scramble": [0, 1, 0],
+        }
+    )
+    out = add_qb_dropback(df)
+    assert out["qb_dropback"].to_list() == [1, 1, 0]
+    assert out["qb_dropback"].dtype == pl.Int32
+
+
+def test_add_qb_dropback_noop_without_required_columns():
+    df = pl.DataFrame({"game_id": ["2023_01_BUF_NYJ"]})
+    assert_frame_equal(add_qb_dropback(df), df)
+
+
+def test_add_qb_dropback_noop_on_empty_frame():
+    df = pl.DataFrame(schema={"pass": pl.Int64, "qb_scramble": pl.Int64})
+    assert_frame_equal(add_qb_dropback(df), df)

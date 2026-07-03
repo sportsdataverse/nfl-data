@@ -516,7 +516,6 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
     df = pl.DataFrame(rows, infer_schema_length=None)
     df = df.sort("play_seq")
     df = _add_special_teams_derivations(df)
-    df = _add_fixed_drive(df)
     return df
 
 
@@ -587,86 +586,8 @@ def _add_special_teams_derivations(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def _add_fixed_drive(df: pl.DataFrame) -> pl.DataFrame:
-    """Add nflfastR's ``fixed_drive`` — a per-game ascending drive counter.
-
-    Faithful polars port of the new_drive -> ``fixed_drive = cumsum(new_drive)``
-    logic in ``helper_add_fixed_drives.R`` (Carl/Baldwin). ``fixed_drive`` starts
-    at 1 and increments at each new possession; the number is shared across both
-    teams (interleaved). A play inherits the same number through interstitial
-    null-posteam plays (kickoffs / PATs / timeouts) via the look-back rules.
-
-    ``new_drive`` is 1 when:
-
-    * the possession team changes from the prior play (or from the play 2/3 back
-      when the intervening play(s) have a null posteam — the kickoff/PAT gap), or
-    * it is the first play of a half, or
-    * the offense kept the ball after its own lost fumble on a punt/pass/run/FG
-      (a new series), or it recovered an onside kick / muffed return, or
-    * it is a kickoff immediately after a safety.
-
-    It is forced back to 0 for a PAT/2pt that follows a *defensive* touchdown
-    (the try is part of the scoring drive, not a new one).
-
-    Args:
-        df: The sorted (by ``play_seq``) base play frame, carrying ``game_id``,
-            ``game_half``, ``posteam``, ``td_team``, ``touchdown``, ``fumble_lost``,
-            ``safety``, ``kickoff_attempt``, ``own_kickoff_recovery``, ``play_type``.
-
-    Returns:
-        The frame with an Int64 ``fixed_drive`` column added.
-    """
-    if df.height == 0:
-        return df.with_columns(fixed_drive=pl.lit(None, dtype=pl.Int64))
-
-    own_ko = pl.col("own_kickoff_recovery") if "own_kickoff_recovery" in df.columns else pl.lit(0)
-    g = ["game_id", "game_half"]
-    pos = pl.col("posteam")
-
-    # Base: possession change, with up to-3-play look-back across null posteams.
-    change = (
-        (pos != pos.shift(1).over(g))
-        | ((pos != pos.shift(2).over(g)) & pos.shift(1).over(g).is_null())
-        | ((pos != pos.shift(3).over(g)) & pos.shift(1).over(g).is_null() & pos.shift(2).over(g).is_null())
-    )
-    df = df.with_columns(_new_drive=change.cast(pl.Int64))
-
-    # PAT/2pt after a defensive TD is NOT a new drive (the try belongs to the
-    # scoring drive). Look back through up to two intervening timeout/TMW plays.
-    prev_def_td = (
-        (pl.col("touchdown").shift(1).over(g) == 1)
-        & (pl.col("posteam").shift(1).over(g) != pl.col("td_team").shift(1).over(g))
-        & pl.col("posteam").shift(1).over(g).is_not_null()
-    )
-    df = df.with_columns(_new_drive=pl.when(prev_def_td).then(pl.lit(0)).otherwise(pl.col("_new_drive")))
-
-    # Same team retained the ball after its own lost fumble on a scrimmage/punt play
-    # (and the play was not a TD) -> a new series/drive.
-    retained_after_fumble = (
-        (pos == pos.shift(1).over(g))
-        & (pl.col("fumble_lost").shift(1).over(g) == 1)
-        & pl.col("play_type").shift(1).over(g).is_in(["punt", "pass", "run", "field_goal"])
-        & (pl.col("touchdown").shift(1).over(g) == 0)
-    )
-    df = df.with_columns(_new_drive=pl.when(retained_after_fumble).then(pl.lit(1)).otherwise(pl.col("_new_drive")))
-
-    # Recovered onside kick / muffed return -> new drive.
-    ko_recovery = (pl.col("play_type") == "kickoff") & ((own_ko == 1) | (pl.col("fumble_lost") == 1))
-    # Kickoff right after a safety -> new drive.
-    ko_after_safety = (pl.col("kickoff_attempt") == 1) & (pl.col("safety").shift(1).over(g) == 1)
-    df = df.with_columns(
-        _new_drive=pl.when(ko_recovery | ko_after_safety).then(pl.lit(1)).otherwise(pl.col("_new_drive"))
-    )
-
-    # First play of each half is always a new drive.
-    df = df.with_columns(
-        _row=pl.int_range(0, pl.len()).over(g),
-    ).with_columns(_new_drive=pl.when(pl.col("_row") == 0).then(pl.lit(1)).otherwise(pl.col("_new_drive")))
-
-    # Nulls (from shifts at boundaries) are not new drives.
-    df = df.with_columns(_new_drive=pl.col("_new_drive").fill_null(0))
-    # fixed_drive = cumulative count of new drives within the game.
-    df = df.with_columns(fixed_drive=pl.col("_new_drive").cum_sum().over("game_id").cast(pl.Int64)).drop(
-        "_new_drive", "_row"
-    )
-    return df
+## ``fixed_drive`` (+ ``drive_*`` detail columns) has moved to
+## :func:`native_pbp.drives.add_drive_detail` — the faithful 9-rule §8 cascade
+## needs ``field_goal_result`` (a labels-stage column) and post-description
+## ``play_type``, neither of which exist yet at this point in the pipeline. See
+## ``native_pbp/build.py`` for the new wiring position (after ``add_labels``).

@@ -23,7 +23,16 @@ from native_pbp.stat_ids import sum_play_stats
 
 
 def _clock_to_seconds(clock: Optional[str]) -> Optional[int]:
-    """Convert a ``"MM:SS"`` game clock to integer seconds remaining in the quarter."""
+    """Convert a ``"MM:SS"`` game clock to integer seconds remaining in the quarter.
+
+    Faithful port of ``utils.R :: time_to_seconds`` (reference §4): the R
+    original parses the string with ``strptime(time, "%M:%S")`` and subtracts
+    the ``strptime("0", "%S")`` epoch, which is arithmetically just
+    ``minutes*60 + seconds`` but fails silently to ``NA`` on anything that
+    doesn't parse as ``"MM:SS"``. This never raises on malformed input (empty
+    string, ``None``, non-numeric parts, missing ``":"``) — it returns
+    ``None`` instead, matching ``strptime``'s ``NA``-on-failure semantics.
+    """
     if not clock or ":" not in clock:
         return None
     mm, ss = clock.split(":", 1)
@@ -31,6 +40,49 @@ def _clock_to_seconds(clock: Optional[str]) -> Optional[int]:
         return int(mm) * 60 + int(ss)
     except ValueError:
         return None
+
+
+# Reference §4 Site 2 — helper_scrape_nfl.R :: get_pbp_nfl hardcoded raw-clock-string
+# typo corrections (lines 261-265). Verbatim: exactly these 2 (game_id, play_id) pairs
+# in nflfastR's own raw scrape had a corrupted ``time`` field; the fix is applied to
+# the raw clock string before any seconds-remaining computation touches it.
+_CLOCK_TYPO_FIXES: Dict[tuple[str, int], str] = {
+    ("2012_04_NO_GB", 1085): "3:34",
+    ("2012_16_BUF_MIA", 2571): "8:31",
+}
+
+
+def _apply_clock_typo_fix(game_id: Optional[str], play_id: Optional[int], clock: Optional[str]) -> Optional[str]:
+    """Apply the 2-row hardcoded raw-clock-string correction (reference §4 Site 2)."""
+    if game_id is None or play_id is None:
+        return clock
+    return _CLOCK_TYPO_FIXES.get((game_id, play_id), clock)
+
+
+def _impute_clock(clock: Optional[str], desc: Optional[str]) -> Optional[str]:
+    """Null-clock / marker-row imputation (reference §4 Site 3), applied to the
+    raw display-clock string before :func:`_clock_to_seconds` converts it.
+
+    Two rules, in this exact order (matching ``add_nflscrapr_mutations``'s two
+    sequential ``dplyr::if_else`` calls):
+
+    1. A quarter-end row (``desc`` contains the literal substring
+       ``"END QUARTER"``) OR an ``"END GAME"`` row whose clock is missing ->
+       force ``"00:00"`` (0 seconds remaining in the quarter).
+    2. A synthetic kickoff-of-game marker row (``desc == "GAME"``) -> force
+       ``"15:00"`` (900 seconds remaining — start of Q1).
+
+    A genuinely missing clock on any other row is left as-is (``None``
+    propagates through to ``quarter_seconds_remaining`` unchanged — matching
+    nflfastR, which does not impute a value there).
+    """
+    if desc and "END QUARTER" in desc:
+        clock = "00:00"
+    elif desc == "END GAME" and not clock:
+        clock = "00:00"
+    if desc == "GAME":
+        clock = "15:00"
+    return clock
 
 
 # The feed's ``yardLine`` string uses NFL *gamebook* club abbreviations, which
@@ -91,9 +143,11 @@ def _seconds_remaining(quarter: Optional[int], qsr: Optional[int]) -> tuple[Opti
     elif quarter in (3, 4):
         half = (4 - quarter) * 900 + qsr
         game = (4 - quarter) * 900 + qsr
-    else:  # overtime — regulation exhausted
+    else:  # overtime (qtr >= 5) — reference §4 Site 4: once regulation ends there
+        # is no "game clock" concept, so nflfastR defines game_seconds_remaining
+        # as simply equal to quarter_seconds_remaining (NOT 0) in OT.
         half = qsr
-        game = 0
+        game = qsr
     return half, game
 
 
@@ -397,7 +451,10 @@ def parse_game(game: Dict[str, Any], game_id: Optional[str] = None) -> pl.DataFr
                 stat_row[tcol] = team_by_id[stat_row[tcol]]
 
         quarter = p.get("quarter")
-        qsr = _clock_to_seconds(p.get("clockTime"))
+        play_id = p.get("playId")
+        clock_str = _apply_clock_typo_fix(game_id, play_id, p.get("clockTime"))
+        clock_str = _impute_clock(clock_str, p.get("playDescription"))
+        qsr = _clock_to_seconds(clock_str)
         half_sr, game_sr = _seconds_remaining(quarter, qsr)
         yards_gained = stat_row.get("yards_gained")
         if yards_gained is None:

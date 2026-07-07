@@ -165,6 +165,23 @@ def test_pattern_single_file(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# playstats subcommand — dry-run dispatch is network-free (mirrors pbp)
+# ---------------------------------------------------------------------------
+
+def test_playstats_subcommand_dry_run_matches_glob(tmp_path, capsys):
+    from nfl_model_publish.cli import main
+
+    (tmp_path / "play_stats_2023.parquet").write_bytes(b"ps23")
+    (tmp_path / "play_stats_2024.parquet").write_bytes(b"ps24")
+    (tmp_path / "model_pbp_2024.parquet").write_bytes(b"ignored")  # not matched
+    rc = main(["playstats", "--parquet-dir", str(tmp_path), "--dry-run"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "uploaded=0" in out  # dry-run uploads nothing
+    assert "files=2" in out  # only the two play_stats_*.parquet matched
+
+
+# ---------------------------------------------------------------------------
 # _parse_seasons
 # ---------------------------------------------------------------------------
 

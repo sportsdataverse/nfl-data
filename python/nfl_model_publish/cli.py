@@ -14,6 +14,12 @@ Usage::
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
 
+    python -m nfl_model_publish playstats \\
+        --parquet-dir <dir> \\
+        [--tag nfl_play_stats] \\
+        [--repo sportsdataverse/sportsdataverse-data] \\
+        [--dry-run]
+
     python -m nfl_model_publish rosters \\
         --seasons 2022:2024 \\
         --out <dir> \\
@@ -131,6 +137,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pbp.add_argument("--tag", default="nfl_model_pbp", help="GitHub release tag.")
     _add_repo_dry(pbp)
+
+    psx = sub.add_parser(
+        "playstats",
+        help="Upload pre-built long-format play-stats parquet to a release.",
+    )
+    psx.add_argument(
+        "--parquet-dir",
+        required=True,
+        help="Directory containing play_stats_*.parquet files "
+        "(from `python -m native_pbp build-playstats`).",
+    )
+    psx.add_argument("--tag", default="nfl_play_stats", help="GitHub release tag.")
+    _add_repo_dry(psx)
 
     r = sub.add_parser("rosters", help="Build + upload SDV-native NFL season rosters.")
     r.add_argument(
@@ -259,6 +278,15 @@ def main(argv=None) -> int:
             args.tag,
             args.repo,
             pattern="model_pbp_*.parquet",
+            dry_run=args.dry_run,
+        )
+        _print_result(res, args.repo, args.dry_run)
+    elif args.cmd == "playstats":
+        res = upload_artifacts(
+            args.parquet_dir,
+            args.tag,
+            args.repo,
+            pattern="play_stats_*.parquet",
             dry_run=args.dry_run,
         )
         _print_result(res, args.repo, args.dry_run)

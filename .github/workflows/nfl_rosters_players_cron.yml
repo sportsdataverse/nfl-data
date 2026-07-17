@@ -98,17 +98,27 @@ jobs:
 
       # build_nfl_rosters / build_nfl_players landed on sdv-py main after the
       # pinned PyPI release; install from git until a release carries them.
+      # --reinstall --refresh is REQUIRED (the same trap nfl_pbp_cron.yml documents):
+      # "Sync deps" already installed the lockfile-pinned sportsdataverse (0.0.66,
+      # released 2026-06-17 -- build_nfl_rosters landed 2026-06-18, one day later,
+      # so the pin provably cannot import it). A plain `uv pip install <git-url>`
+      # no-ops against the already-satisfied project env, so the git install never
+      # happens. --reinstall forces the replace; --refresh re-resolves @main to HEAD.
+      #
+      # Every `uv run` below uses --no-sync: `uv run` otherwise re-syncs the venv to
+      # uv.lock (0.0.66) BEFORE running, silently reverting that install and
+      # reintroducing the very ImportError the verify step exists to catch.
       # TODO: pin to a PyPI release once it ships build_nfl_rosters/build_nfl_players.
       - name: Install sportsdataverse from git (main)
         working-directory: nfl-data/python
         run: |
-          uv pip install \
+          uv pip install --reinstall --refresh \
             "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
 
       - name: Verify builders import
         working-directory: nfl-data/python
         run: |
-          uv run python -c "from sportsdataverse.nfl import build_nfl_rosters, build_nfl_players, build_nfl_player_stats, build_nfl_team_stats; print('builders OK')"
+          uv run --no-sync python -c "from sportsdataverse.nfl import build_nfl_rosters, build_nfl_players, build_nfl_player_stats, build_nfl_team_stats; print('builders OK')"
 
       # Resolve roster season: workflow_dispatch input wins; otherwise the
       # current NFL season (Jan–Jul roll back one year).
@@ -137,7 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run python -m nfl_model_publish rosters \
+          uv run --no-sync python -m nfl_model_publish rosters \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --out out/rosters \
             --tag nfl_rosters \
@@ -149,7 +159,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run python -m nfl_model_publish players \
+          uv run --no-sync python -m nfl_model_publish players \
             --out out/players \
             --tag nfl_players \
             --repo sportsdataverse/sportsdataverse-data
@@ -182,7 +192,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run python -m nfl_model_publish player-stats \
+          uv run --no-sync python -m nfl_model_publish player-stats \
             --seasons "${{ steps.ps_seasons.outputs.seasons }}" \
             --out out/player_stats \
             --tag nfl_player_stats \
@@ -217,7 +227,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run python -m nfl_model_publish team-stats \
+          uv run --no-sync python -m nfl_model_publish team-stats \
             --seasons "${{ steps.ts_seasons.outputs.seasons }}" \
             --out out/team_stats \
             --tag nfl_team_stats \
@@ -251,7 +261,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run python -m nfl_model_publish qbr \
+          uv run --no-sync python -m nfl_model_publish qbr \
             --seasons "${{ steps.qbr_seasons.outputs.seasons }}" \
             --out out/qbr \
             --tag nfl_espn_qbr \

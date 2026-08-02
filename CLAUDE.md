@@ -62,6 +62,32 @@ Output: parquet uploaded to releases on `sportsdataverse/sportsdataverse-data` (
 
 Consumed downstream by sdv-py `load_nfl_pbp(source="sdv")`, `load_nfl_espn_qbr(source="sdv")`, etc.
 
+## Model registry
+
+A row here is mandatory for every new published model/artifact family; "frozen" is a valid
+cadence but must be stated explicitly. Trained artifacts publish via
+`nfl_model_publish artifacts` (play_level → `nfl_model_artifacts`) and
+`nfl_model_publish decision_models-artifacts` (xpass → `nfl_model_artifacts`; fd/wp →
+`nfl_4th_down_models`; two_pt/fg/punt_data copied into the sdv-py bundle
+`sportsdataverse/nfl/models/`, no release tag). Methodology cards: `docs/models/`; parity
+framework: `docs/models/parity.md`. "#14" = the era-aware 1999–2025 retrain
+(`721fa97`, merged 2026-06-24).
+
+| model | artifact(s) | release tag | training data (seasons/source) | fitting script | gates at publish | last retrain | cadence |
+|---|---|---|---|---|---|---|---|
+| EP (18-feat, 7-class softprob) | `ep_model.ubj` + card `.json` | `nfl_model_artifacts` (also bundled in sdv-py) | 1999–2025 nflfastR-parity PBP, 1,195,636 plays, era0..4 one-hot | `python/model_training/play_level/` | parity r≥0.98 vs nflfastR `ep` (r 0.996) + LOSO calibration | 2026-06-24 (#14) | manual |
+| WP spread (12-feat) | `wp_spread.ubj` + card | `nfl_model_artifacts` (also bundled) | 1999–2025, 1,268,220 plays | play_level | Brier ≤0.20; `vegas_wp` r 0.998 | 2026-06-24 (#14) | manual |
+| WP naive (11-feat) | `wp_naive.ubj` + card | `nfl_model_artifacts` (also bundled) | 1999–2025 (spread set minus spread) | play_level | Brier ≤0.20; `wp` r 0.997 | 2026-06-24 (#14) | manual |
+| CP (18-feat) | `cp_model.ubj` + card | `nfl_model_artifacts` (also bundled) | 339,706 charted passes, air-yards era 2006+ | play_level | `cpoe` scale-correct (percentage points) | 2026-06-24 (#14) | manual |
+| xYAC (76-class) | `xyac_model.ubj` + card | `nfl_model_artifacts` (download-on-demand, not bundled) | 222,020 completions 2006–2025 | play_level | faithful `add_xyac` port (sdv-py parity) | 2026-06-24 (#14) | manual |
+| xpass (19-feat) | `xpass_model.ubj` | `nfl_model_artifacts` (also bundled) | 1999–2025, 892,122 scrimmage plays | `python/model_training/decision_models/` | oracle corr 0.9895 (informational since era retrain) | 2026-06-24 (#14) | manual |
+| fd 4th-down gain (14-feat, 76-class) | `fd_model.ubj` | `nfl_4th_down_models` | 1999–2025, 182,138 3rd/4th-down plays | decision_models | mean-gain corr 0.9856 (informational) | 2026-06-24 (#14) | manual |
+| nfl4th decision WP (11-feat, home-persp.) | `wp_model.ubj` | `nfl_4th_down_models` | nfl4th `cal_data` calibration frame | decision_models (`train_wp`) | reproduction corr ≥0.99 (0.9947) | 2026-06-23 (#12; unchanged by #14) | frozen (cal_data-bound) |
+| FG (7-feat XGBoost, was GAM) | `fg_model.ubj` | — (sdv-py bundle) | 1999–2025, 23,919 FG attempts | decision_models | attempted-cells corr 0.971 vs GAM grid (informational) | 2026-06-24 (#14) | manual |
+| two-point (9-feat) | `two_pt_model.ubj` | — (sdv-py bundle) | 2010–2025, 1,363 attempts | decision_models | corr 0.806 (vintage-drift ceiling, informational) | 2026-06-24 (#14) | manual |
+| punt distribution (empirical, not a model) | `punt_data.parquet` | — (sdv-py bundle) | full-history punts, 2-D KDE landing distribution | decision_models | freq-weighted TV ≤0.10 vs converted nfl4th dist | 2026-06-24 (#14) | manual |
+| QBR reconstruction (6-feat regression) | `qbr_model.ubj` | — (sdv-py bundle) | ESPN published raw Total QBR per QB-game; EPA components from the EP model | TODO — trainer not in this repo (card only: `docs/models/qbr.md`) | TODO | TODO | TODO |
+
 ## Gotchas
 
 - **No NGS scraper here.** NextGen Stats lives in sdv-py (`load_nfl_nextgen_stats`); references to

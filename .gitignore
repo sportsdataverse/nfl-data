@@ -8,5 +8,6 @@ python/nfl/
 build/
 dist/
 .Rproj.user/
+dev/
 
 docs/models/_site/

@@ -22,24 +22,30 @@ local re-conversion of the source objects produced byte-identical files, so the
 official artifacts are used as-is (cleanest provenance). The GAM (`fg_model`)
 cannot be serialized as xgboost, so it is exported as the exact prediction grid
 (`yardline_100` 1..99 × `fg_model_roof` ∈ {00,01,10,11} → make prob); Python
-does a lookup, reproducing the GAM exactly. `xpass_model` and `punt_data` are
-converted from their R objects with `convert.R`.
+does a lookup, reproducing the GAM exactly. `xpass_model` and `punt_data` were
+converted from their R objects with a one-off `convert.R` (since removed — see
+below).
 
 ## Reproduce
 
-Requires R (xgboost, mgcv, arrow) + the nflverse R checkouts (`nfl4th`,
-`fastrmodels`) and `gh`.
+The `convert.R` converter was a one-off and has been removed (commit
+`c6f16e6f5`; recover it with `git show c6f16e6f5^:tools/nfl4th_models/convert.R`
+if a re-conversion is ever needed — it requires R with xgboost/mgcv/arrow plus
+the `nfl4th` + `fastrmodels` checkouts). The durable path is the **already
+converted artifacts**: published to the `nfl_model_artifacts` /
+`nfl_4th_down_models` releases on `sportsdataverse-data` and committed to the
+sdv-py bundle (`sportsdataverse/nfl/models/`). The official boosters remain
+fetchable directly:
 
 ```sh
 # official boosters (no conversion — fetch the published .ubj)
 gh release download model_archive --repo nflverse/nfl4th \
   --pattern 'fd_model.ubj' --pattern 'two_pt_model.ubj' --pattern 'wp_model.ubj'
-
-# the two R conversions (xpass .rda -> .ubj; fg GAM -> grid; punt .rds -> parquet)
-Rscript convert.R   # edit the path constants at the top first
 ```
 
-`convert.R` prints each model's class + feature order and writes the artifacts.
+Since the era-aware retrain (#14), the live published artifacts are the
+Python-native `model_training/decision_models` retrains; the converted
+artifacts documented here serve as the parity oracles.
 
 ## Publish
 

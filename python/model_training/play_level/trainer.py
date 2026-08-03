@@ -15,7 +15,6 @@ from xgboost import Booster, DMatrix, train as xgb_train
 from .constants import (
     EP_FEATURES,
     EP_HYPERPARAMS,
-    EP_NUM_CLASSES,
     WP_SPREAD_FEATURES,
     WP_SPREAD_HYPERPARAMS,
     WP_NAIVE_FEATURES,

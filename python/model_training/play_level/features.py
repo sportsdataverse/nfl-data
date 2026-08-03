@@ -8,7 +8,6 @@ All functions accept and return polars DataFrames.
 """
 from __future__ import annotations
 
-import math
 
 import polars as pl
 
@@ -18,8 +17,6 @@ from .constants import (
     WP_NAIVE_FEATURES,
     CP_FEATURES,
     XYAC_FEATURES,
-    EP_CLASS_ORDER,
-    EP_LABEL_TO_SCORE,
 )
 
 # Era boundary years (left-inclusive, right-exclusive) matching nflfastR's documented

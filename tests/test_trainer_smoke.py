@@ -1,13 +1,13 @@
-﻿"""Smoke tests for trainer.py — verify train functions produce valid .ubj artifacts.
+"""Smoke tests for trainer.py — verify train functions produce valid .ubj artifacts.
 
 These run with tiny synthetic data (no real PBP required). They are fast (<5s) and
 serve as regression tests ensuring the XGBoost API contract stays stable.
 """
+
 from pathlib import Path
 
 import numpy as np
 import polars as pl
-import pytest
 from xgboost import Booster
 
 from model_training.play_level.constants import (
@@ -46,6 +46,7 @@ def _wp_data(include_spread: bool = True) -> pl.DataFrame:
 # EP
 # ---------------------------------------------------------------------------
 
+
 class TestTrainEp:
     def test_returns_booster(self):
         model = train_ep(_ep_data(), nrounds=5)
@@ -56,7 +57,9 @@ class TestTrainEp:
         assert model.feature_names == EP_FEATURES
 
     def test_saves_to_disk(self, tmp_path: Path):
-        model = train_ep(_ep_data(), nrounds=5, output_path=tmp_path / "ep_model.ubj")
+        # Called for the side effect only -- this asserts the file lands, not
+        # the return value (matching test_saved_model_loads_and_predicts below).
+        train_ep(_ep_data(), nrounds=5, output_path=tmp_path / "ep_model.ubj")
         assert (tmp_path / "ep_model.ubj").exists()
 
     def test_saved_model_loads_and_predicts(self, tmp_path: Path):
@@ -69,6 +72,7 @@ class TestTrainEp:
 # ---------------------------------------------------------------------------
 # WP-spread
 # ---------------------------------------------------------------------------
+
 
 class TestTrainWpSpread:
     def test_returns_booster(self):
@@ -87,6 +91,7 @@ class TestTrainWpSpread:
 # ---------------------------------------------------------------------------
 # WP-naive
 # ---------------------------------------------------------------------------
+
 
 class TestTrainWpNaive:
     def test_returns_booster(self):

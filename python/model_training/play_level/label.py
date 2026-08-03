@@ -25,8 +25,6 @@ from .constants import (
 from .features import (
     make_model_mutations,
     prepare_cp_data,
-    prepare_ep_data,
-    prepare_wp_data,
     prepare_xyac_data,
 )
 

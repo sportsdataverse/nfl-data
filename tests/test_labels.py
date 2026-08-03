@@ -3,7 +3,6 @@
 All tests use deterministic synthetic plays — no real PBP required.
 """
 import polars as pl
-import pytest
 
 from model_training.play_level.label import (
     compute_next_score_half,

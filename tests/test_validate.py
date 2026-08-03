@@ -1,14 +1,12 @@
-﻿"""Tests for validate.py — EP/WP parity gate.
+"""Tests for validate.py — EP/WP parity gate.
 
 Uses deterministic synthetic data so no real models or nflverse data required.
 """
-import math
-from pathlib import Path
+
 from unittest.mock import MagicMock
 
 import numpy as np
 import polars as pl
-import pytest
 
 import model_training.play_level.validate as val_mod
 from model_training.play_level.validate import (
@@ -24,6 +22,7 @@ from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _ep_frame(n: int = 100) -> pl.DataFrame:
     rng = np.random.default_rng(42)
@@ -61,6 +60,7 @@ def _mock_wp_model(predictions: np.ndarray):
 # pearson_correlation
 # ---------------------------------------------------------------------------
 
+
 class TestPearsonCorrelation:
     def test_perfect_correlation(self):
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -87,6 +87,7 @@ class TestPearsonCorrelation:
 # ---------------------------------------------------------------------------
 # brier_score
 # ---------------------------------------------------------------------------
+
 
 class TestBrierScore:
     def test_perfect_predictions_score_zero(self):
@@ -116,10 +117,10 @@ class TestBrierScore:
 # validate_ep
 # ---------------------------------------------------------------------------
 
+
 class TestValidateEp:
     def test_returns_correlation_key(self, monkeypatch):
         df = _ep_frame()
-        rng = np.random.default_rng(0)
         # Return perfect predictions (prob matrix N×7, argmax gives class)
         preds = np.zeros((len(df), 7))
         preds[:, 3] = 1.0  # all predict Field_Goal
@@ -163,6 +164,7 @@ class TestValidateEp:
 # validate_wp
 # ---------------------------------------------------------------------------
 
+
 class TestValidateWp:
     def test_returns_brier_and_gate(self):
         df = _wp_frame(n=200)
@@ -198,12 +200,21 @@ class TestValidateWp:
 # run_parity_gate
 # ---------------------------------------------------------------------------
 
+
 class TestRunParityGate:
     def _setup(self, monkeypatch, ep_corr: float = 0.99, wp_brier: float = 0.15):
         monkeypatch.setattr(val_mod, "_load_model", lambda path: MagicMock())
         monkeypatch.setattr(val_mod, "_load_pbp_for_validation", lambda seasons, data_dir: (_ep_frame(), _wp_frame()))
-        monkeypatch.setattr(val_mod, "validate_ep", lambda model, df, **kw: {"correlation": ep_corr, "gate_pass": ep_corr >= 0.98, "n_plays": 100})
-        monkeypatch.setattr(val_mod, "validate_wp", lambda model, df, **kw: {"brier_score": wp_brier, "gate_pass": wp_brier <= 0.20, "n_plays": 100})
+        monkeypatch.setattr(
+            val_mod,
+            "validate_ep",
+            lambda model, df, **kw: {"correlation": ep_corr, "gate_pass": ep_corr >= 0.98, "n_plays": 100},
+        )
+        monkeypatch.setattr(
+            val_mod,
+            "validate_wp",
+            lambda model, df, **kw: {"brier_score": wp_brier, "gate_pass": wp_brier <= 0.20, "n_plays": 100},
+        )
 
     def test_returns_overall_pass_when_both_gates_pass(self, tmp_path, monkeypatch):
         self._setup(monkeypatch, ep_corr=0.99, wp_brier=0.15)

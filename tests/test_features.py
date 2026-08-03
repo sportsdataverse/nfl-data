@@ -4,7 +4,6 @@ Tests verify that the Python translation of nflfastR's make_model_mutations() +
 prepare_ep_data() / prepare_wp_data() / prepare_cp_data() produces correct columns
 from a minimal synthetic play DataFrame.
 """
-import math
 
 import polars as pl
 import pytest

@@ -2,12 +2,9 @@
 
 All heavy work (download, label, train) is mocked so tests run instantly.
 """
-import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import polars as pl
-import pytest
 
 import model_training.play_level.pipeline as pipeline_mod
 from model_training.play_level.pipeline import (

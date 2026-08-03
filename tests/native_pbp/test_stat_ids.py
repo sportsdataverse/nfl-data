@@ -13,7 +13,7 @@ from native_pbp.stat_ids import (
     sum_play_stats,
 )
 
-GAME = Path(__file__).resolve().parents[2] / "nfl" / "raw" / "2024" / "2024_01_BAL_KC.json"
+GAME = Path(__file__).resolve().parents[2] / "python" / "nfl" / "raw" / "2024" / "2024_01_BAL_KC.json"
 
 
 # ---------------------------------------------------------------------------

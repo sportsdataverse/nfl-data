@@ -8,7 +8,7 @@ import pytest
 from model_training.play_level.ingest import REQUIRED_COLUMNS, validate_pbp
 from native_pbp.build import build_season
 
-RAW = Path(__file__).resolve().parents[2] / "nfl" / "raw" / "2024"
+RAW = Path(__file__).resolve().parents[2] / "python" / "nfl" / "raw" / "2024"
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(not RAW.exists(), reason="2024 raw library not present"),

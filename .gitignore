@@ -11,3 +11,11 @@ dist/
 dev/
 
 docs/models/_site/
+
+# Build outputs / working data. These are NOT inputs: fd_model.ubj alone is
+# 65 MiB, and a `git add -A -- python` swept 190 MiB of them into a commit
+# on 2026-08-03 before this rule existed.
+out/
+**/out/
+python/data/
+.venv/

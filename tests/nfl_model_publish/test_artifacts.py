@@ -8,7 +8,6 @@ import json
 
 from nfl_model_publish.artifacts import plan_uploads, upload_artifacts
 
-
 # ---------------------------------------------------------------------------
 # Fixture seeder
 # ---------------------------------------------------------------------------
@@ -196,7 +195,6 @@ def test_parse_seasons_rejects_inverted_and_malformed():
     import argparse
 
     import pytest
-
     from nfl_model_publish.cli import _parse_seasons
 
     with pytest.raises(argparse.ArgumentTypeError):

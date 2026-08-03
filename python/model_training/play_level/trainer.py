@@ -10,17 +10,18 @@ from pathlib import Path
 from typing import Optional
 
 import polars as pl
-from xgboost import Booster, DMatrix, train as xgb_train
+from xgboost import Booster, DMatrix
+from xgboost import train as xgb_train
 
 from .constants import (
-    EP_FEATURES,
-    EP_HYPERPARAMS,
-    WP_SPREAD_FEATURES,
-    WP_SPREAD_HYPERPARAMS,
-    WP_NAIVE_FEATURES,
-    WP_NAIVE_HYPERPARAMS,
     CP_FEATURES,
     CP_HYPERPARAMS,
+    EP_FEATURES,
+    EP_HYPERPARAMS,
+    WP_NAIVE_FEATURES,
+    WP_NAIVE_HYPERPARAMS,
+    WP_SPREAD_FEATURES,
+    WP_SPREAD_HYPERPARAMS,
     XYAC_FEATURES,
     XYAC_HYPERPARAMS,
 )

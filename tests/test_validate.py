@@ -5,19 +5,17 @@ Uses deterministic synthetic data so no real models or nflverse data required.
 
 from unittest.mock import MagicMock
 
+import model_training.play_level.validate as val_mod
 import numpy as np
 import polars as pl
-
-import model_training.play_level.validate as val_mod
+from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES
 from model_training.play_level.validate import (
     brier_score,
     pearson_correlation,
+    run_parity_gate,
     validate_ep,
     validate_wp,
-    run_parity_gate,
 )
-from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES
-
 
 # ---------------------------------------------------------------------------
 # Helpers

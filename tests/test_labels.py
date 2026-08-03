@@ -3,16 +3,14 @@
 All tests use deterministic synthetic plays — no real PBP required.
 """
 import polars as pl
-
+from model_training.play_level.constants import EP_CLASS_ORDER
 from model_training.play_level.label import (
-    compute_next_score_half,
-    compute_winner,
+    SCORE_LABEL_TO_CLASS,
     build_ep_training_set,
     build_wp_training_set,
-    SCORE_LABEL_TO_CLASS,
+    compute_next_score_half,
+    compute_winner,
 )
-from model_training.play_level.constants import EP_CLASS_ORDER
-
 
 # ---------------------------------------------------------------------------
 # Helpers

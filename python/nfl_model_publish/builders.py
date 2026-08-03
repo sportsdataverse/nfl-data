@@ -98,7 +98,6 @@ def build_player_stats(
         ``{"rows": int, "seasons": list[int], "path": str}``.
     """
     import polars as pl
-
     from sportsdataverse.nfl import build_nfl_player_stats
 
     out_dir = Path(out_dir)
@@ -154,7 +153,6 @@ def build_team_stats(
         ``{"rows": int, "seasons": list[int], "path": str}``.
     """
     import polars as pl
-
     from sportsdataverse.nfl import build_nfl_team_stats
 
     out_dir = Path(out_dir)

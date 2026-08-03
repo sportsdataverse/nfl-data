@@ -71,8 +71,17 @@ def write_calibration(
         ``(png_path, csv_path)``.
     """
     from plotnine import (
-        aes, element_rect, element_text, facet_wrap, geom_abline,
-        geom_point, geom_smooth, ggplot, labs, theme, theme_bw,
+        aes,
+        element_rect,
+        element_text,
+        facet_wrap,
+        geom_abline,
+        geom_point,
+        geom_smooth,
+        ggplot,
+        labs,
+        theme,
+        theme_bw,
     )
 
     stem = Path(stem)
@@ -115,8 +124,15 @@ def plot_ep_by_yardline(df: pl.DataFrame, stem: Path | str) -> tuple[Path, Path]
         ``(png_path, csv_path)``.
     """
     from plotnine import (
-        aes, element_rect, element_text, geom_smooth, ggplot, labs, scale_x_reverse,
-        theme, theme_bw,
+        aes,
+        element_rect,
+        element_text,
+        geom_smooth,
+        ggplot,
+        labs,
+        scale_x_reverse,
+        theme,
+        theme_bw,
     )
 
     stem = Path(stem)
@@ -159,7 +175,14 @@ def plot_cp_by_air_yards(df: pl.DataFrame, stem: Path | str) -> tuple[Path, Path
         ``(png_path, csv_path)``.
     """
     from plotnine import (
-        aes, element_rect, element_text, geom_smooth, ggplot, labs, theme, theme_bw,
+        aes,
+        element_rect,
+        element_text,
+        geom_smooth,
+        ggplot,
+        labs,
+        theme,
+        theme_bw,
     )
 
     stem = Path(stem)

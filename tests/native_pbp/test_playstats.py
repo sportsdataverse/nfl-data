@@ -19,7 +19,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from native_pbp.cli import build_parser
 from native_pbp.cli import build_playstats_season as cli_build_playstats_season
 from native_pbp.cli import main as cli_main

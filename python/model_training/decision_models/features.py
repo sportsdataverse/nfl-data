@@ -15,11 +15,11 @@ import polars as pl
 from model_training.play_level.features import make_model_mutations
 
 from .constants import (
-    XPASS_FEATURES,
     FD_FEATURES,
-    TWO_PT_FEATURES,
     FG_FEATURES,
+    TWO_PT_FEATURES,
     WP_FEATURES,
+    XPASS_FEATURES,
 )
 
 __all__ = [

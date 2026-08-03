@@ -25,7 +25,6 @@ import polars as pl
 
 from .constants import EP_CLASS_ORDER, EP_FEATURES, EP_LABEL_TO_SCORE, WP_SPREAD_FEATURES
 
-
 # Point values indexed by class order (TD=6, Opp_TD=-6, …, No_Score=0)
 _EP_POINT_VALUES: np.ndarray = np.array(
     [EP_LABEL_TO_SCORE[cls] for cls in EP_CLASS_ORDER], dtype=np.float64
@@ -49,8 +48,8 @@ def _load_pbp_for_validation(
     data_dir: Path,
 ) -> tuple[pl.DataFrame, pl.DataFrame]:
     """Return (ep_frame, wp_frame) filtered to plays with reference values."""
+    from .features import _add_receive_2h_ko, _add_wp_aux, make_model_mutations
     from .ingest import load_local_pbp
-    from .features import make_model_mutations, _add_wp_aux, _add_receive_2h_ko
     from .label import compute_winner
 
     df = load_local_pbp(seasons, data_dir=data_dir)

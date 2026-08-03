@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from model_training.play_level.ingest import REQUIRED_COLUMNS, validate_pbp
 from native_pbp.build import build_season
 

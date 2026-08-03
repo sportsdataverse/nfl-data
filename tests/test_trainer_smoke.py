@@ -8,20 +8,18 @@ from pathlib import Path
 
 import numpy as np
 import polars as pl
-from xgboost import Booster
-
 from model_training.play_level.constants import (
     EP_FEATURES,
-    WP_SPREAD_FEATURES,
-    WP_NAIVE_FEATURES,
     EP_NUM_CLASSES,
+    WP_NAIVE_FEATURES,
+    WP_SPREAD_FEATURES,
 )
 from model_training.play_level.trainer import (
     train_ep,
-    train_wp_spread,
     train_wp_naive,
+    train_wp_spread,
 )
-
+from xgboost import Booster
 
 RNG = np.random.default_rng(42)
 N = 200  # small enough to be fast

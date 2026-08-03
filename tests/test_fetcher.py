@@ -8,13 +8,11 @@ import json
 from pathlib import Path
 
 import pytest
-
 from model_training.play_level.fetcher import (
     build_raw_library,
     extract_game_ids_from_weekly,
     list_season_weeks,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers — synthetic API responses
@@ -229,8 +227,9 @@ class TestBuildRawLibrary:
 
     def test_default_output_dir_is_data_raw(self, tmp_path, monkeypatch):
         """Confirm the default output_dir keyword default is Path('data/raw')."""
-        import model_training.play_level.fetcher as mod
         import inspect
+
+        import model_training.play_level.fetcher as mod
         sig = inspect.signature(mod.build_raw_library)
         default = sig.parameters["output_dir"].default
         assert Path(default) == Path("data/raw")

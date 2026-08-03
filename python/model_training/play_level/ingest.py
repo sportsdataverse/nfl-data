@@ -11,7 +11,6 @@ from typing import List
 
 import polars as pl
 
-
 # ---------------------------------------------------------------------------
 # Required columns — superset of all EP/WP/CP source + label columns
 # ---------------------------------------------------------------------------
@@ -81,8 +80,7 @@ def validate_pbp(df: pl.DataFrame) -> None:
 
 def _load_nfl_pbp(seasons: List[int], **kwargs) -> pl.DataFrame:
     """Thin wrapper around sportsdataverse so tests can monkeypatch it."""
-    from sportsdataverse.nfl import load_nfl_pbp
-    from sportsdataverse.nfl import update_config
+    from sportsdataverse.nfl import load_nfl_pbp, update_config
 
     update_config(cache_mode="off")
     return load_nfl_pbp(seasons=seasons, **kwargs)

@@ -10,8 +10,6 @@ Reference: ``docs/superpowers/plans/2026-07-03-nflfastr-parity-reference.md`` §
 from __future__ import annotations
 
 import polars as pl
-from polars.testing import assert_frame_equal
-
 from native_pbp.repairs import (
     apply_game_repairs,
     fix_bad_games,
@@ -19,7 +17,7 @@ from native_pbp.repairs import (
     fix_scrambles,
     fix_weird_pass_plays,
 )
-
+from polars.testing import assert_frame_equal
 
 # ---------------------------------------------------------------------------
 # Passthrough — the common case (no bad_game condition, no legacy column)

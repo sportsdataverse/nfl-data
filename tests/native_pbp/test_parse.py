@@ -6,7 +6,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from native_pbp.parse import (
     _apply_clock_typo_fix,
     _clock_to_seconds,

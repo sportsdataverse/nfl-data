@@ -7,10 +7,9 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from model_training.play_level.ingest import (
-    validate_pbp,
     REQUIRED_COLUMNS,
+    validate_pbp,
 )
 
 

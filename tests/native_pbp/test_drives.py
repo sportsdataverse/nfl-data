@@ -12,9 +12,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import polars as pl
-from polars.testing import assert_frame_equal
-
 from native_pbp.drives import _OUTPUT_SCHEMA, add_drive_detail
+from polars.testing import assert_frame_equal
 
 
 def _row(

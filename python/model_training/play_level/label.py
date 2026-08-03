@@ -301,7 +301,7 @@ def build_wp_training_set(
     Returns:
         Training-ready DataFrame with WP feature columns + ``label`` (0.0/1.0).
     """
-    from .features import _add_wp_aux, _add_receive_2h_ko
+    from .features import _add_receive_2h_ko, _add_wp_aux
 
     df = compute_winner(df)
     df = make_model_mutations(df)

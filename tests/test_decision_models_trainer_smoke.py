@@ -10,34 +10,33 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import pytest
-from xgboost import Booster
-
 from model_training.decision_models.constants import (
-    XPASS_FEATURES,
     FD_FEATURES,
     FD_NUM_CLASSES,
-    TWO_PT_FEATURES,
     FG_FEATURES,
-    WP_FEATURES,
     PUNT_OUTPUT_COLUMNS,
-)
-from model_training.decision_models.trainer import (
-    train_xpass,
-    train_fd,
-    train_two_pt,
-    train_fg,
-    train_wp,
-    build_punt_data,
+    TWO_PT_FEATURES,
+    WP_FEATURES,
+    XPASS_FEATURES,
 )
 from model_training.decision_models.features import (
-    make_model_mutations,
-    prepare_xpass_data,
-    prepare_fd_data,
-    prepare_two_pt_data,
-    prepare_fg_data,
-    prepare_wp_data,
     add_spread_total_features,
+    make_model_mutations,
+    prepare_fd_data,
+    prepare_fg_data,
+    prepare_two_pt_data,
+    prepare_wp_data,
+    prepare_xpass_data,
 )
+from model_training.decision_models.trainer import (
+    build_punt_data,
+    train_fd,
+    train_fg,
+    train_two_pt,
+    train_wp,
+    train_xpass,
+)
+from xgboost import Booster
 
 RNG = np.random.default_rng(7)
 N = 200

@@ -25,13 +25,13 @@ import polars as pl
 from xgboost import Booster, DMatrix
 
 from .constants import (
-    XPASS_FEATURES,
     FD_FEATURES,
     FD_NUM_CLASSES,
-    TWO_PT_FEATURES,
     FG_FEATURES,
     FG_VALIDATION_YARDLINE_RANGE,
+    TWO_PT_FEATURES,
     WP_FEATURES,
+    XPASS_FEATURES,
 )
 
 ORACLE_DIR = Path(r"C:/Users/saiem/Documents/GitHub-Data/sdv-dev/sdv-py-stats/dev/nfl4th_artifacts")

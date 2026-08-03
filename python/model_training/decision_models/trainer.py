@@ -12,19 +12,21 @@ from typing import Optional
 
 import numpy as np
 import polars as pl
-from xgboost import Booster, DMatrix, cv as xgb_cv, train as xgb_train
+from xgboost import Booster, DMatrix
+from xgboost import cv as xgb_cv
+from xgboost import train as xgb_train
 
 from .constants import (
-    XPASS_FEATURES,
-    XPASS_HYPERPARAMS,
     FD_FEATURES,
     FD_HYPERPARAMS,
-    TWO_PT_FEATURES,
-    TWO_PT_HYPERPARAMS,
     FG_FEATURES,
     FG_HYPERPARAMS,
+    TWO_PT_FEATURES,
+    TWO_PT_HYPERPARAMS,
     WP_FEATURES,
     WP_HYPERPARAMS,
+    XPASS_FEATURES,
+    XPASS_HYPERPARAMS,
 )
 
 __all__ = [

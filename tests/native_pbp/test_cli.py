@@ -11,9 +11,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from native_pbp.cli import _build_schedule_lookup, _parse_season_range, build_season, main
-
 
 # ---------------------------------------------------------------------------
 # Minimal synthetic Shield game payload

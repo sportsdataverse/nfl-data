@@ -5,11 +5,10 @@ import json
 from pathlib import Path
 
 import pytest
-
 from native_pbp.stat_ids import (
+    _FILL_ID_SLOTS,
     FILL_GROUPS,
     STAT_ID_EFFECTS,
-    _FILL_ID_SLOTS,
     sum_play_stats,
 )
 

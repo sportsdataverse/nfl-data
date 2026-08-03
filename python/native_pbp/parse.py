@@ -17,8 +17,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 import polars as pl
-
 from model_training.play_level.fetcher import _nflverse_abbr, _team_abbr, nflverse_game_id
+
 from native_pbp.stat_ids import sum_play_stats
 
 

@@ -7,16 +7,14 @@ from a minimal synthetic play DataFrame.
 
 import polars as pl
 import pytest
-
+from model_training.play_level.constants import EP_FEATURES, WP_NAIVE_FEATURES, WP_SPREAD_FEATURES
 from model_training.play_level.features import (
+    label_next_score_half,
     make_model_mutations,
+    prepare_cp_data,
     prepare_ep_data,
     prepare_wp_data,
-    prepare_cp_data,
-    label_next_score_half,
 )
-from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES, WP_NAIVE_FEATURES
-
 
 # ---------------------------------------------------------------------------
 # Minimal synthetic play fixture

@@ -4,21 +4,19 @@ All heavy work (download, label, train) is mocked so tests run instantly.
 """
 from unittest.mock import MagicMock
 
-import polars as pl
-
 import model_training.play_level.pipeline as pipeline_mod
-from model_training.play_level.pipeline import (
-    run_ep_pipeline,
-    run_wp_pipeline,
-    run_cp_pipeline,
-    run_full_pipeline,
-)
+import polars as pl
 from model_training.play_level.constants import (
+    CP_FEATURES,
     EP_FEATURES,
     WP_SPREAD_FEATURES,
-    CP_FEATURES,
 )
-
+from model_training.play_level.pipeline import (
+    run_cp_pipeline,
+    run_ep_pipeline,
+    run_full_pipeline,
+    run_wp_pipeline,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers

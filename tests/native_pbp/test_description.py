@@ -8,9 +8,8 @@ BETWEEN the pass and rush derivations, matching nflfastR's mutate order).
 from __future__ import annotations
 
 import polars as pl
-from polars.testing import assert_frame_equal
-
 from native_pbp.description import add_pass_rush, add_qb_dropback
+from polars.testing import assert_frame_equal
 
 
 def _frame(**overrides: object) -> pl.DataFrame:

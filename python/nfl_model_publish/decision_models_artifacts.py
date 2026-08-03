@@ -21,7 +21,7 @@ import shutil
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from .artifacts import _gh_release_exists, _gh_runner, _RELEASE_BODY
+from .artifacts import _RELEASE_BODY, _gh_release_exists, _gh_runner
 
 __all__ = [
     "DECISION_MODELS_RELEASE_MAP",

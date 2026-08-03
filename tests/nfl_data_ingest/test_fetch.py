@@ -10,7 +10,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from nfl_data_ingest.fetch import (
     RAW_BASE,
     enumerate_game_ids,
@@ -18,7 +17,6 @@ from nfl_data_ingest.fetch import (
     ingest_season,
     raw_url,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -224,6 +222,7 @@ class TestIngestSeason:
     def test_default_cache_dir_is_dotcache(self):
         """Confirm default cache_dir keyword is .cache/nfl_raw."""
         import inspect
+
         from nfl_data_ingest.fetch import ingest_season as fn
         sig = inspect.signature(fn)
         default = sig.parameters["cache_dir"].default

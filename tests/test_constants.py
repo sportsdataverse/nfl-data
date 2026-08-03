@@ -4,21 +4,19 @@ These tests lock the NFL EP/WP/CP feature contracts derived from:
   fastrmodels/data-raw/MODELS.R + nflfastR/R/helper_add_ep_wp.R + helper_add_cp_cpoe.R
 """
 import pytest
-
 from model_training.play_level.constants import (
+    CP_FEATURES,
+    CP_HYPERPARAMS,
     EP_FEATURES,
     EP_HYPERPARAMS,
+    EP_LABEL_TO_SCORE,
+    EP_NUM_CLASSES,
+    WP_NAIVE_FEATURES,
+    WP_NAIVE_HYPERPARAMS,
     WP_SPREAD_FEATURES,
     WP_SPREAD_HYPERPARAMS,
     WP_SPREAD_MONOTONE_CONSTRAINTS,
-    WP_NAIVE_FEATURES,
-    WP_NAIVE_HYPERPARAMS,
-    CP_FEATURES,
-    CP_HYPERPARAMS,
-    EP_NUM_CLASSES,
-    EP_LABEL_TO_SCORE,
 )
-
 
 # ---------------------------------------------------------------------------
 # EP contract

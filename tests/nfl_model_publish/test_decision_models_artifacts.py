@@ -10,7 +10,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
 from nfl_model_publish.decision_models_artifacts import (
     DECISION_MODELS_BUNDLE_ARTIFACTS,
     DECISION_MODELS_RELEASE_MAP,

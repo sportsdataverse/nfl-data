@@ -27,7 +27,6 @@ from typing import List
 
 import polars as pl
 
-
 # ---------------------------------------------------------------------------
 # Thin wrappers — monkeypatchable in tests
 # ---------------------------------------------------------------------------
@@ -248,8 +247,14 @@ def run_full_pipeline(
     print(f"[pipeline] loaded {df.height:,} plays")
 
     from .constants import (
-        CP_FEATURES, CP_HYPERPARAMS, EP_FEATURES, EP_HYPERPARAMS,
-        WP_NAIVE_FEATURES, WP_NAIVE_HYPERPARAMS, WP_SPREAD_FEATURES, WP_SPREAD_HYPERPARAMS,
+        CP_FEATURES,
+        CP_HYPERPARAMS,
+        EP_FEATURES,
+        EP_HYPERPARAMS,
+        WP_NAIVE_FEATURES,
+        WP_NAIVE_HYPERPARAMS,
+        WP_SPREAD_FEATURES,
+        WP_SPREAD_HYPERPARAMS,
     )
     from .model_card import write_model_card
 

@@ -7,7 +7,6 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from model_training.play_level.ingest import REQUIRED_COLUMNS
 from native_pbp.build import build_pbp
 

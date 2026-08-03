@@ -8,14 +8,13 @@ All functions accept and return polars DataFrames.
 """
 from __future__ import annotations
 
-
 import polars as pl
 
 from .constants import (
-    EP_FEATURES,
-    WP_SPREAD_FEATURES,
-    WP_NAIVE_FEATURES,
     CP_FEATURES,
+    EP_FEATURES,
+    WP_NAIVE_FEATURES,
+    WP_SPREAD_FEATURES,
     XYAC_FEATURES,
 )
 

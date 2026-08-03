@@ -5,7 +5,6 @@ import json
 
 import numpy as np
 import polars as pl
-
 from model_training.play_level.metrics import (
     brier_score,
     calibration_table,

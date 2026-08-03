@@ -186,12 +186,16 @@ def prepare_fg_data(df: pl.DataFrame) -> pl.DataFrame:
     """Build the field-goal make-probability training frame.
 
     Filter (_punt_and_fg_models.R): ``play_type_nfl == "FIELD_GOAL"``.
-    Features: ``yardline_100`` + ``fg_roof`` (roof == "outdoors") +
-    ``fg_era`` (season >= 2020). Label = ``sp`` (field goal made), falling back
+    Features: ``yardline_100`` + ``fg_roof`` (roof == "outdoors") + the
+    ``era0..era4`` one-hot. Label = ``sp`` (field goal made), falling back
     to ``field_goal_result == "made"`` when ``sp`` is absent / null.
 
     Args:
-        df: Raw nflverse PBP (no mutation prerequisite — fg uses its own roof/era).
+        df: nflverse PBP **after** :func:`make_model_mutations`. The binary
+            ``fg_era`` (season >= 2020) was retired for the full era one-hot,
+            which is built upstream — so unlike the earlier contract this now
+            HAS a mutation prerequisite, and raw PBP raises
+            ``ColumnNotFoundError`` on ``era0``. Only ``fg_roof`` is built here.
 
     Returns:
         Frame with ``FG_FEATURES`` columns + ``label`` (0/1).

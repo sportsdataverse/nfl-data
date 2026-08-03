@@ -4,6 +4,7 @@ Tiny synthetic frames only (no real PBP / network). Verify each trainer emits a
 valid .ubj with the contracted feature names, the feature builders apply the
 right filters/labels, and the punt builder produces the documented schema.
 """
+
 from pathlib import Path
 
 import numpy as np
@@ -76,6 +77,7 @@ class TestTrainFd:
     def test_predict_is_76_class(self):
         m = train_fd(_fd_frame(), nrounds=5)
         from xgboost import DMatrix
+
         X = _fd_frame().select(FD_FEATURES).to_numpy()
         p = m.predict(DMatrix(X, feature_names=FD_FEATURES))
         assert p.shape[1] == FD_NUM_CLASSES
@@ -173,12 +175,18 @@ class TestFeatureBuilders:
         assert set(out["label"].to_list()) == {0, 1}
 
     def test_fg_label_and_roof_era(self):
-        out = prepare_fg_data(_synthetic_pbp())
+        # make_model_mutations first: the binary fg_era was retired in favour of
+        # the era0..era4 one-hot, which is built upstream (FG_FEATURES lists
+        # era0..era4, not fg_era). Calling prepare_fg_data on raw PBP raises
+        # ColumnNotFoundError on "era0".
+        out = prepare_fg_data(make_model_mutations(_synthetic_pbp()))
         assert out.columns == [*FG_FEATURES, "label"]
         assert out.height == 1
         assert out["fg_roof"][0] == 1  # outdoors
-        assert out["fg_era"][0] == 0   # 2015 < 2020
-        assert out["label"][0] == 1    # sp == 1
+        # season 2015 -> era3 (2014-2017); exactly one era flag is set
+        assert out["era3"][0] == 1
+        assert [out[f"era{i}"][0] for i in (0, 1, 2, 4)] == [0, 0, 0, 0]
+        assert out["label"][0] == 1  # sp == 1
 
 
 def _wp_cal_frame() -> pl.DataFrame:

@@ -70,6 +70,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: nfl-data
+          # Nothing here runs an authenticated git operation -- publishing uses
+          # secrets.SDV_GH_TOKEN explicitly -- so the job token has no reason to
+          # sit in the checkout's git config where trainer code could read it.
+          persist-credentials: false
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -109,12 +113,24 @@ jobs:
             --download \
             --models-dir models
 
+      # `inputs` is null on anything that is not a workflow_dispatch, so a bare
+      # `inputs.train_decision` skips this on EVERY scheduled run -- the decision
+      # models would keep the "annual" cadence their registry rows advertise while
+      # never actually retraining. That is precisely the stranded-retrain failure
+      # this workflow exists to prevent, so the cron opts in explicitly.
+      #
+      # `inputs.publish` is deliberately NOT given the same treatment: an unattended
+      # run must not overwrite released models (see the header).
       - name: Train decision models (xpass / fd / nfl4th WP / FG / two-point / punt)
-        if: ${{ inputs.train_decision }}
+        if: ${{ github.event_name == 'schedule' || inputs.train_decision }}
         working-directory: nfl-data/python
+        env:
+          # Passed through env rather than interpolated into the script body: a
+          # dispatch input expanded inline by ${{ }} is a shell-injection surface.
+          NROUNDS: ${{ inputs.nrounds }}
         run: |
           EXTRA=""
-          if [ -n "${{ inputs.nrounds }}" ]; then EXTRA="--nrounds ${{ inputs.nrounds }}"; fi
+          if [ -n "${NROUNDS}" ]; then EXTRA="--nrounds ${NROUNDS}"; fi
           uv run --no-sync python -m model_training.decision_models train-all \
             --out-dir out $EXTRA
 

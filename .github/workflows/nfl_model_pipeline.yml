@@ -1,0 +1,174 @@
+# NFL Model Pipeline — retrain + (optional) publish
+#
+# Wires the model-registry rows in CLAUDE.md to an actual trigger. Every row in
+# that table read "cadence: manual" with no workflow behind it, which is the
+# stranded-retrain failure the pipeline-layout convention exists to prevent: a
+# retrain recipe referenced by nothing rots silently, and nobody finds out until
+# the next retrain is attempted against a moved dependency.
+#
+# Dispatch-only would satisfy the rule. The sparse annual cron is here so the
+# path is *exercised* at least once a year rather than only when someone needs
+# it under time pressure — a trainer that has not run in 12 months is an unknown,
+# not an asset.
+#
+# Scope: this is the PYTHON modeling pipeline (nfl-data/python). It is separate
+# from `nfl_pbp_cron.yml`, which rebuilds and republishes model_pbp parquets from
+# already-trained models on a weekly in-season cadence. Models are stable; the
+# PBP they score is not.
+#
+# Two trainer families, deliberately separate steps:
+#   * model_training.play_level    — EP / WP(spread+naive) / CP / xYAC
+#   * model_training.decision_models — xpass / fd / nfl4th WP / FG / two-point /
+#                                      punt distribution
+# They publish to DIFFERENT release tags (fd + nfl4th WP -> nfl_4th_down_models,
+# the rest -> nfl_model_artifacts), which is why publishing routes through
+# `decision_models-artifacts` rather than the generic `artifacts` subcommand —
+# the generic one would put every file on one tag.
+
+name: NFL Model Pipeline
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish retrained artifacts to the sportsdataverse-data releases (default OFF — a retrain that silently replaces released models is not reversible)'
+        required: false
+        type: boolean
+        default: false
+      train_decision:
+        description: 'Also retrain the decision models (xpass / fd / nfl4th WP / FG / two-point / punt)'
+        required: false
+        type: boolean
+        default: true
+      nrounds:
+        description: 'Override XGBoost nrounds — set small (e.g. 20) for a smoke run that exercises the path without a full fit'
+        required: false
+        default: ''
+  schedule:
+    # 06:00 UTC on 1 March — after the Super Bowl (early Feb) and after nflverse
+    # has settled the final season's data. Deliberately annual: these models are
+    # trained on 1999-present and one more season moves them very little.
+    - cron: '0 6 1 3 *'
+
+# A retrain writing artifacts while another retrain is mid-fit would interleave
+# outputs in models/ and out/.
+concurrency:
+  group: nfl-model-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  retrain:
+    name: Retrain NFL model suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout nfl-data
+        uses: actions/checkout@v4
+        with:
+          path: nfl-data
+          # Nothing here runs an authenticated git operation -- publishing uses
+          # secrets.SDV_GH_TOKEN explicitly -- so the job token has no reason to
+          # sit in the checkout's git config where trainer code could read it.
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync nfl-data Python deps
+        working-directory: nfl-data/python
+        run: uv sync --frozen
+
+      # sportsdataverse from git main, matching nfl_pbp_cron.yml. --reinstall
+      # --refresh is REQUIRED and not belt-and-braces: `uv sync --frozen` above
+      # already installed the lockfile-pinned release, and a plain install
+      # no-ops against an already-satisfied environment, so the pin would
+      # silently win. Every `uv run` below therefore also passes --no-sync,
+      # which would otherwise re-sync to the lockfile and undo this step.
+      - name: Install sportsdataverse from git (main)
+        working-directory: nfl-data/python
+        run: |
+          uv pip install --reinstall --refresh \
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
+
+      # Fail in seconds on a broken surface rather than after a multi-hour fit.
+      - name: Verify trainer surface imports
+        working-directory: nfl-data/python
+        run: |
+          uv run --no-sync python -c "import model_training.play_level, model_training.decision_models; print('trainer surface OK')"
+
+      - name: Train play-level models (EP / WP / CP / xYAC)
+        working-directory: nfl-data/python
+        run: |
+          uv run --no-sync python -m model_training.play_level train \
+            --source nflverse \
+            --download \
+            --models-dir models
+
+      # `inputs` is null on anything that is not a workflow_dispatch, so a bare
+      # `inputs.train_decision` skips this on EVERY scheduled run -- the decision
+      # models would keep the "annual" cadence their registry rows advertise while
+      # never actually retraining. That is precisely the stranded-retrain failure
+      # this workflow exists to prevent, so the cron opts in explicitly.
+      #
+      # `inputs.publish` is deliberately NOT given the same treatment: an unattended
+      # run must not overwrite released models (see the header).
+      - name: Train decision models (xpass / fd / nfl4th WP / FG / two-point / punt)
+        if: ${{ github.event_name == 'schedule' || inputs.train_decision }}
+        working-directory: nfl-data/python
+        env:
+          # Passed through env rather than interpolated into the script body: a
+          # dispatch input expanded inline by ${{ }} is a shell-injection surface.
+          NROUNDS: ${{ inputs.nrounds }}
+        run: |
+          EXTRA=""
+          if [ -n "${NROUNDS}" ]; then EXTRA="--nrounds ${NROUNDS}"; fi
+          uv run --no-sync python -m model_training.decision_models train-all \
+            --out-dir out $EXTRA
+
+      # Artifacts are retained even when publishing is off, so a retrain can be
+      # inspected and compared against the released models before anyone decides
+      # to overwrite them.
+      - name: Upload trained artifacts as a run artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nfl-model-artifacts
+          path: |
+            nfl-data/python/models/*.ubj
+            nfl-data/python/models/*.json
+            nfl-data/python/out/**
+          if-no-files-found: warn
+          retention-days: 30
+
+      # Publish is opt-in and the ONLY step given the cross-repo PAT, so the
+      # checkout and the multi-hour training steps never have it in scope.
+      - name: Publish play-level artifacts
+        if: ${{ inputs.publish }}
+        working-directory: nfl-data/python
+        env:
+          GITHUB_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+        run: |
+          uv run --no-sync python -m nfl_model_publish artifacts \
+            --models models \
+            --tag nfl_model_artifacts
+
+      # Routes fd + nfl4th WP to nfl_4th_down_models and the rest to
+      # nfl_model_artifacts via DECISION_MODELS_RELEASE_MAP. Do NOT replace this
+      # with the generic `artifacts` subcommand — that ignores the map and would
+      # publish every decision model onto a single tag.
+      - name: Publish decision-model artifacts (release-mapped)
+        if: ${{ inputs.publish && inputs.train_decision }}
+        working-directory: nfl-data/python
+        env:
+          GITHUB_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+        run: |
+          uv run --no-sync python -m nfl_model_publish decision_models-artifacts \
+            --out-dir out

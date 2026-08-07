@@ -1,0 +1,63 @@
+# NFL ratings weekly vintages — build + publish
+#
+# Produces the `nfl_ratings_weekly` dataset: per-week as-of vintages of the
+# ratings spine, keyed (season, as_of_week) with STRICTLY EXCLUSIVE semantics
+# (the vintage at as_of_week=W is fit only on games before week W's first
+# kickoff). Published as per-season parquet assets on the nfl_ratings_weekly
+# release of sportsdataverse/sportsdataverse-data.
+#
+# In-season the cron refreshes the current season every Tuesday (all of the
+# week's games are final by Tue morning ET); dispatch covers backfills.
+
+name: NFL Ratings Weekly
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "Season(s): single year (2025) or range (2009:2025)"
+        required: true
+        default: "2025"
+  schedule:
+    # Tuesdays 10:00 UTC, Sep-Feb (in-season + playoffs)
+    - cron: "0 10 * 9-12,1-2 2"
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: nfl-data
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync deps
+        working-directory: nfl-data
+        run: uv sync
+
+      - name: Resolve seasons
+        id: seasons
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # current NFL season: the year, minus one before September
+            m=$(date -u +%m); y=$(date -u +%Y)
+            if [ "$m" -lt 9 ]; then y=$((y-1)); fi
+            echo "seasons=$y" >> "$GITHUB_OUTPUT"
+          else
+            echo "seasons=${{ inputs.seasons }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build + publish vintages
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          uv run --no-sync python -m nfl_ratings_weekly \
+            --seasons "${{ steps.seasons.outputs.seasons }}" \
+            --out ../out/nfl_ratings_weekly \
+            --publish

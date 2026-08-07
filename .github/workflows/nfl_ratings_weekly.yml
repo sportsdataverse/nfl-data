@@ -1,0 +1,91 @@
+# NFL ratings weekly vintages — build + publish
+#
+# Produces the `nfl_ratings_weekly` dataset: per-week as-of vintages of the
+# ratings spine, keyed (season, as_of_week) with STRICTLY EXCLUSIVE semantics
+# (the vintage at as_of_week=W is fit only on games before week W's first
+# kickoff). Published as per-season parquet assets on the nfl_ratings_weekly
+# release of sportsdataverse/sportsdataverse-data.
+#
+# In-season the cron refreshes the current season every Tuesday (all of the
+# week's games are final by Tue morning ET) and publishes — refreshing the
+# release IS the job. Manual dispatch defaults to a dry build; publishing is
+# an explicit opt-in input, mirroring nfl_model_pipeline.yml.
+
+name: NFL Ratings Weekly
+
+on:
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: "Season(s): single year (2025) or range (1999:2025)"
+        required: true
+        default: "2025"
+      publish:
+        description: "Upload assets to the nfl_ratings_weekly release"
+        type: boolean
+        default: false
+  schedule:
+    # Tuesdays 10:00 UTC, Sep-Feb (in-season + playoffs)
+    - cron: "0 10 * 9-12,1-2 2"
+
+# Publishing writes to sportsdataverse-data via SDV_GH_TOKEN, never to this
+# repository — the job token stays read-only.
+permissions:
+  contents: read
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: nfl-data
+          # nothing here runs an authenticated git operation — publishing
+          # uses secrets.SDV_GH_TOKEN explicitly
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Sync deps
+        working-directory: nfl-data/python
+        run: uv sync
+
+      - name: Resolve seasons
+        id: seasons
+        env:
+          # env indirection: a dispatch caller controls this value; never
+          # expand it inline into the generated shell script
+          SEASONS_INPUT: ${{ inputs.seasons }}
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            # current NFL season: the year, minus one before September
+            m=$(date -u +%m); y=$(date -u +%Y)
+            if [ "$m" -lt 9 ]; then y=$((y-1)); fi
+            echo "seasons=$y" >> "$GITHUB_OUTPUT"
+          else
+            echo "seasons=$SEASONS_INPUT" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build vintages
+        working-directory: nfl-data/python
+        env:
+          SEASONS: ${{ steps.seasons.outputs.seasons }}
+        run: |
+          uv run --no-sync python -m nfl_ratings_weekly \
+            --seasons "$SEASONS" \
+            --out ../out/nfl_ratings_weekly
+
+      - name: Publish vintages
+        if: ${{ github.event_name == 'schedule' || inputs.publish }}
+        working-directory: nfl-data/python
+        env:
+          # cross-repo release upload: the job GITHUB_TOKEN cannot authorize
+          # writes to sportsdataverse-data, so there is no fallback
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+          SEASONS: ${{ steps.seasons.outputs.seasons }}
+        run: |
+          uv run --no-sync python -m nfl_ratings_weekly \
+            --seasons "$SEASONS" \
+            --out ../out/nfl_ratings_weekly \
+            --publish

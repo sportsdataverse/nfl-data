@@ -58,7 +58,7 @@ Output: parquet uploaded to releases on `sportsdataverse/sportsdataverse-data` (
 | `nfl_model_publish player-stats` | `nfl_player_stats` | 1999– | aggregates SDV-native PBP release (week-level, REG+POST, offense) |
 | `nfl_model_publish team-stats` | `nfl_team_stats` | 1999– | aggregates SDV-native PBP (offense+defense+kicking+returns) |
 | `nfl_model_publish qbr` | `nfl_espn_qbr` | 2006– | ESPN `fitt/v3` QBR endpoint, nflverse-shape |
-| `nfl_ratings_weekly` | `nfl_ratings_weekly` | 2009– | sdv-py `nfl_ratings(as_of_date=)` per week; `as_of_week` is STRICTLY EXCLUSIVE (fit on games before week W's first kickoff). Weekly in-season cron + dispatch (`nfl_ratings_weekly.yml`) |
+| `nfl_ratings_weekly` | `nfl_ratings_weekly` | 1999– | sdv-py `nfl_ratings(as_of_date=)` per week; `as_of_week` is STRICTLY EXCLUSIVE (fit on games before week W's first kickoff). Weekly in-season cron + dispatch (`nfl_ratings_weekly.yml`) |
 | `nfl_model_publish artifacts` / `decision_models-artifacts` | `nfl_model_artifacts` | n/a | `.ubj` models + cards from `models/` (play_level/decision_models trainers) |
 
 Consumed downstream by sdv-py `load_nfl_pbp(source="sdv")`, `load_nfl_espn_qbr(source="sdv")`, etc.

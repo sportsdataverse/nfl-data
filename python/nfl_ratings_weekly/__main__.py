@@ -1,7 +1,7 @@
 """CLI for the nfl_ratings_weekly vintage job.
 
 Usage:
-    python -m nfl_ratings_weekly --seasons 2009:2025 --out out/nfl_ratings_weekly
+    python -m nfl_ratings_weekly --seasons 1999:2025 --out out/nfl_ratings_weekly
     python -m nfl_ratings_weekly --seasons 2025 --out out/nfl_ratings_weekly --publish
 """
 

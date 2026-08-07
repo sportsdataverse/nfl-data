@@ -69,6 +69,10 @@ def build_season(
     built: list[int] = []
     for week, cutoff in week_starts(schedule):
         d = ratings_fn(season, as_of_date=dt.date.fromisoformat(cutoff))
+        if d.height:
+            # 1999-2000 pbp carries plays with an empty-string team that survives
+            # nfl_ratings' null filter and emits a garbage "" team row — drop it
+            d = d.filter(pl.col("team_id") != "")
         if d.height == 0:
             log.info("season %s as_of_week %s: no prior games (skipped)", season, week)
             continue

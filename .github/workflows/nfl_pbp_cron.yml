@@ -40,7 +40,7 @@ jobs:
     steps:
       # ── 1. Checkout nfl-data (this repo) ─────────────────────────────────
       - name: Checkout nfl-data
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: nfl-data
 
@@ -50,7 +50,7 @@ jobs:
       # The build step points --raw-dir at nfl-raw/nfl/raw so the native_pbp
       # builder finds files at {raw_dir}/{season}/*.json as documented.
       - name: Checkout nfl-raw (raw Shield JSON)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: sportsdataverse/nfl-raw
           # No explicit ref → checks out the default branch (main).
@@ -61,13 +61,13 @@ jobs:
 
       # ── 3. Set up Python 3.12 ────────────────────────────────────────────
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       # ── 4. Install uv ────────────────────────────────────────────────────
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.1.0
 
       # ── 5. Sync project deps from lockfile ───────────────────────────────
       # The pyproject.toml + uv.lock live under python/ inside nfl-data.
@@ -113,7 +113,7 @@ jobs:
       # means the models are re-used across runs; bump the key suffix when
       # new model artifacts are published (e.g. "v1" → "v2").
       - name: Cache sportsdataverse model files
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/sportsdataverse
           key: sdv-nfl-model-cache-v1

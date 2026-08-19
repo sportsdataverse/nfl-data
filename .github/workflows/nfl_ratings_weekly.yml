@@ -37,7 +37,7 @@ jobs:
   build-publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           path: nfl-data
           # nothing here runs an authenticated git operation — publishing
@@ -45,7 +45,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.1.0
 
       - name: Sync deps
         working-directory: nfl-data/python

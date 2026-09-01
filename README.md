@@ -31,7 +31,7 @@ publishes. See `docs/raw-to-data-migration-playbook.md` and
 flowchart TB;
     subgraph A[nfl-raw];
         direction TB;
-        A0[python/scrape_nfl_json.py]-->A1[python/extract_nfl_games.py];
+        A0[python/nfl_raw_01_scrape.py]-->A1[python/nfl_raw_02_extract.py];
     end;
 
     subgraph B[nfl-data];
@@ -123,3 +123,33 @@ uv run pytest          # hermetic suite (integration tests deselected by default
 | [`nfl_team_stats`](https://github.com/sportsdataverse/sportsdataverse-data/releases/tag/nfl_team_stats) | 1 | 0.9 MB | 2026-06-23 |
 
 <!-- END GENERATED: status -->
+
+## Consumers
+
+The packages that read what this repo produces:
+
+- **Python:** [`sportsdataverse.nfl (load_nfl_*)`](https://github.com/sportsdataverse/sportsdataverse-py) — docs at <https://py.sportsdataverse.org>
+- nflreadpy-parity surface; see also the [nflverse](https://nflverse.nflverse.com) ecosystem
+
+## Stage inventory
+
+Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `scripts/*.sh` drivers by number or name):
+
+- `python/nfl_data_01_ingest.py`
+- `python/nfl_data_02_model_pbp.py`
+- `python/nfl_data_03_pbp_publish.py`
+- `python/nfl_data_04_rosters_players.py`
+- `python/nfl_data_05_ratings_weekly.py`
+- `python/nfl_model_01_ep.py`
+- `python/nfl_model_02_wp_spread.py`
+- `python/nfl_model_03_wp_naive.py`
+- `python/nfl_model_04_cp.py`
+- `python/nfl_model_05_xyac.py`
+- `python/nfl_model_06_xpass.py`
+- `python/nfl_model_07_fd.py`
+- `python/nfl_model_08_two_pt.py`
+- `python/nfl_model_09_fg.py`
+- `python/nfl_model_10_wp.py`
+- `python/nfl_model_11_punt.py`
+
+Model release tags published from here: `nfl_4th_down_models`, `nfl_model_artifacts`, `nfl_model_pbp`

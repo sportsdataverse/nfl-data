@@ -10,6 +10,64 @@ raw JSON; `nfl-data` is the consumer that reshapes (with nflfastR parity), model
 publishes. See `docs/raw-to-data-migration-playbook.md` and
 `docs/superpowers/specs/2026-06-17-nfl-raw-to-data-migration-design.md`.
 
+## NFL workflow diagram
+
+```mermaid
+  graph LR;
+    S[api.nfl.com Shield API]-->A[nfl-raw];
+    A[nfl-raw]-->B[nfl-data];
+    B[nfl-data]-->C1[nfl_model_pbp];
+    B[nfl-data]-->C2[nfl_model_artifacts];
+    B[nfl-data]-->C3[nfl_4th_down_models];
+    B[nfl-data]-->C4[nfl_espn_qbr];
+    B[nfl-data]-->C5[nfl_ratings_weekly];
+    B[nfl-data]-->C6[nfl_rosters];
+    B[nfl-data]-->C7[nfl_players];
+    B[nfl-data]-->C8[nfl_player_stats];
+    B[nfl-data]-->C9[nfl_team_stats];
+```
+
+```mermaid
+flowchart TB;
+    subgraph A[nfl-raw];
+        direction TB;
+        A0[python/scrape_nfl_json.py]-->A1[python/extract_nfl_games.py];
+    end;
+
+    subgraph B[nfl-data];
+        direction TB;
+        B0[python -m native_pbp build]-->B1[python -m model_training.play_level train];
+        B1[python -m model_training.play_level train]-->B2[python -m model_training.decision_models train-all];
+        B2[python -m model_training.decision_models train-all]-->B3[python -m nfl_model_publish pbp / artifacts];
+        B3[python -m nfl_model_publish pbp / artifacts]-->B4[python -m nfl_ratings_weekly];
+    end;
+
+    subgraph C[sportsdataverse-data Releases];
+        direction TB;
+        C1[nfl_model_pbp];
+        C2[nfl_model_artifacts];
+        C3[nfl_4th_down_models];
+        C4[nfl_espn_qbr];
+        C5[nfl_ratings_weekly];
+        C6[nfl_rosters];
+        C7[nfl_players];
+        C8[nfl_player_stats];
+        C9[nfl_team_stats];
+    end;
+
+    A-->B;
+    B-->C;
+```
+
+Drivers are the four cron workflows (`nfl_pbp_cron.yml`, `nfl_model_pipeline.yml`,
+`nfl_ratings_weekly.yml`, `nfl_rosters_players_cron.yml`); each invokes the module
+CLIs above. Raw per-game JSON is fetched from
+[`nfl-raw`](https://github.com/sportsdataverse/nfl-raw) over HTTP — never a clone.
+
+[nfl-raw repository (source: api.nfl.com Shield API)](https://github.com/sportsdataverse/nfl-raw)
+
+[sportsdataverse-py (Shield wrappers, `.nfl` submodule)](https://github.com/sportsdataverse/sportsdataverse-py)
+
 ## Layout
 
 - `python/` — uv project. `native_pbp/` (compiled-PBP builder, nflfastR parity), `nfl_data_ingest/`

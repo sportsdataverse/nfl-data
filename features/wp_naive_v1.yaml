@@ -1,0 +1,20 @@
+# Feature set v1 for `wp_naive` — generated from the code constant;
+# ordered equality with the constant is gated by tests/test_feature_sets.py.
+# The constant is still the authority (migration step 2 of 3); inverting the
+# dependency (code reads this file) is a recorded follow-up.
+model: wp_naive
+version: 1
+source_constant: model_training.play_level.constants.WP_NAIVE_FEATURES
+hyperparams_constant: model_training.play_level.constants.WP_NAIVE_HYPERPARAMS
+columns:
+- receive_2h_ko
+- home
+- half_seconds_remaining
+- game_seconds_remaining
+- Diff_Time_Ratio
+- score_differential
+- down
+- ydstogo
+- yardline_100
+- posteam_timeouts_remaining
+- defteam_timeouts_remaining

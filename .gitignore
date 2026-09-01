@@ -19,3 +19,9 @@ out/
 **/out/
 python/data/
 .venv/
+
+# Promoted model artifacts are NOT committed (recorded Track C step 6 decision:
+# release tags + the sdv-py bundle are the durable stores; models/manifest.yaml).
+models/*.ubj
+models/*.json
+.fingerprints.json

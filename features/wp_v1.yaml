@@ -1,0 +1,20 @@
+# Feature set v1 for `wp` — generated from the code constant;
+# ordered equality with the constant is gated by tests/test_feature_sets.py.
+# The constant is still the authority (migration step 2 of 3); inverting the
+# dependency (code reads this file) is a recorded follow-up.
+model: wp
+version: 1
+source_constant: model_training.decision_models.constants.WP_FEATURES
+hyperparams_constant: model_training.decision_models.constants.WP_HYPERPARAMS
+columns:
+- home_receive_2h_ko
+- spread_time
+- home_posteam
+- half_seconds_remaining
+- game_seconds_remaining
+- Diff_Time_Ratio
+- home_score_differential
+- home_ep
+- ydstogo
+- home_yardline_100
+- home_timeouts_remaining

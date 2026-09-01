@@ -16,6 +16,7 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pyyaml>=6.0.3",
     "ruff>=0.6",
 ]
 figures = ["plotnine>=0.13", "scikit-misc>=0.3"]

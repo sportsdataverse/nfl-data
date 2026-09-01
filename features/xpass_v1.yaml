@@ -1,0 +1,28 @@
+# Feature set v1 for `xpass` — generated from the code constant;
+# ordered equality with the constant is gated by tests/test_feature_sets.py.
+# The constant is still the authority (migration step 2 of 3); inverting the
+# dependency (code reads this file) is a recorded follow-up.
+model: xpass
+version: 1
+source_constant: model_training.decision_models.constants.XPASS_FEATURES
+hyperparams_constant: model_training.decision_models.constants.XPASS_HYPERPARAMS
+columns:
+- down
+- ydstogo
+- yardline_100
+- qtr
+- wp
+- vegas_wp
+- era0
+- era1
+- era2
+- era3
+- era4
+- score_differential
+- home
+- half_seconds_remaining
+- posteam_timeouts_remaining
+- defteam_timeouts_remaining
+- outdoors
+- retractable
+- dome

@@ -1,0 +1,18 @@
+# Feature set v1 for `two_pt` — generated from the code constant;
+# ordered equality with the constant is gated by tests/test_feature_sets.py.
+# The constant is still the authority (migration step 2 of 3); inverting the
+# dependency (code reads this file) is a recorded follow-up.
+model: two_pt
+version: 1
+source_constant: model_training.decision_models.constants.TWO_PT_FEATURES
+hyperparams_constant: model_training.decision_models.constants.TWO_PT_HYPERPARAMS
+columns:
+- era2
+- era3
+- era4
+- outdoors
+- retractable
+- dome
+- posteam_spread
+- total_line
+- posteam_total

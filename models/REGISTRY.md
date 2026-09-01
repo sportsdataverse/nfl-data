@@ -61,3 +61,11 @@ Copied into sdv-py's `sportsdataverse/nfl/models/` package data by
 |---|---|
 | QBR (`qbr_model.ubj`) | card at `docs/models/qbr.md`; artifact ships in sdv-py's bundle. Fitting script: TODO (not in `model_training/`); last retrain: TODO. Add the row's facts when the trainer is located or ported into this repo. |
 | dakota | derived metric (EPA + CPOE composite) — no artifact to register; see `docs/models/dakota.md`. |
+
+## Operability (Track C steps 2–6)
+
+- `models/manifest.yaml` — single home for the model/stage list (guarded by `tests/test_model_manifest.py`).
+- One model = one numbered pipeline: `python/nfl_model_build/nfl_model_NN_<model>.py` (thin entries over `model_training`); run subsets with `scripts/nfl_models.sh`; CI = one job per stage (`nfl_model_pipeline.yml` matrix, `stages` dispatch input).
+- `features/<model>_v1.yaml` — feature-set registry, ordered-equality-gated to the code constants (`tests/test_feature_sets.py`). Inverting the dependency (code reads the YAML) is a recorded follow-up.
+- Fingerprints: each stage skips when `hash(code subtree, config)` is unchanged (`--force` to retrain); every trained model appends a `models/ledger.jsonl` line (`in_published_data` flips only when a reprocess ships the scores).
+- Promoted artifacts are NOT committed here — release tags + the sdv-py bundle are the durable stores (gitignored deliberately).

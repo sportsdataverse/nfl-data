@@ -1,0 +1,92 @@
+# Model stage manifest — the SINGLE home for the model/stage list (Track C
+# step 2). The numbered stage scripts, the CI matrix, the registry guard, and
+# the feature-set gates all key off this file; tests/test_model_manifest.py
+# keeps it in lockstep with models/REGISTRY.md, the publish routing maps, and
+# python/nfl_model_build/nfl_model_NN_*.py.
+#
+# One model = one numbered pipeline: python/nfl_model_build/nfl_model_NN_<model>.py
+# (thin entries — the training logic stays in model_training). Run any subset
+# with scripts/nfl_models.sh (by number or model name). Each stage fingerprints
+# hash(code subtree, config) beside its outputs (.fingerprints.json), skips when
+# unchanged unless --force, and appends to models/ledger.jsonl.
+#
+# Step 6 (commit promoted artifacts) — recorded decision: promoted artifacts
+# are NOT committed to this repo. They already have two durable stores — the
+# sportsdataverse-data release tags below, and the sdv-py bundled
+# nfl/models/* package data — and a third local copy of unknown vintage in git
+# would be a provenance liability, not a backup. models/*.ubj is gitignored to
+# encode this.
+
+driver: scripts/nfl_models.sh
+
+suites:
+  play_level:
+    module: model_training.play_level
+    gate: "python -m model_training.play_level validate --ep-model ... --wp-model ... (EP r >= 0.98, WP Brier <= 0.20)"
+    publish: "python -m nfl_model_publish artifacts --models models --tag nfl_model_artifacts"
+    models:
+      ep:
+        stage: python/nfl_model_build/nfl_model_01_ep.py
+        artifact: ep_model.ubj
+        release_tag: nfl_model_artifacts
+        features: features/ep_v1.yaml
+      wp_spread:
+        stage: python/nfl_model_build/nfl_model_02_wp_spread.py
+        artifact: wp_spread.ubj
+        release_tag: nfl_model_artifacts
+        features: features/wp_spread_v1.yaml
+      wp_naive:
+        stage: python/nfl_model_build/nfl_model_03_wp_naive.py
+        artifact: wp_naive.ubj
+        release_tag: nfl_model_artifacts
+        features: features/wp_naive_v1.yaml
+      cp:
+        stage: python/nfl_model_build/nfl_model_04_cp.py
+        artifact: cp_model.ubj
+        release_tag: nfl_model_artifacts
+        features: features/cp_v1.yaml
+      xyac:
+        stage: python/nfl_model_build/nfl_model_05_xyac.py
+        artifact: xyac_model.ubj
+        release_tag: nfl_model_artifacts
+        features: features/xyac_v1.yaml
+
+  decision_models:
+    module: model_training.decision_models
+    gate: "parity gate runs inside each stage (validate.py corr floors; two_pt is a documented soft gate; --nrounds smoke runs tolerate failures)"
+    publish: "python -m nfl_model_publish decision_models-artifacts --out-dir out  # release-mapped; NEVER the generic 'artifacts'"
+    notes: >
+      model_training.decision_models train-all remains the one-shot suite run
+      (shared holdout load, combined report.md); the numbered stages are the
+      per-model pipelines and the CI unit.
+    models:
+      xpass:
+        stage: python/nfl_model_build/nfl_model_06_xpass.py
+        artifact: xpass_model.ubj
+        release_tag: nfl_model_artifacts
+        features: features/xpass_v1.yaml
+      fd:
+        stage: python/nfl_model_build/nfl_model_07_fd.py
+        artifact: fd_model.ubj
+        release_tag: nfl_4th_down_models
+        features: features/fd_v1.yaml
+      two_pt:
+        stage: python/nfl_model_build/nfl_model_08_two_pt.py
+        artifact: two_pt_model.ubj
+        release_tag: nfl_model_artifacts
+        features: features/two_pt_v1.yaml
+      fg:
+        stage: python/nfl_model_build/nfl_model_09_fg.py
+        artifact: fg_model.ubj
+        release_tag: nfl_model_artifacts
+        features: features/fg_v1.yaml
+      wp:
+        stage: python/nfl_model_build/nfl_model_10_wp.py
+        artifact: wp_model.ubj
+        release_tag: nfl_4th_down_models
+        features: features/wp_v1.yaml
+      punt:
+        stage: python/nfl_model_build/nfl_model_11_punt.py
+        artifact: punt_data.parquet
+        release_tag: nfl_model_artifacts
+        # distribution artifact, not a fitted booster — no feature set

@@ -1,0 +1,27 @@
+# Feature set v1 for `cp` — generated from the code constant;
+# ordered equality with the constant is gated by tests/test_feature_sets.py.
+# The constant is still the authority (migration step 2 of 3); inverting the
+# dependency (code reads this file) is a recorded follow-up.
+model: cp
+version: 1
+source_constant: model_training.play_level.constants.CP_FEATURES
+hyperparams_constant: model_training.play_level.constants.CP_HYPERPARAMS
+columns:
+- air_yards
+- yardline_100
+- ydstogo
+- down1
+- down2
+- down3
+- down4
+- air_is_zero
+- pass_middle
+- era2
+- era3
+- era4
+- qb_hit
+- home
+- outdoors
+- retractable
+- dome
+- distance_to_sticks

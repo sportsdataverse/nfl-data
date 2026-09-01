@@ -1,0 +1,23 @@
+# Feature set v1 for `fd` — generated from the code constant;
+# ordered equality with the constant is gated by tests/test_feature_sets.py.
+# The constant is still the authority (migration step 2 of 3); inverting the
+# dependency (code reads this file) is a recorded follow-up.
+model: fd
+version: 1
+source_constant: model_training.decision_models.constants.FD_FEATURES
+hyperparams_constant: model_training.decision_models.constants.FD_HYPERPARAMS
+columns:
+- down
+- ydstogo
+- yardline_100
+- era0
+- era1
+- era2
+- era3
+- era4
+- outdoors
+- retractable
+- dome
+- posteam_spread
+- total_line
+- posteam_total

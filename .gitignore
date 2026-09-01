@@ -25,3 +25,4 @@ python/data/
 models/*.ubj
 models/*.json
 .fingerprints.json
+docs/models/.cache/

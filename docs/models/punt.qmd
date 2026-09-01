@@ -1,0 +1,165 @@
+---
+title: "Punt Outcome Distribution (`punt_data`)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_tile, geom_line, geom_point, labs, theme_minimal,
+    scale_fill_gradient,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+import sportsdataverse.nfl as sdv_nfl
+from importlib.resources import files as _files
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+punt = pl.read_parquet(str(_files("sportsdataverse.nfl") / "models" / "punt_data.parquet"))
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The punt surface is an **empirical landing distribution** — *not* a trained model
+— giving, for each pre-punt field position, the distribution of resulting field
+positions (plus block / return-TD / muff probabilities). It powers the **punt
+branch** of the [nfl4th decision](fourth_down.md): the post-punt field position
+distribution is mapped through the WP surface to value punting. It is a Python
+builder reproducing nfl4th's punt distribution, validated against the converted
+nflverse distribution.
+
+This document is compiled: the surface below is plotted from the bundled
+`punt_data.parquet` artifact at render time, and the expected-net section holds
+its implied net punt distance against the latest published season's actual
+punts.
+
+## How it is built
+
+From PBP punts: per punt,
+`yardline_after = yardline_100 − kick_distance + return_yards` (end-zone → 20;
+blocked → `yardline_100`; capped to [1, 100]). Flags: `blocked`,
+`return_td (= yardline_after == 100)`, `muff (= fumble_lost, 0 if blocked)`. Then,
+**grouped by `yardline_100`** (and filtered to `yardline_100 > 30`):
+
+1. coarse-bin the muffed / blocked / return-TD percentages;
+2. a 2-D KDE (`scipy.stats.gaussian_kde`) over `(yardline_100, yardline_after)`
+   excluding blocked + return-TD rows, normalized per snap yardline;
+3. re-insert block (`yardline_after = 999 → yardline_100`) and TD (`= 100`) rows
+   rescaled by `1 − (block + td)`;
+4. duplicate rows for `muff ∈ {0, 1}` weighted by the bin muff rate; renormalize.
+
+Output columns: `yardline_100`, `yardline_after`, `pct`, `muff`.
+
+## The surface
+
+```{python}
+#| fig-cap: "The bundled punt landing distribution: P(resulting opponent field position | snap yardline)."
+surf = (
+    punt.group_by(["yardline_100", "yardline_after"])
+    .agg(pl.col("pct").sum().alias("pct"))
+    .filter((pl.col("yardline_after") <= 100) & (pl.col("pct") > 0.0005))
+)
+(
+    ggplot(surf.to_pandas(), aes("yardline_100", "yardline_after", fill="pct"))
+    + geom_tile()
+    + scale_fill_gradient(low="#f7fbff", high="#2a6f97")
+    + labs(x="snap yardline (yards to opponent end zone)",
+           y="resulting yardline (returning team)",
+           title="Punt landing distribution — bundled artifact")
+    + theme_minimal()
+)
+```
+
+```{python}
+#| fig-cap: "Expected net field-position change implied by the surface vs snap yardline, with the touchback shelf visible near midfield."
+en = (
+    punt.group_by("yardline_100")
+    .agg(((pl.col("yardline_after") * pl.col("pct")).sum() / pl.col("pct").sum()).alias("exp_after"))
+    .sort("yardline_100")
+)
+(
+    ggplot(en.to_pandas(), aes("yardline_100", "exp_after"))
+    + geom_line(color="#2a6f97") + geom_point(color="#2a6f97", alpha=0.6)
+    + labs(x="snap yardline", y="expected resulting yardline (opponent)",
+           title="Expected punt outcome by snap position")
+    + theme_minimal()
+)
+```
+
+## Evaluation
+
+Distributional parity against the converted nflverse distribution via
+**total-variation (TV) distance** per snap yardline (KDE bandwidth causes
+small, expected divergence): **freq-weighted TV 0.0652** (gate ≤0.10), mean TV
+0.0944, median 0.0599. See [Parity](parity.md).
+
+A render-time reality check against the latest published season's punts —
+mean realized net (kick distance minus return) vs the surface's expectation
+over the same snap positions:
+
+```{python}
+pn = pbp.filter((pl.col("play_type") == "punt") & pl.col("kick_distance").is_not_null()
+                & (pl.col("yardline_100") > 30))
+real = (
+    pn.group_by(pl.col("yardline_100").cast(pl.Float64))
+    .agg(pl.len().alias("n"))
+    .join(en.with_columns(pl.col("yardline_100").cast(pl.Float64)),
+          on="yardline_100", how="inner")
+)
+w_exp = float((real["exp_after"] * real["n"]).sum() / real["n"].sum())
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["2025 punts (snap > 30)",
+                  "surface-expected resulting yardline (2025 snap mix)"],
+        "value": [float(pn.height), w_exp],
+    }).to_pandas())
+    .tab_header(title="Render-time punt-surface check — 2025 season snap mix")
+    .fmt_number(columns="value", decimals=2)
+)
+```
+
+## Limitations
+
+It is a **league-average empirical surface** — no punter identity, hang time, or
+coverage. KDE smoothing slightly blurs the per-yardline landing spread (the TV
+residual). Snap positions inside the 30 are excluded (where a punt is rarely the
+decision).
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | punt_data (empirical distribution, not a model) |
+| `columns` | yardline_100, yardline_after, pct, muff |
+| `build` | 2-D Gaussian KDE over punt landings, per snap yardline |
+| `lineage` | nfl4th punt model |
+| `parity` | freq-weighted TV 0.105 (informational; full-history vs nfl4th 2010–19) |
+| `distribution` | bundled in sportsdataverse (`punt_data.parquet`) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Returner identity and directional punting** are absent.
+- **Known issue:** as a distribution artifact it has no gate of its own —
+  errors surface only through the 4th-down decision calibration.

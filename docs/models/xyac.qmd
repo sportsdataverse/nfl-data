@@ -1,0 +1,215 @@
+---
+title: "Expected Yards After Catch (xYAC)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_line, geom_abline, labs, theme_minimal,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+
+ROOT = Path.cwd()
+while not (ROOT / "models" / "xyac_model.ubj").is_file():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+bst = xgb.Booster()
+bst.load_model(str(ROOT / "models" / "xyac_model.ubj"))
+ros_path = CACHE / "roster_2025.parquet"
+if not ros_path.exists():
+    ros_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
+        timeout=300).content)
+ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The xYAC model predicts the **distribution of yards gained after the catch** on a
+completed pass, given the throw geometry and game state at the moment of the
+catch. It is a faithful re-implementation of the nflfastR `add_xyac` model — a
+**76-class multinomial** over post-catch gain — and feeds the expected-YAC
+surface (`xyac_epa`, `xyac_mean_yardage`) used to decompose a completion into its
+air vs after-catch contributions.
+
+This document is compiled: the evaluation below holds the published
+`xyac_mean_yardage` column against **realized** yards after catch on the latest
+published season — a live predicted-vs-realized check of the applied model.
+
+## Model features
+
+**19 features** — the [CP](cpoe.md) feature set plus `distance_to_goal`. The
+label is the post-catch yardage bucketed into 76 ordinal classes. Like CP, xYAC
+depends on `air_yards` charting (2006+), so only `era2..4` are carried.
+
+| Feature | Type | What it encodes |
+|---|---|---|
+| `air_yards` | numeric | Air distance to the catch point — sets where YAC starts. |
+| `distance_to_goal` | numeric | Yards from the catch point to the end zone — **caps** achievable YAC near the goal line. |
+| `distance_to_sticks` | numeric | `air_yards − ydstogo`. |
+| `yardline_100` / `ydstogo` | numeric | Field position and yards to go at the snap. |
+| `air_is_zero` / `pass_middle` / `qb_hit` | binary | Screen/behind-LOS, over-the-middle, pressure indicators. |
+| `down1` … `down4` | one-hot | Current down. |
+| `home` | binary | Possession team is home. |
+| `dome` / `retractable` / `outdoors` | binary | Stadium-type one-hots. |
+| `era2` … `era4` | one-hot | Rule era from 2006. |
+
+## The model
+
+**Algorithm.** XGBoost, `objective=multi:softprob` over **`num_class=76`**,
+`eta=0.025`, `max_depth=4` — the nflfastR `add_xyac` recipe. The 76-class
+distribution over post-catch gain is the model output; expected YAC and
+`xyac_epa` are recovered by combining the class distribution with the EP surface
+at each resulting yard line. Trained on **222,020 completed passes (2006–2025)**.
+
+**Evaluation.** Faithful port of nflfastR `add_xyac` — the 76-class multinomial
+reproduces the nflverse YAC distribution. xYAC is a **download-on-demand** model
+in `sportsdataverse` (the ~34 MB artifact is fetched and cached rather than
+bundled); the artifact is committed here at `models/xyac_model.ubj`.
+
+## Feature importance
+
+```{python}
+gain = bst.get_score(importance_type="gain")
+imp = pl.DataFrame({"feature": list(gain.keys()),
+                    "gain": [float(v) for v in gain.values()]}).sort("gain", descending=True)
+gt_show(
+    GT(imp.head(12).to_pandas())
+    .tab_header(title="Top 12 features by gain — committed xYAC booster")
+    .fmt_number(columns="gain", decimals=1)
+)
+```
+
+`air_yards` and `distance_to_goal` dominate — air depth sets the YAC starting
+point and the goal line caps it — with `air_is_zero` / `pass_middle` separating
+screens and crossers (high-YAC archetypes) from contested downfield throws.
+(A per-play SHAP pass is deliberately omitted: multiclass `pred_contribs` on a
+76-class head is a 3-D `(n, 76, 20)` tensor — the recorded gotcha — and the
+mean-YAC attribution it would aggregate to is already what the gain table and
+the depth curves below show.)
+
+## Calibration — predicted vs realized YAC, render time
+
+```{python}
+#| fig-cap: "Mean predicted xYAC vs mean realized YAC by air-yards bucket, 2025 completions — the applied surface against reality."
+comp = pbp.filter((pl.col("complete_pass") == 1)
+                  & pl.col("xyac_mean_yardage").is_not_null()
+                  & pl.col("yards_after_catch").is_not_null())
+byay = (
+    comp.with_columns(pl.col("air_yards").clip(-5, 30).alias("ay"))
+    .group_by("ay")
+    .agg(pl.col("xyac_mean_yardage").mean().alias("predicted"),
+         pl.col("yards_after_catch").mean().alias("realized"), pl.len().alias("n"))
+    .filter(pl.col("n") >= 30).sort("ay")
+)
+long = byay.unpivot(index=["ay", "n"], on=["predicted", "realized"],
+                    variable_name="series", value_name="yac")
+(
+    ggplot(long.to_pandas(), aes("ay", "yac", color="series"))
+    + geom_line() + geom_point(alpha=0.7)
+    + labs(x="air yards", y="mean YAC",
+           title=f"xYAC vs realized YAC — 2025 ({comp.height:,} completions)")
+    + theme_minimal()
+)
+```
+
+```{python}
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["completions evaluated", "mean predicted xYAC", "mean realized YAC",
+                  "mean error (pred − real)", "corr(pred, real) per completion"],
+        "value": [float(comp.height),
+                  float(comp["xyac_mean_yardage"].mean()),
+                  float(comp["yards_after_catch"].mean()),
+                  float((comp["xyac_mean_yardage"] - comp["yards_after_catch"]).mean()),
+                  float(comp.select(pl.corr("xyac_mean_yardage", "yards_after_catch")).item())],
+    }).to_pandas())
+    .tab_header(title="Render-time xYAC evaluation — 2025 season",
+                subtitle="per-completion correlation is bounded by irreducible YAC variance; the aggregate bias is the honest calibration number")
+    .fmt_number(columns="value", decimals=3)
+)
+```
+
+The screen-depth region (negative/zero air yards) carries the highest YAC and
+the tightest predicted-realized agreement; deep throws carry little YAC and
+more relative noise — exactly the structure the 76-class head is built around.
+
+## Results — YAC over expected, 2025
+
+```{python}
+rec = (
+    comp.filter(pl.col("receiver_player_id").is_not_null())
+    .group_by("receiver_player_id")
+    .agg(pl.col("receiver_player_name").first().alias("receiver"),
+         pl.col("posteam").last().alias("team"),
+         pl.len().alias("catches"),
+         pl.col("yards_after_catch").sum().alias("yac"),
+         pl.col("xyac_mean_yardage").sum().alias("x_yac"))
+    .with_columns((pl.col("yac") - pl.col("x_yac")).alias("yac_oe"))
+    .filter(pl.col("catches") >= 40)
+    .sort("yac_oe", descending=True).head(10)
+    .join(ros, left_on="receiver_player_id", right_on="gsis_id", how="left")
+    .with_columns(("<img src='" + pl.col("headshot_url").fill_null("") + "' height='40'/>").alias("headshot"))
+)
+gt_show(
+    GT(rec.select("headshot", "receiver", "team", "catches", "yac", "x_yac", "yac_oe").to_pandas())
+    .tab_header(title="YAC over expected — 2025 (min 40 catches)",
+                subtitle="realized YAC minus the geometry-expected YAC; the broken-tackle/athleticism residual the model is deliberately blind to")
+    .fmt_markdown(columns="headshot")
+    .fmt_number(columns=["yac", "x_yac", "yac_oe"], decimals=1)
+    .cols_label(headshot="", receiver="Receiver", team="Team", catches="Rec",
+                yac="YAC", x_yac="xYAC", yac_oe="YAC−xYAC")
+)
+```
+
+## Limitations
+
+xYAC is blind to the broken-tackle / open-field athleticism that drives the YAC
+tail, so it captures the *situation-and-geometry-explainable* mean, not a specific
+receiver's elusiveness — which is precisely what makes YAC-over-expected a
+meaningful receiver skill residual. The 76-class window clips extreme returns.
+Because it depends on `air_yards`, it is a 2006+ surface.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | xyac |
+| `objective` | multi:softprob (num_class=76) |
+| `features` | 19 (CP set + `distance_to_goal`) |
+| `label` | post-catch yardage (76 ordinal classes) |
+| `training_seasons` | 2006–2025 |
+| `n_training_rows` | 222,020 |
+| `hyperparameters` | eta=0.025, max_depth=4 |
+| `lineage` | nflfastR `add_xyac` |
+| `artifact` | `models/xyac_model.ubj` (committed; download-on-demand in sportsdataverse) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Continuous target** — the 76-class distribution could be compared against
+  a monotone continuous head; distributional calibration beyond the mean is
+  unevaluated (the render-time check above evaluates the mean only).
+- **Known issue:** `distance_to_sticks` sign conventions bit once already
+  (recorded gotcha) — any feature change must re-verify it.

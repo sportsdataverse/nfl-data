@@ -17,28 +17,28 @@ website:
     style: docked
     contents:
       - index.qmd
-      - parity.md
+      - parity.qmd
       - section: "Core play-level models"
         contents:
-          - ep.md
-          - wp_spread.md
-          - wp_naive.md
-          - cpoe.md
+          - ep.qmd
+          - wp_spread.qmd
+          - wp_naive.qmd
+          - cpoe.qmd
       - section: "Yards after catch"
         contents:
-          - xyac.md
+          - xyac.qmd
       - section: "Fourth-down decision"
         contents:
-          - fourth_down.md
-          - fg.md
-          - two_pt.md
-          - punt.md
-          - nfl4th_wp.md
+          - fourth_down.qmd
+          - fg.qmd
+          - two_pt.qmd
+          - punt.qmd
+          - nfl4th_wp.qmd
       - section: "Tendency & quarterback efficiency"
         contents:
-          - xpass.md
-          - qbr.md
-          - dakota.md
+          - xpass.qmd
+          - qbr.qmd
+          - dakota.qmd
 
 format:
   html:

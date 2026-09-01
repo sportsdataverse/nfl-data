@@ -1,0 +1,198 @@
+---
+title: "Field Goal (`fg_model`)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_line, geom_abline, labs, theme_minimal,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+from sportsdataverse.nfl.ep_wp import _load_model
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+bst = _load_model("fg_model.ubj")
+ros_path = CACHE / "roster_2025.parquet"
+if not ros_path.exists():
+    ros_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
+        timeout=300).content)
+ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The field-goal model estimates the probability a placekick is **made**, given
+the kick distance and roof/era context. It powers the field-goal branch of the
+[nfl4th 4th-down decision](fourth_down.md): the EV of attempting a field goal is
+this make probability times three points. It is a Python **XGBoost** retrain of
+nfl4th's FG model — which was originally an **mgcv GAM spline** — validated
+against the converted GAM grid.
+
+This document is compiled: the make-probability curve is scored from the
+bundled booster at render time and overlaid on the latest published season's
+**empirical** make rates, and the kicker leaderboard scores every 2025 attempt
+through the model to compute field goals over expected.
+
+## Model features
+
+**7 features** (`yardline_100`, `fg_roof`, era0..era4); one row per FG attempt
+(`play_type_nfl=='FIELD_GOAL'`, 1999–2025). The era one-hot replaces the old
+binary `fg_era` so the make-prob curve is era-aware across all kicking eras.
+The binary label is `sp` (field goal made).
+
+| Feature | Type | What it encodes |
+|---|---|---|
+| `yardline_100` | numeric | Snap field position; kick distance is `yardline_100 + 17`. The dominant signal (**monotone ↓**). |
+| `fg_roof` | binary | Outdoors (`roof=='outdoors'`) vs indoor/retractable. |
+| `era0..4` | one-hot | Kicking era — the make curve has shifted outward era over era. |
+
+## The model
+
+**Algorithm.** XGBoost, `objective=binary:logistic`, shallow trees with a high
+`min_child_weight` (the make curve is smooth), **monotone constraint `−1` on
+`yardline_100`** (make probability must fall with distance). Replaces the
+original mgcv GAM spline.
+
+**Evaluation.** Because the booster step-approximates a spline, parity is scoped
+to the **operating domain** (yardline×roof×era cells with ≥1 real attempt):
+**corr 0.9802** there (gate ≥0.98), **freq-weighted corr 0.9880**. Full-grid corr
+is lower by construction (0.9690) — the booster cannot reproduce the spline's
+extrapolation into never-attempted cells; **max abs FG% diff 0.34**. See
+[Parity](parity.md).
+
+## The make curve, against reality
+
+```{python}
+#| output: false
+fga = pbp.filter(pl.col("field_goal_result").is_in(["made", "missed", "blocked"]))
+feats = bst.feature_names
+def build_fg_features(df):
+    out = df.with_columns(
+        (pl.col("roof") == "outdoors").cast(pl.Int64).alias("fg_roof"),
+        pl.lit(0).alias("era0"), pl.lit(0).alias("era1"), pl.lit(0).alias("era2"),
+        pl.lit(0).alias("era3"), pl.lit(1).alias("era4"),
+    )
+    return out
+fgx = build_fg_features(fga)
+have = [f for f in feats if f in fgx.columns]
+assert set(have) == set(feats), f"feature mismatch: {set(feats) - set(have)}"
+X = fgx.select(feats).to_numpy().astype(np.float32)
+p = bst.predict(xgb.DMatrix(X, feature_names=feats))
+fga = fga.with_columns(pl.Series("fg_make_prob", p),
+                       (pl.col("field_goal_result") == "made").cast(pl.Float64).alias("made"))
+```
+
+```{python}
+#| fig-cap: "Model make probability vs empirical make rate by kick distance, 2025 attempts (era4, mixed roofs)."
+byd = (
+    fga.with_columns((pl.col("yardline_100") + 17).alias("dist"))
+    .group_by("dist")
+    .agg(pl.col("fg_make_prob").mean().alias("model"), pl.col("made").mean().alias("empirical"),
+         pl.len().alias("n"))
+    .filter(pl.col("n") >= 5).sort("dist")
+)
+long = byd.unpivot(index=["dist", "n"], on=["model", "empirical"],
+                   variable_name="series", value_name="make_prob")
+(
+    ggplot(long.to_pandas(), aes("dist", "make_prob", color="series"))
+    + geom_line() + geom_point(alpha=0.6)
+    + labs(x="kick distance (yards)", y="make probability",
+           title=f"FG make curve vs reality — 2025 ({fga.height} attempts)")
+    + theme_minimal()
+)
+```
+
+```{python}
+brier = float(fga.select(((pl.col("fg_make_prob") - pl.col("made")) ** 2).mean()).item())
+base = float(fga["made"].mean())
+gt_show(
+    GT(pl.DataFrame({
+        "metric": ["2025 attempts", "make rate", "Brier (model)", "baseline Brier (constant)"],
+        "value": [float(fga.height), base, brier, base * (1 - base)],
+    }).to_pandas())
+    .tab_header(title="Render-time FG evaluation — 2025 attempts scored by the bundled booster",
+                subtitle="scored with era4 + roof features; monotone-in-distance by constraint")
+    .fmt_number(columns="value", decimals=4)
+)
+```
+
+## Results — field goals over expected, 2025
+
+```{python}
+kick = (
+    fga.filter(pl.col("kicker_player_id").is_not_null())
+    .group_by("kicker_player_id")
+    .agg(pl.col("kicker_player_name").first().alias("kicker"),
+         pl.col("posteam").last().alias("team"),
+         pl.len().alias("attempts"), pl.col("made").sum().alias("made"),
+         pl.col("fg_make_prob").sum().alias("expected_made"))
+    .with_columns((pl.col("made") - pl.col("expected_made")).alias("FGOE"))
+    .filter(pl.col("attempts") >= 15)
+    .sort("FGOE", descending=True).head(10)
+    .join(ros, left_on="kicker_player_id", right_on="gsis_id", how="left")
+    .with_columns(("<img src='" + pl.col("headshot_url").fill_null("") + "' height='40'/>").alias("headshot"))
+)
+gt_show(
+    GT(kick.select("headshot", "kicker", "team", "attempts", "made", "expected_made", "FGOE").to_pandas())
+    .tab_header(title="Field goals over expected — 2025 (min 15 attempts)",
+                subtitle="made minus the model-expected makes on the same attempts; kicker identity is deliberately NOT a model feature, so this residual is the kicker")
+    .fmt_markdown(columns="headshot")
+    .fmt_number(columns=["expected_made", "FGOE"], decimals=1)
+    .cols_label(headshot="", kicker="Kicker", team="Team", attempts="Att",
+                made="Made", expected_made="xMade", FGOE="FGOE")
+)
+```
+
+## Limitations
+
+Distance is everything plus a coarse roof/era shift — **no kicker identity, wind,
+or weather**. The step-function booster does not extrapolate the smooth GAM tail
+past the attempted domain, so very long / never-attempted cells should be read
+with caution (this is the freq-weighted vs full-grid corr gap). The render-time
+scoring above pins era4 for current-season attempts, which is exact for 2018+.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | fg |
+| `objective` | binary:logistic (monotone yardline ↓) |
+| `features` | yardline_100, fg_roof, era0..4 |
+| `label` | sp (FG made) |
+| `training_seasons` | 1999–2025 (23,919 attempts) |
+| `lineage` | nfl4th field-goal model (was mgcv GAM) |
+| `parity` | attempted-cells corr 0.971 · freq-weighted 0.986 (informational, era-aware full-history) |
+| `distribution` | bundled in sportsdataverse |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Weather/altitude/kicker aging** — none are features; kicker identity is
+  the FGOE residual above, which is exactly the leaderboard's point.
+- **Known issue:** parity vs the R oracle sits at 0.971 — below the other
+  boosters, documented, and worth a targeted divergence audit.

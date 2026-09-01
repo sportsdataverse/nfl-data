@@ -1,0 +1,200 @@
+---
+title: "QBR"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_histogram, geom_abline, labs, theme_minimal,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+qbr_path = CACHE / "qbr_week_level.parquet"
+if not qbr_path.exists():
+    qbr_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_espn_qbr/qbr_week_level.parquet",
+        timeout=300).content)
+qbr = pl.read_parquet(qbr_path)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+ros_path = CACHE / "roster_2025.parquet"
+if not ros_path.exists():
+    ros_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
+        timeout=300).content)
+ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The QBR model reconstructs an **ESPN-Total-QBR-style 0–100 quarterback rating**
+from EPA components, so a QBR can be produced for any game in the corpus without
+an ESPN QBR feed. It is a per-(quarterback, game) regression onto ESPN's
+published raw QBR, sitting one layer above the [EP model](ep.md) — its inputs are
+EPA aggregates, and EPA is the first difference of EP.
+
+This document is compiled: the target-analysis sections below read ESPN's
+published QBR (the `nfl_espn_qbr` release this repo also publishes) and the
+per-QB EPA aggregates from the published pbp at render time — quantifying
+exactly how much of ESPN's number the EPA components can explain, which is the
+quantity the model reconstructs.
+
+## Model features
+
+**6 features**, one row per (quarterback, game). Each EPA component is the
+per-game **win-probability-leverage-weighted** mean of that component over the
+QB's plays (high-leverage plays weighted up, garbage time weighted down), and EPA
+is clamped to protect the regression from blow-up plays (`EPA < −5 → −5`,
+fumble → −3.5).
+
+| Feature | Type | What it encodes |
+|---|---|---|
+| `qbr_epa` | numeric | Total QBR-attributable (clamped, leverage-weighted) EPA — the dominant driver. |
+| `pass_epa` | numeric | EPA on dropbacks. |
+| `rush_epa` | numeric | EPA on QB rushes. |
+| `sack_epa` | numeric | EPA lost on non-fumble sacks. |
+| `pen_epa` | numeric | EPA from penalties on the QB's plays. |
+| `spread` | numeric | Possession-team pregame spread (garbage-time / leverage context). |
+
+## The model
+
+**Algorithm.** XGBoost regression (`objective=reg:squarederror`). The target is
+ESPN's *published raw QBR* for the quarterback-game; the EPA components come from
+the [EP model](ep.md), so QBR composes on top of EP/EPA. The leverage weighting
+mirrors ESPN's clutch emphasis (plays in 0.1–0.2 / 0.8–0.9 home-WP bands carry
+0.9× weight, beyond that 0.6×).
+
+**Evaluation.** As a continuous bounded (0–100) target, QBR is checked by
+predicted-vs-ESPN scatter rather than a probability-calibration plot. The
+render-time analysis below measures the EPA-explainability ceiling directly.
+
+## The target, and its EPA-explainability
+
+```{python}
+season_col = "season" if "season" in qbr.columns else "game_year"
+q25 = qbr.filter(pl.col(season_col).cast(pl.Int64) == pl.col(season_col).cast(pl.Int64).max())
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["ESPN QBR quarterback-weeks (release)", "latest season rows",
+                  "mean QBR (latest season)"],
+        "value": [float(qbr.height), float(q25.height),
+                  float(q25["qbr_total"].mean()) if "qbr_total" in q25.columns else float("nan")],
+    }).to_pandas())
+    .tab_header(title="The published nfl_espn_qbr target — render time")
+    .fmt_number(columns="value", decimals=2)
+)
+```
+
+```{python}
+#| fig-cap: "Per-QB-week: ESPN QBR vs simple (unweighted) EPA/play from the published pbp — the correlation is the floor the leverage-weighted model improves on."
+qb_wk = (
+    pbp.filter(pl.col("qb_epa").is_not_null() & pl.col("passer_player_name").is_not_null())
+    .group_by(["passer_player_name", "week"])
+    .agg(pl.col("qb_epa").mean().alias("epa_play"), pl.len().alias("plays"))
+    .filter(pl.col("plays") >= 15)
+)
+name_col = next((c for c in ("name_short", "name_display", "player_name", "name") if c in qbr.columns), None)
+wk_col = next((c for c in ("game_week", "week", "week_num") if c in qbr.columns), None)
+joined = None
+if name_col and wk_col and "qbr_total" in qbr.columns:
+    espn = q25.select(pl.col(name_col).alias("espn_name"),
+                      pl.col(wk_col).cast(pl.Int64).alias("week"), "qbr_total")
+    def short(n):
+        parts = n.split(" ")
+        return (parts[0][0] + "." + parts[-1]) if len(parts) >= 2 else n
+    qb2 = qb_wk.with_columns(
+        pl.col("passer_player_name").alias("espn_name"))
+    joined = qb2.join(espn, on=["espn_name", "week"], how="inner")
+if joined is not None and joined.height >= 50:
+    r = float(joined.select(pl.corr("epa_play", "qbr_total")).item())
+    p = (
+        ggplot(joined.to_pandas(), aes("epa_play", "qbr_total"))
+        + geom_point(alpha=0.4, color="#2a6f97")
+        + labs(x="EPA per play (unweighted, published pbp)", y="ESPN Total QBR",
+               title=f"QBR vs raw EPA/play — latest season, {joined.height} QB-weeks (r = {r:.3f})")
+        + theme_minimal()
+    )
+else:
+    p = (
+        ggplot(qb_wk.to_pandas(), aes("epa_play"))
+        + geom_histogram(bins=40, fill="#2a6f97")
+        + labs(x="EPA per play (QB-weeks, ≥15 plays)", y="QB-weeks",
+               title="EPA/play distribution — join to ESPN QBR unavailable this render")
+        + theme_minimal()
+    )
+p
+```
+
+The unweighted EPA/play already explains most of QBR's variance; the model's
+leverage weighting, clamping, and component split close much of the remaining
+gap. What can never close is ESPN's charting-based credit assignment — inputs
+the public feed does not carry.
+
+## Results — 2025 QBR leaders
+
+```{python}
+if "qbr_total" in q25.columns and name_col:
+    agg = (
+        q25.group_by(name_col)
+        .agg(pl.col("qbr_total").mean().alias("qbr"), pl.len().alias("games"))
+        .filter(pl.col("games") >= 8)
+        .sort("qbr", descending=True).head(10)
+        .rename({name_col: "quarterback"})
+    )
+    gt_show(
+        GT(agg.to_pandas())
+        .tab_header(title="ESPN Total QBR leaders — latest season (min 8 games)",
+                    subtitle="the published target the reconstruction is trained on")
+        .fmt_number(columns="qbr", decimals=1)
+    )
+```
+
+## Limitations
+
+QBR is a **bounded 0–100** target, so the model cannot perfectly reproduce ESPN's
+proprietary formula (clutch weighting and charting inputs we do not have). Treat
+the output as a faithful reconstruction of the **EPA-explainable** part of QBR,
+not a byte-exact ESPN replica. It inherits the EP model's drift through the EPA
+components.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | qbr |
+| `objective` | reg:squarederror |
+| `features` | qbr_epa, pass_epa, rush_epa, sack_epa, pen_epa, spread |
+| `target` | ESPN raw Total QBR (per quarterback-game; `nfl_espn_qbr` release) |
+| `lineage` | ESPN Total QBR · EPA components from the EP model |
+| `distribution` | bundled in sportsdataverse (`qbr_model.ubj`) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Opponent adjustment** — the QBR-style rating is unadjusted for defense
+  faced.
+- **Known issue:** the registry's qbr row remains an external TODO (trainer
+  not in `model_training/`) — this report documents the bundled artifact, not
+  an in-repo recipe.

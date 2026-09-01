@@ -1,0 +1,162 @@
+---
+title: "Win Probability — naive (`wp`)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_line, geom_col, geom_abline,
+    labs, theme_minimal, coord_flip,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+from sportsdataverse.nfl import ep_wp
+
+ROOT = Path.cwd()
+while not (ROOT / "models" / "wp_naive.ubj").is_file():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+bst = xgb.Booster()
+bst.load_model(str(ROOT / "models" / "wp_naive.ubj"))
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The naive Win Probability model answers *given only the game state, with no
+betting-market information, how likely is the possession team to win?* It is the
+spread model's sibling — identical except it **drops `spread_time`** — and is the
+nflfastR `wp` surface: the right choice when a pregame spread is unavailable or
+when you explicitly want a market-free WP.
+
+This document is compiled: the naive-vs-spread divergence analysis below is
+recomputed at render time from the latest published `nfl_model_pbp` season,
+which carries both surfaces on every play.
+
+## Model features
+
+**11 features** — exactly the [spread model](wp_spread.md)'s set **minus
+`spread_time`**: `receive_2h_ko`, `home`, `half_seconds_remaining`,
+`game_seconds_remaining`, `Diff_Time_Ratio`, `score_differential`, `down`,
+`ydstogo`, `yardline_100`, `posteam_timeouts_remaining`,
+`defteam_timeouts_remaining`. Dropping the single market feature is the *only*
+difference between the two WP heads, which is why they can be compared
+head-to-head.
+
+## The model
+
+**Algorithm.** XGBoost, `objective=binary:logistic`, `eta=0.2`, `max_depth=4` —
+the `fastrmodels` naive-WP recipe. Trained on the **full 1999–2025 history
+(1,268,220 plays)**, the same frame as the spread model. The higher learning
+rate / shallower trees reflect that, without the spread, there is less structured
+signal to fit.
+
+**Evaluation.** nflfastR parity: `wp` correlates **r 0.997** against nflverse
+(see [Parity](parity.md)). LOSO calibration uses the same protocol as the spread
+model.
+
+## Feature importance
+
+```{python}
+gain = bst.get_score(importance_type="gain")
+imp = pl.DataFrame({"feature": list(gain.keys()),
+                    "gain": [float(v) for v in gain.values()]}).sort("gain", descending=True)
+gt_show(
+    GT(imp.to_pandas())
+    .tab_header(title="Features by gain — committed naive-WP booster")
+    .fmt_number(columns="gain", decimals=1)
+)
+```
+
+Without the market prior, `score_differential`, `yardline_100` and the clock
+terms carry the model from the opening kickoff — precisely why the naive WP is
+least confident (closest to 0.5) early and diverges most from the spread WP in
+the first quarter.
+
+## Naive vs spread — the divergence, measured
+
+The published season carries both surfaces on every play, so the documented
+claim — *the two diverge most early and converge as `spread_time` decays* — is
+directly measurable:
+
+```{python}
+#| fig-cap: "Mean |wp − vegas_wp| by game quarter, 2025 season — the market prior's influence decays exactly as designed."
+div = (
+    pbp.filter(pl.col("wp").is_not_null() & pl.col("vegas_wp").is_not_null())
+    .with_columns((pl.col("wp") - pl.col("vegas_wp")).abs().alias("gap"))
+    .group_by("qtr").agg(pl.col("gap").mean().alias("mean_gap"), pl.len().alias("n"))
+    .filter(pl.col("qtr") <= 5).sort("qtr")
+)
+(
+    ggplot(div.to_pandas(), aes("qtr", "mean_gap"))
+    + geom_col(fill="#2a6f97")
+    + labs(x="quarter", y="mean |naive − spread| WP",
+           title="Where the market prior matters — 2025 season")
+    + theme_minimal()
+)
+```
+
+```{python}
+d1 = pbp.filter((pl.col("qtr") == 1) & pl.col("wp").is_not_null())
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["Q1 mean |naive − spread|", "Q4 mean |naive − spread|",
+                  "corr(naive, spread), all plays"],
+        "value": [float(div.filter(pl.col("qtr") == 1)["mean_gap"][0]),
+                  float(div.filter(pl.col("qtr") == 4)["mean_gap"][0]),
+                  float(pbp.select(pl.corr("wp", "vegas_wp")).item())],
+    }).to_pandas())
+    .tab_header(title="Naive-vs-spread divergence — render-time, 2025")
+    .fmt_number(columns="value", decimals=4)
+)
+```
+
+## Limitations
+
+Because it ignores the market, the naive model is *less sharp* early in games:
+strictly less information than the spread model, so its log-loss and Brier are
+worse. Use it only when you want a spread-free WP or lack a spread; for forecast
+accuracy when a spread exists, prefer the [spread model](wp_spread.md). WPA
+carries the same per-play noise caveat.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | wp_naive |
+| `objective` | binary:logistic |
+| `features` | 11 (spread set minus `spread_time`) |
+| `label` | label (possession team wins) |
+| `training_seasons` | 1999–2025 |
+| `n_training_rows` | 1,268,220 |
+| `hyperparameters` | eta=0.2, max_depth=4 |
+| `lineage` | nflfastR naive-WP model · nflverse `fastrmodels` (Ben Baldwin) |
+| `parity` | `wp` r 0.997 |
+| `artifact` | `models/wp_naive.ubj` (committed; also on `nfl_model_artifacts`) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- Primarily a fallback when no market prior exists; improvement effort
+  belongs in the spread model. **Known issue:** naive WP is systematically
+  miscalibrated for large early leads relative to the spread model — the
+  quarter-divergence figure above is the standing measurement of that delta.

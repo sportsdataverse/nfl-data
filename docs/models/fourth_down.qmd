@@ -1,0 +1,202 @@
+---
+title: "Fourth-Down Yards (`fd_model`)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_line, geom_point, geom_histogram, labs, theme_minimal,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+fd_path = CACHE / "fd_model.ubj"
+if not fd_path.exists():
+    fd_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_4th_down_models/fd_model.ubj",
+        timeout=600).content)
+bst = xgb.Booster()
+bst.load_model(str(fd_path))
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The fourth-down yards model predicts the **distribution of yards gained** on a
+go-for-it (or third-down) attempt — the core of the **nfl4th** decision surface.
+From the 76-class gain distribution we derive P(first down) for any
+distance-to-go, then combine it with the EP/WP surfaces to compute the
+**go / punt / field-goal / two-point** expected-value comparison. It is a
+faithful Python retrain of nfl4th's go-for-it model, validated against the
+converted nflverse artifact.
+
+This document is compiled: the conversion-probability curve is derived from the
+released booster at render time (summing class probabilities over the
+distance-to-go), and compared with the latest published season's **empirical**
+4th-down conversion rates.
+
+## Model features
+
+**14 features**; one row per 3rd/4th-down scrimmage play (1999–2025, `qb_kneel==0`,
+`week<=17`). The label is `yards_gained` clamped to **[−10, 65]** and shifted into
+**76 ordinal classes** (`label = yards_gained + 10`).
+
+| Feature | Type | What it encodes |
+|---|---|---|
+| `down` | numeric | Current down (3 or 4). |
+| `ydstogo` | numeric | Yards to go — the conversion threshold. |
+| `yardline_100` | numeric | Field position (compresses the gain distribution near the goal line). |
+| `era0`..`era4` | one-hot | Rule-era one-hot (cuts 2001/2005/2013/2017) — era-aware across 1999–2025. |
+| `outdoors` / `retractable` / `dome` | binary | Stadium-type one-hots. |
+| `posteam_spread` | numeric | Possession-team spread (game-script context). |
+| `total_line` | numeric | Game total (pace / offensive-environment proxy). |
+| `posteam_total` | numeric | Possession-team implied total. |
+
+## The model
+
+**Algorithm.** XGBoost, `objective=multi:softprob` over **76 classes**, **1,124
+rounds**, `eta=0.01`, `max_depth=2`, `gamma=2`, `subsample=0.8`,
+`colsample_bytree=0.8`, `min_child_weight=0.8` — verbatim from the nfl4th R recipe.
+P(first down) for any distance-to-go is recovered by summing class probabilities
+for gains ≥ the distance.
+
+**Evaluation.** Parity against the converted nflverse artifact: **mean-gain
+correlation 0.9856** (informational — era-aware full-history retrain vs the
+nfl4th 2014–19 oracle) — see [Parity](parity.md).
+
+## P(convert) vs reality, render time
+
+```{python}
+#| output: false
+feats = bst.feature_names
+grid = pl.DataFrame({"ydstogo": np.arange(1, 16)}).with_columns(
+    pl.lit(4.0).alias("down"), pl.lit(55.0).alias("yardline_100"),
+    pl.lit(0).alias("era0"), pl.lit(0).alias("era1"), pl.lit(0).alias("era2"),
+    pl.lit(0).alias("era3"), pl.lit(1).alias("era4"),
+    pl.lit(1).alias("outdoors"), pl.lit(0).alias("retractable"), pl.lit(0).alias("dome"),
+    pl.lit(0.0).alias("posteam_spread"), pl.lit(44.5).alias("total_line"),
+    pl.lit(22.25).alias("posteam_total"),
+)
+X = grid.select(feats).to_numpy().astype(np.float32)
+probs = bst.predict(xgb.DMatrix(X, feature_names=feats))
+if probs.ndim == 1:
+    probs = probs.reshape(len(grid), -1)
+# class k = yards_gained k-10; conversion iff yards_gained >= ydstogo
+p_conv = []
+for i, ytg in enumerate(grid["ydstogo"].to_list()):
+    k0 = int(ytg + 10)
+    p_conv.append(float(probs[i, k0:].sum()))
+model_curve = pl.DataFrame({"ydstogo": grid["ydstogo"], "p": p_conv,
+                            "series": ["model P(convert)"] * len(p_conv)})
+go = pbp.filter((pl.col("down") == 4) & pl.col("play_type").is_in(["pass", "run"])
+                & (pl.col("ydstogo") <= 15))
+emp = (
+    go.group_by("ydstogo")
+    .agg((pl.col("yards_gained") >= pl.col("ydstogo")).mean().alias("p"), pl.len().alias("n"))
+    .filter(pl.col("n") >= 15)
+    .with_columns(pl.lit("empirical 2025 (attempts)").alias("series"))
+    .select("ydstogo", "p", "series")
+)
+curve = pl.concat([model_curve, emp])
+```
+
+```{python}
+#| fig-cap: "Model P(convert) at midfield (neutral spread, era4) vs realized 2025 4th-down conversion rates — selection effects push the empirical curve above the unconditional model."
+(
+    ggplot(curve.to_pandas(), aes("ydstogo", "p", color="series"))
+    + geom_line() + geom_point(alpha=0.7)
+    + labs(x="yards to go", y="P(convert)",
+           title=f"4th-down conversion — model vs 2025 attempts ({go.height} gos)")
+    + theme_minimal()
+)
+```
+
+Teams *choose* which 4th downs to attempt, so the realized curve reflects
+selection (coaches go when they like the matchup) while the model curve is the
+unconditional estimate at a fixed neutral state — the gap between them is
+selection, not error. That distinction is the whole reason the decision layer
+values options with a model rather than empirical rates.
+
+## The decision surface in use — 2025
+
+The published pbp carries the nfl4th-style decision columns (`go_wp_diff`,
+`fg_wp_diff`, `punt_wp_diff` — each option's WP against the best alternative),
+so the decision layer's output is directly observable:
+
+```{python}
+dec = pbp.filter((pl.col("down") == 4) & pl.col("go_wp_diff").is_not_null())
+went = dec.filter(pl.col("play_type").is_in(["pass", "run"]))
+should = dec.filter(pl.col("go_wp_diff") > 0)
+agree = dec.with_columns(
+    (pl.col("play_type").is_in(["pass", "run"]) == (pl.col("go_wp_diff") > 0)).alias("agree"))
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["4th downs with decision columns", "model says GO (go_wp_diff > 0)",
+                  "teams actually went", "coach–model agreement rate"],
+        "value": [float(dec.height), float(should.height), float(went.height),
+                  float(agree["agree"].mean())],
+    }).to_pandas())
+    .tab_header(title="Decision layer vs coaches — 2025 season",
+                subtitle="go_wp_diff > 0 means going for it maximizes WP among the four options")
+    .fmt_number(columns="value", decimals=3)
+)
+```
+
+## Decision surface
+
+`fd_model` is one input to nfl4th's 4th-down EV comparison; the others are
+[`fg_model`](fg.md), [`two_pt_model`](two_pt.md), the [punt distribution](punt.md),
+and the [nfl4th home-WP](nfl4th_wp.md). Each option's EV is computed by mapping its
+outcome distribution through the WP surface and picking the highest-WP action.
+
+## Limitations
+
+The label is recorded `yards_gained`, which can disagree with the official result
+on penalty/lateral plays — label noise at the tails. The gain window is clipped
+to [−10, 65]. It predicts a *yardage distribution*, not the binary decision; the
+decision EV is computed downstream.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | fd (fourth-down yards) |
+| `objective` | multi:softprob (num_class=76) |
+| `features` | 14 (era0..4 + see above) |
+| `label` | yards_gained + 10 (clamped −10..65) |
+| `training_seasons` | 1999–2025 (182,138 plays) |
+| `hyperparameters` | eta=0.01, max_depth=2, nrounds=1124 |
+| `lineage` | nfl4th go-for-it model |
+| `parity` | mean-gain corr 0.986 (informational; full-history vs nfl4th 2014–19) |
+| `distribution` | `nfl_4th_down_models` release (download-on-demand; 76-class model) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Coach-level tendencies** — decision calibration is league-wide; a
+  coach-indexed layer would localize it.
+- **Known issue:** the 76-class yards head shares the xYAC machinery — the
+  multiclass pred_contribs 3-D gotcha applies to any explainability pass.

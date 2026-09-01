@@ -1,0 +1,180 @@
+---
+title: "dakota (QB efficiency metric)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_abline, labs, theme_minimal,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+DL = "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp"
+frames = {}
+for season in (2024, 2025):
+    p = CACHE / f"model_pbp_{season}.parquet"
+    if not p.exists():
+        p.write_bytes(requests.get(f"{DL}/model_pbp_{season}.parquet", timeout=600).content)
+    frames[season] = pl.read_parquet(p)
+ros_path = CACHE / "roster_2025.parquet"
+if not ros_path.exists():
+    ros_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
+        timeout=300).content)
+ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
+
+def passer_season(df, season):
+    return (
+        df.filter(pl.col("qb_epa").is_not_null() & pl.col("passer_player_id").is_not_null())
+        .group_by("passer_player_id")
+        .agg(pl.col("passer_player_name").first().alias("passer"),
+             pl.col("posteam").last().alias("team"),
+             pl.len().alias("dropbacks"),
+             pl.col("qb_epa").mean().alias("epa_play"),
+             pl.col("cpoe").drop_nulls().mean().alias("cpoe"))
+        .filter(pl.col("dropbacks") >= 200)
+        .with_columns(pl.lit(season).alias("season"))
+    )
+
+ps = {s: passer_season(frames[s], s) for s in frames}
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+`dakota` is a **derived metric, not a trained model** — the nflfastR
+quarterback-efficiency composite. It is a fixed **linear combination of EPA per
+dropback and CPOE**, with coefficients chosen to best predict a passer's
+*next-season* adjusted EPA/play. Because it blends a stable input (CPOE) with a
+noisier one (EPA), `dakota` is more **year-to-year stable** than raw EPA/play —
+it is the closest thing in the suite to a "true talent" passing number.
+
+This document is compiled: the stability claim above is not repeated on faith —
+it is **measured at render time** from the two most recent published seasons,
+per input component.
+
+## How it is computed
+
+Per qualifying passer, over a sample of dropbacks:
+
+1. `passing_epa` — the sum of QB-credited EPA (`qb_epa`), matching nflfastR's
+   credited-EPA logic exactly;
+2. `cpoe` — mean completion % over expected from the [CP model](cpoe.md), on the
+   percentage-point scale `100 · (complete_pass − cp)`;
+3. `dakota` — the fixed-coefficient linear blend of EPA/play and CPOE.
+
+It is emitted as a column in the player-stats aggregation alongside the other
+passing rates (`pacr`, `racr`, `wopr`).
+
+## The stability claim, measured
+
+```{python}
+a, b = sorted(ps)
+j = ps[a].join(ps[b], on="passer_player_id", how="inner", suffix="_next")
+rows = []
+for col in ("epa_play", "cpoe"):
+    rows.append({"input": col, "returning_passers": j.height,
+                 "yoy_pearson": float(j.select(pl.corr(col, f"{col}_next")).item())})
+gt_show(
+    GT(pl.DataFrame(rows).to_pandas())
+    .tab_header(title=f"Year-over-year stability of dakota's inputs — {a} → {b}",
+                subtitle="same passer, min 200 dropbacks both seasons; CPOE's higher stability is why the blend beats raw EPA")
+    .fmt_number(columns="yoy_pearson", decimals=3)
+)
+```
+
+```{python}
+#| fig-cap: "The two inputs per passer, latest season — dakota is a fixed direction through this plane."
+cur = ps[b]
+(
+    ggplot(cur.to_pandas(), aes("cpoe", "epa_play"))
+    + geom_point(alpha=0.6, color="#2a6f97", size=2)
+    + labs(x="CPOE (percentage points)", y="EPA per dropback",
+           title=f"The dakota plane — {b} (min 200 dropbacks)")
+    + theme_minimal()
+)
+```
+
+```{python}
+r_inputs = float(cur.select(pl.corr("cpoe", "epa_play")).item())
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["qualifying passers (latest season)",
+                  "corr(CPOE, EPA/play) among them"],
+        "value": [float(cur.height), r_inputs],
+    }).to_pandas())
+    .tab_header(title="Input relationship — render time",
+                subtitle="the two inputs correlate but are far from redundant; the blend's value is the CPOE-stable component")
+    .fmt_number(columns="value", decimals=3)
+)
+```
+
+## Results — the composite's inputs, 2025
+
+```{python}
+top = (
+    cur.sort("epa_play", descending=True).head(10)
+    .join(ros, left_on="passer_player_id", right_on="gsis_id", how="left")
+    .with_columns(("<img src='" + pl.col("headshot_url").fill_null("") + "' height='40'/>").alias("headshot"))
+)
+gt_show(
+    GT(top.select("headshot", "passer", "team", "dropbacks", "epa_play", "cpoe").to_pandas())
+    .tab_header(title=f"EPA/play leaders with their CPOE — {b} (min 200 dropbacks)",
+                subtitle="the two dakota inputs side by side; passers high on both are the composite's leaders")
+    .fmt_markdown(columns="headshot")
+    .fmt_number(columns=["epa_play", "cpoe"], decimals=3)
+    .cols_label(headshot="", passer="Passer", team="Team", dropbacks="Dropbacks",
+                epa_play="EPA/play", cpoe="CPOE")
+)
+```
+
+## Lineage and caveats
+
+`dakota` sits on top of two models: it inherits the [EP model](ep.md) through
+`passing_epa` (so it carries the same intrinsic EP-model drift, ~0.99 parity
+against nflverse) and the [CP model](cpoe.md) through `cpoe`. The blend
+coefficients are the published nflfastR values — `dakota` is a **reproduction of
+the nflfastR metric**, not a re-fit.
+
+## Limitations
+
+It is a single composite number: it cannot separate scheme, receiver, or
+pressure effects, and it is only meaningful over a **reasonable dropback sample**
+(small samples are dominated by the EPA term's noise). It is descriptive of the
+*EPA-and-completion-explainable* part of QB play, the same blind spots as its two
+parent models.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `type` | derived metric (fixed-coefficient linear blend) |
+| `inputs` | EPA/dropback (`qb_epa`) + CPOE |
+| `parents` | EP model · CP model |
+| `lineage` | nflfastR `dakota` (adjusted EPA + CPOE composite) |
+| `surface` | player-stats aggregation (per passer) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Recalibration cadence** — dakota blends EPA/CPOE; its coefficients should
+  be re-examined whenever either input model is retrained.
+- **Known issue:** no dedicated gate — it inherits its inputs' validation; the
+  YoY table above is the standing empirical check on the blend's premise.

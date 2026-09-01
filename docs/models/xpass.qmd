@@ -1,0 +1,193 @@
+---
+title: "Expected Pass (`xpass_model`)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_line, geom_col, geom_abline,
+    labs, theme_minimal, coord_flip,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+# the xpass booster ships bundled in sportsdataverse
+from sportsdataverse.nfl.ep_wp import _load_model
+bst = _load_model("xpass_model.ubj")
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The expected-pass model estimates the probability that a scrimmage play is a
+**dropback (pass)** given pre-snap game state — a measure of how *predictable* an
+offense's tendency is. It is the nflfastR xpass surface, where
+**`pass_oe = 100 · (pass − xpass)`** is the pass-rate over expected: positive when
+an offense passes more than situation-average. A full-history (1999–2025) retrain
+following the nflverse dropback recipe.
+
+This document is compiled: the calibration and team-tendency sections evaluate
+the published `xpass` / `pass_oe` columns on the latest `nfl_model_pbp` season
+at render time.
+
+## Model features
+
+**19 features**, pre-snap; one row per scrimmage play (1999–2025). The binary
+label is `pass` (dropback). Note it consumes the [WP surfaces](wp_spread.md)
+(`wp`, `vegas_wp`) as features.
+
+| Feature | What it encodes |
+|---|---|
+| `down`, `ydstogo`, `yardline_100`, `qtr` | Down/distance/field position/quarter — the tendency backbone. |
+| `wp`, `vegas_wp` | In-game win probability (game-script urgency). |
+| `score_differential`, `half_seconds_remaining` | Score/clock context. |
+| `home` | Possession team is home. |
+| `posteam_timeouts_remaining`, `defteam_timeouts_remaining` | Timeouts. |
+| `era0`..`era4` | Rule-era one-hot (cuts 2001/2005/2013/2017) — era-aware across all of 1999–2025. |
+| `outdoors`, `retractable`, `dome` | Stadium-type one-hots. |
+
+## The model
+
+**Algorithm.** XGBoost, `objective=binary:logistic`, **1,121 rounds**,
+`eta=0.015`, `gamma=2`, `max_depth=7`, `min_child_weight=0.9`,
+`subsample/colsample=0.8`, `base_score=mean(label)`, `seed=2013` — verbatim from
+the nflverse dropback-model recipe. The predicted
+probability is `xpass`; **`pass_oe = 100 · (pass − xpass)`** is the actionable
+residual.
+
+**Evaluation.** Full-history retrain on 892,122 plays. Parity-vs-nflverse is
+**informational** (the nflverse oracle trains on 2006+): P(pass) corr **0.989** —
+see [Parity](parity.md).
+
+## Feature importance
+
+```{python}
+gain = bst.get_score(importance_type="gain")
+imp = pl.DataFrame({"feature": list(gain.keys()),
+                    "gain": [float(v) for v in gain.values()]}).sort("gain", descending=True)
+gt_show(
+    GT(imp.head(12).to_pandas())
+    .tab_header(title="Top 12 features by gain — bundled xpass booster")
+    .fmt_number(columns="gain", decimals=1)
+)
+```
+
+## Calibration — render time, published surface
+
+The published season carries `xpass` and `pass_oe` on every scrimmage play, and
+the realized dropback indicator is recoverable exactly as
+`pass = xpass + pass_oe/100`. Binned reliability of the applied surface:
+
+```{python}
+#| fig-cap: "Reliability of the published xpass surface, 2025 — predicted dropback probability vs realized dropback rate."
+xp = (
+    pbp.filter(pl.col("xpass").is_not_null() & pl.col("pass_oe").is_not_null())
+    .with_columns((pl.col("xpass") + pl.col("pass_oe") / 100).round(0).alias("was_pass"))
+)
+cal = (
+    xp.with_columns((pl.col("xpass") * 20).floor().clip(0, 19).alias("b"))
+    .group_by("b")
+    .agg(pl.col("xpass").mean().alias("pred"), pl.col("was_pass").mean().alias("obs"),
+         pl.len().alias("n"))
+    .sort("b")
+)
+(
+    ggplot(cal.to_pandas(), aes("pred", "obs"))
+    + geom_abline(slope=1, intercept=0, linetype="dashed", color="gray")
+    + geom_point(aes(size="n"), color="#2a6f97") + geom_line(color="#2a6f97")
+    + labs(x="predicted P(dropback)", y="realized dropback rate",
+           title=f"xpass reliability — 2025 ({xp.height:,} plays)")
+    + theme_minimal()
+)
+```
+
+```{python}
+brier = float(xp.select(((pl.col("xpass") - pl.col("was_pass")) ** 2).mean()).item())
+base = float(xp["was_pass"].mean())
+gt_show(
+    GT(pl.DataFrame({
+        "metric": ["plays", "realized dropback rate", "Brier (xpass)",
+                   "baseline Brier (constant rate)"],
+        "value": [float(xp.height), base, brier, base * (1 - base)],
+    }).to_pandas())
+    .tab_header(title="Render-time xpass evaluation — 2025")
+    .fmt_number(columns="value", decimals=4)
+)
+```
+
+## Results — team tendency, 2025
+
+```{python}
+tend = (
+    xp.filter(pl.col("posteam").is_not_null())
+    .group_by("posteam")
+    .agg(pl.len().alias("plays"), pl.col("pass_oe").mean().alias("pass_oe"),
+         pl.col("was_pass").mean().alias("pass_rate"))
+    .sort("pass_oe", descending=True)
+)
+show = pl.concat([tend.head(5), tend.tail(5)]).with_columns(
+    ("<img src='https://a.espncdn.com/i/teamlogos/nfl/500/"
+     + pl.col("posteam").str.to_lowercase() + ".png' height='36'/>").alias("logo"))
+gt_show(
+    GT(show.select("logo", "posteam", "plays", "pass_rate", "pass_oe").to_pandas())
+    .tab_header(title="Most pass-happy and most run-heavy over expectation — 2025",
+                subtitle="pass_oe = percentage points of dropback rate over the situation-expected rate")
+    .fmt_markdown(columns="logo")
+    .fmt_number(columns="plays", sep_mark=",", decimals=0)
+    .fmt_percent(columns="pass_rate", decimals=1)
+    .fmt_number(columns="pass_oe", decimals=2)
+    .cols_label(logo="", posteam="Offense", plays="Plays",
+                pass_rate="Pass rate", pass_oe="PROE")
+)
+```
+
+## Limitations
+
+xpass is **pre-snap**: no personnel, formation, motion, or no-huddle signal, so it
+captures the situation-explainable part of tendency only. Two offenses in
+identical game state get the same xpass — the *team* tendency lives in `pass_oe`,
+not in xpass itself.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | xpass |
+| `objective` | binary:logistic |
+| `features` | 19 (era0..4 + `wp` / `vegas_wp`) |
+| `label` | pass (dropback) |
+| `training_seasons` | 1999–2025 (892,122 plays) |
+| `hyperparameters` | eta=0.015, max_depth=7, nrounds=1121 |
+| `lineage` | nflverse dropback model |
+| `parity` | P(pass) corr 0.989 (informational; full-history vs nflverse 2006+) |
+| `distribution` | bundled in sportsdataverse |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Motion/personnel data** — the known ceiling-lifter absent from public pbp.
+- **Known issue:** era one-hots make the earliest seasons the reference class;
+  a new era needs an explicit dummy, not silent absorption.

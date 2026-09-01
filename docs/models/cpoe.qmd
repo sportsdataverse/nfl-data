@@ -1,0 +1,242 @@
+---
+title: "Completion Probability / CPOE"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import json
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_line, geom_col, geom_abline, geom_jitter,
+    labs, theme_minimal, coord_flip, facet_wrap,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+from sportsdataverse.nfl import ep_wp
+
+ROOT = Path.cwd()
+while not (ROOT / "models" / "cp_model.ubj").is_file():
+    ROOT = ROOT.parent
+FIG = ROOT / "docs" / "models" / "figures"
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+metrics = json.loads((FIG / "metrics.json").read_text())
+bst = xgb.Booster()
+bst.load_model(str(ROOT / "models" / "cp_model.ubj"))
+
+ros_path = CACHE / "roster_2025.parquet"
+if not ros_path.exists():
+    ros_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
+        timeout=300).content)
+ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The Completion Probability (CP) model estimates the probability a given pass
+attempt is completed (`cp`) from pre-throw game state and the throw geometry.
+**CPOE** is the **percentage-point residual** `100 · (complete_pass − cp)`:
+positive when a passer completes throws a league-average passer would not. It is
+a faithful re-implementation of the nflfastR CP/CPOE model
+(nflverse `fastrmodels`, Ben Baldwin).
+
+This document is compiled: the LOSO calibration re-plots from the committed
+report artifacts, and the SHAP and passer-leaderboard sections score the
+committed booster and the published season at render time.
+
+## Model features
+
+**18 features**; the binary label is `complete_pass`. CP depends on `air_yards`
+charting, reliable from **2006** onward, so only the 2006+ era one-hots
+(`era2..4`) are carried.
+
+| Feature | Type | What it encodes |
+|---|---|---|
+| `air_yards` | numeric | Distance the ball travels in the air — the dominant completion driver. |
+| `distance_to_sticks` | numeric | `air_yards − ydstogo`: how far past the first-down marker the throw targets. |
+| `air_is_zero` | binary | Behind-LOS / screen indicator (`air_yards == 0`). |
+| `pass_middle` | binary | Throw is over the middle of the field. |
+| `qb_hit` | binary | QB was hit on the play (pressure proxy). |
+| `yardline_100` | numeric | Field position (compresses depth near the goal line). |
+| `ydstogo` | numeric | Yards to go. |
+| `down1` … `down4` | one-hot | Current down (4 columns). |
+| `home` | binary | Possession team is home. |
+| `dome` / `retractable` / `outdoors` | binary | Stadium-type one-hots (wind/weather proxy). |
+| `era2` … `era4` | one-hot | Rule era from 2006 (cuts 2013 / 2017). |
+
+## The model
+
+**Algorithm.** XGBoost, `objective=binary:logistic`, `eta=0.025`, `max_depth=4` —
+the `fastrmodels` CP recipe. The predicted `cp` is the completion probability;
+**CPOE = `100 · (complete_pass − cp)`** on a percentage-point scale. Trained on
+**339,706 charted pass attempts** (1999–2025 range; air-yards era 2006+).
+
+> **Sign note.** `distance_to_sticks` is `air_yards − ydstogo` — a historically
+> sign-flipped input that was corrected in the shipped CP feature builder; it is
+> pinned here so the parity holds.
+
+**Evaluation.** nflfastR parity: CPOE is **scale-correct** on the percentage-point
+scale against nflverse (see [Parity](parity.md)).
+
+## Calibration Results
+
+Leave-one-season-out, binned predicted `cp` vs empirical completion rate,
+**faceted by air-yards bucket** (the nflfastR CP signature — completion
+probability is a strong, monotone function of throw depth). On the
+**1999–2025** LOSO pool (339,706 throws): CP weighted calibration error
+**0.0136**, Brier **0.192**.
+
+```{python}
+#| fig-cap: "LOSO reliability by air-yards bucket, from the committed report artifact."
+cc = pl.read_parquet(FIG / "cp_calibration.parquet")
+(
+    ggplot(cc.to_pandas(), aes("bin", "actual"))
+    + geom_abline(slope=1, intercept=0, linetype="dashed", color="gray")
+    + geom_point(aes(size="n_plays"), color="#2a6f97", alpha=0.8)
+    + geom_line(color="#2a6f97")
+    + facet_wrap("~by")
+    + labs(x="predicted completion probability", y="empirical completion rate",
+           title="CP calibration by air-yards bucket (LOSO 1999–2025)")
+    + theme_minimal()
+)
+```
+
+```{python}
+#| fig-cap: "Completion rate vs air yards, 2025 season — the monotone depth curve the model must reproduce."
+th = pbp.filter(pl.col("air_yards").is_not_null() & pl.col("complete_pass").is_not_null())
+byay = (
+    th.with_columns(pl.col("air_yards").clip(-5, 40).alias("ay"))
+    .group_by("ay").agg(pl.col("complete_pass").mean().alias("comp_rate"), pl.len().alias("n"))
+    .filter(pl.col("n") >= 30).sort("ay")
+)
+(
+    ggplot(byay.to_pandas(), aes("ay", "comp_rate"))
+    + geom_point(aes(size="n"), color="#2a6f97", alpha=0.7) + geom_line(color="#2a6f97")
+    + labs(x="air yards", y="completion rate", title="Depth is destiny — 2025 season")
+    + theme_minimal()
+)
+```
+
+## Feature importance & SHAP
+
+```{python}
+gain = bst.get_score(importance_type="gain")
+imp = pl.DataFrame({"feature": list(gain.keys()),
+                    "gain": [float(v) for v in gain.values()]}).sort("gain", descending=True)
+gt_show(
+    GT(imp.head(12).to_pandas())
+    .tab_header(title="Top 12 features by gain — committed CP booster")
+    .fmt_number(columns="gain", decimals=1)
+)
+```
+
+```{python}
+#| fig-cap: "TreeSHAP per-throw attributions (log-odds), top 8 features, 4,000-throw sample from 2025."
+feats = bst.feature_names or ep_wp.CP_FEATURES
+cp_frame = ep_wp._make_model_mutations(th)
+missing = [f for f in feats if f not in cp_frame.columns]
+if "distance_to_sticks" in missing:
+    cp_frame = cp_frame.with_columns((pl.col("air_yards") - pl.col("ydstogo")).alias("distance_to_sticks"))
+if "air_is_zero" in [f for f in feats if f not in cp_frame.columns]:
+    cp_frame = cp_frame.with_columns((pl.col("air_yards") == 0).cast(pl.Int64).alias("air_is_zero"))
+if "pass_middle" in [f for f in feats if f not in cp_frame.columns]:
+    cp_frame = cp_frame.with_columns((pl.col("pass_location") == "middle").cast(pl.Int64).alias("pass_middle"))
+X = cp_frame.select(feats).to_numpy().astype(np.float32)
+rng = np.random.default_rng(11)
+idx = rng.choice(X.shape[0], size=min(4000, X.shape[0]), replace=False)
+contribs = bst.predict(xgb.DMatrix(X[idx], feature_names=feats), pred_contribs=True)[:, :-1]
+mean_abs = np.abs(contribs).mean(axis=0)
+order = np.argsort(mean_abs)[::-1][:8]
+rows = []
+for j in order:
+    for i in range(contribs.shape[0]):
+        rows.append({"feature": feats[j], "shap": float(contribs[i, j])})
+(
+    ggplot(pl.DataFrame(rows).to_pandas(), aes("feature", "shap"))
+    + geom_jitter(width=0.25, alpha=0.04, size=0.4, color="#2a6f97")
+    + coord_flip()
+    + labs(x="", y="SHAP (log-odds)", title="CP TreeSHAP — 2025 throws")
+    + theme_minimal()
+)
+```
+
+`air_yards` and `distance_to_sticks` dominate (throw depth is everything for
+completion), with `air_is_zero` / `pass_middle` / `qb_hit` refining short and
+pressured throws; the stadium and era one-hots apply small level shifts.
+
+## Results — 2025 CPOE leaders
+
+```{python}
+leaders = (
+    th.filter(pl.col("cpoe").is_not_null() & pl.col("passer_player_id").is_not_null())
+    .group_by("passer_player_id")
+    .agg(pl.col("passer_player_name").first().alias("passer"),
+         pl.col("posteam").last().alias("team"),
+         pl.len().alias("attempts"), pl.col("cpoe").mean().alias("cpoe"),
+         pl.col("complete_pass").mean().alias("comp_pct"))
+    .filter(pl.col("attempts") >= 150)
+    .sort("cpoe", descending=True).head(10)
+    .join(ros, left_on="passer_player_id", right_on="gsis_id", how="left")
+    .with_columns(("<img src='" + pl.col("headshot_url").fill_null("") + "' height='40'/>").alias("headshot"))
+)
+gt_show(
+    GT(leaders.select("headshot", "passer", "team", "attempts", "comp_pct", "cpoe").to_pandas())
+    .tab_header(title="CPOE leaders — 2025 (min 150 charted attempts)",
+                subtitle="percentage points of completion over the geometry-expected rate")
+    .fmt_markdown(columns="headshot")
+    .fmt_percent(columns="comp_pct", decimals=1)
+    .fmt_number(columns="cpoe", decimals=2)
+    .cols_label(headshot="", passer="Passer", team="Team", attempts="Att",
+                comp_pct="Comp%", cpoe="CPOE")
+)
+```
+
+## Limitations
+
+CP is blind to receiver separation and coverage we do not chart, so CPOE captures
+the *geometry-and-state-explainable* part of completion only. Air-yards charting
+is unreliable before 2006, so CP is an air-yards-era surface. CPOE is a
+per-throw residual; aggregate it over a meaningful sample before reading it as
+passer skill.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | cp |
+| `objective` | binary:logistic |
+| `features` | 18 (see above) |
+| `label` | complete_pass |
+| `training_seasons` | 1999–2025 (air-yards era 2006+) |
+| `n_training_rows` | 339,706 |
+| `hyperparameters` | eta=0.025, max_depth=4 |
+| `lineage` | nflfastR CP/CPOE model · nflverse `fastrmodels` (Ben Baldwin) |
+| `parity` | `cpoe` scale-correct (percentage points) |
+| `artifact` | `models/cp_model.ubj` (committed; also on `nfl_model_artifacts`) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Separation/coverage features** — public pbp lacks them; NGS-derived
+  aggregates are the plausible lever.
+- **Known issue:** CPOE is percentage-point scaled (100x) by convention —
+  consumers routinely mis-scale it; the column doc must stay loud.

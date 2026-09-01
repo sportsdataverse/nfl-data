@@ -1,0 +1,164 @@
+---
+title: "nfl4th Decision WP (`wp_model`)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import ggplot, aes, geom_col, geom_histogram, labs, theme_minimal, coord_flip
+from great_tables import GT
+from IPython.display import HTML, display
+
+ROOT = Path.cwd()
+while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
+    ROOT = ROOT.parent
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+wpm_path = CACHE / "nfl4th_wp_model.ubj"
+if not wpm_path.exists():
+    wpm_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_4th_down_models/wp_model.ubj",
+        timeout=600).content)
+bst = xgb.Booster()
+bst.load_model(str(wpm_path))
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The nfl4th decision WP is a **home-perspective** win-probability model used to
+value 4th-down options: each candidate outcome ([go](fourth_down.md) /
+[FG](fg.md) / [punt](punt.md) / [2-pt](two_pt.md)) is mapped to a resulting game
+state and scored by this model, and the highest-WP action is recommended. It is a
+Python retrain of the WP model nfl4th applies for 4th-down decisions, validated against
+the converted nflverse artifact.
+
+::: {.callout-important}
+## This is **not** the core WP suite
+The [core WP models](wp_spread.md) are **possession-team** WP (the nflfastR
+`wp` / `vegas_wp` surface). This is nfl4th's **home-team** 11-feature WP, whose
+contract comes from nfl4th's decision-WP model. The home-perspective transforms
+are ported verbatim. The two serve different layers — don't cross-wire them.
+:::
+
+This document is compiled: the importance table reads the released booster and
+the decision-impact section reads the published season's decision columns —
+the surfaces this model's scores produce — at render time.
+
+## Model features
+
+**11 features**, home perspective. The label is whether the home team won.
+
+| Feature | What it encodes |
+|---|---|
+| `home_receive_2h_ko` | Home team receives the second-half kickoff. |
+| `spread_time` | `home_spread · exp(−4 · elapsed_share)` — time-decayed line. |
+| `home_posteam` | Home team is on offense. |
+| `half_seconds_remaining` / `game_seconds_remaining` | Clock. |
+| `Diff_Time_Ratio` | Score differential scaled by time. |
+| `home_score_differential` | Home score margin. |
+| `home_ep` | Home-perspective expected points (links to the EP model). |
+| `ydstogo` | Yards to go. |
+| `home_yardline_100` | Home-perspective field position. |
+| `home_timeouts_remaining` | Home timeouts left. |
+
+## The model
+
+**Algorithm.** XGBoost, `objective=binary:logistic`, `eta=0.025`, `max_depth=5`,
+`gamma=1`, `subsample/colsample=0.8`, **500 rounds** (a 500–2000 sweep all clears
+0.99; corr-vs-oracle peaks at 500). Trained from nfl4th's win-probability
+calibration frame (the frozen tuning frame nfl4th + nflfastR read).
+
+**Evaluation.** Parity P(win) corr **0.9947** (gate ≥0.99) — see [Parity](parity.md).
+
+## Feature importance
+
+```{python}
+gain = bst.get_score(importance_type="gain")
+imp = pl.DataFrame({"feature": list(gain.keys()),
+                    "gain": [float(v) for v in gain.values()]}).sort("gain", descending=True)
+gt_show(
+    GT(imp.to_pandas())
+    .tab_header(title="Features by gain — released nfl4th decision-WP booster")
+    .fmt_number(columns="gain", decimals=1)
+)
+```
+
+## What its scores decide — 2025 season
+
+The published pbp carries the decision layer's outputs — per-option WP deltas
+scored by this model. Their distribution is the model's footprint on the
+season:
+
+```{python}
+#| fig-cap: "Distribution of the go-vs-best-alternative WP delta on 2025 4th downs — mass near zero means most 4th downs are genuinely close calls."
+dec = pbp.filter((pl.col("down") == 4) & pl.col("go_wp_diff").is_not_null())
+(
+    ggplot(dec.filter(pl.col("go_wp_diff").abs() < 0.1).to_pandas(), aes("go_wp_diff"))
+    + geom_histogram(bins=60, fill="#2a6f97")
+    + labs(x="go WP − best alternative WP", y="4th downs",
+           title=f"The decision margin — 2025 ({dec.height:,} fourth downs)")
+    + theme_minimal()
+)
+```
+
+```{python}
+big = dec.filter(pl.col("go_wp_diff") > 0.03)
+went_big = big.filter(pl.col("play_type").is_in(["pass", "run"]))
+gt_show(
+    GT(pl.DataFrame({
+        "check": ["4th downs where GO is worth > 3 pts of WP",
+                  "of those, teams actually went", "conversion rate when they went"],
+        "value": [float(big.height), float(went_big.height),
+                  float((went_big["yards_gained"] >= went_big["ydstogo"]).mean()) if went_big.height else float("nan")],
+    }).to_pandas())
+    .tab_header(title="High-leverage GO situations — 2025",
+                subtitle="the classic nfl4th finding: coaches still leave WP on the table in clear-go spots")
+    .fmt_number(columns="value", decimals=3)
+)
+```
+
+## Limitations
+
+It is the **decision-layer** WP, tuned to reproduce nfl4th's recommendations, not
+a general-purpose live WP feed — for that use the [core WP](wp_spread.md). It
+inherits the home-perspective framing and the EP model's drift through `home_ep`.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | wp (nfl4th home-perspective) |
+| `objective` | binary:logistic |
+| `features` | 11 (home perspective) |
+| `label` | home team won |
+| `hyperparameters` | eta=0.025, max_depth=5, nrounds=500 |
+| `lineage` | nfl4th decision-WP model |
+| `parity` | P(win) corr 0.9947 (gate ≥0.99) |
+| `distribution` | `nfl_4th_down_models` release |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Unify with the main WP family** — the nfl4th contract keeps a separate
+  home-perspective model; folding it into the spread family would remove a
+  dual-maintenance surface.
+- **Known issue:** trains on cal_data.rds (2001-2020); its window lags the
+  main models and a missing file silently skips the model in train-all.

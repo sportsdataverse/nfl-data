@@ -1,0 +1,265 @@
+---
+title: "Expected Points (EP)"
+format:
+  gfm:
+    fig-dpi: 120
+execute:
+  echo: false
+  warning: false
+jupyter: python3
+---
+
+```{python}
+#| output: false
+import json
+import numpy as np
+import polars as pl
+import requests
+import xgboost as xgb
+from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_point, geom_line, geom_col, geom_abline, geom_jitter,
+    labs, theme_minimal, coord_flip, facet_wrap,
+)
+from great_tables import GT
+from IPython.display import HTML, display
+from sportsdataverse.nfl import ep_wp
+
+ROOT = Path.cwd()
+while not (ROOT / "models" / "ep_model.ubj").is_file():
+    ROOT = ROOT.parent
+FIG = ROOT / "docs" / "models" / "figures"
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+PBP_URL = "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet"
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(requests.get(PBP_URL, timeout=600).content)
+pbp = pl.read_parquet(pbp_path)
+metrics = json.loads((FIG / "metrics.json").read_text())
+
+bst = xgb.Booster()
+bst.load_model(str(ROOT / "models" / "ep_model.ubj"))
+feats = ep_wp.EP_FEATURES
+
+def gt_show(g):
+    display(HTML(g.as_raw_html()))
+```
+
+The Expected Points (EP) model estimates the expected next-score value for the
+team in possession at the **start of a play**, given game state. It is the
+foundation of the NFL analytics stack: EP differences between consecutive plays
+define **Expected Points Added (EPA)**. Every play-by-play row carries an `ep`
+column plus the seven next-score class probabilities. The model is a faithful
+re-implementation of the nflfastR EP model (nflverse `fastrmodels`, Ben Baldwin).
+
+This document is compiled: the calibration sections re-plot from the committed
+LOSO report artifacts (`figures/*.parquet`, produced by the training pipeline's
+reporting stage over the full 1999–2025 corpus), and the importance/SHAP and
+results sections score the committed booster (`models/ep_model.ubj`) over the
+latest published `nfl_model_pbp` season at render time.
+
+## Model features
+
+**18 features**, all known at the **start of the play** — no look-ahead. Each
+row is one scrimmage play; the label is the *next scoring event* in the same
+half (`next_score_class`).
+
+| Feature | Type | What it encodes |
+|---|---|---|
+| `half_seconds_remaining` | numeric | Seconds left in the half — fewer expected possessions to score late. |
+| `yardline_100` | numeric | Distance (1–99) to the opponent's end zone — the strongest field-position signal. |
+| `ydstogo` | numeric | Yards to go for a first down. |
+| `down1` … `down4` | one-hot | Current down (4 columns). |
+| `home` | binary | Possession team is home. |
+| `dome` / `retractable` / `outdoors` | binary | Stadium-type one-hots (roof/exposure) — NFL EP carries a weather/venue proxy CFB does not. |
+| `era0` … `era4` | one-hot | Rule era (cuts **2001 / 2005 / 2013 / 2017**) — captures scoring-environment drift across 27 seasons. |
+| `posteam_timeouts_remaining` | numeric | Possession-team timeouts left. |
+| `defteam_timeouts_remaining` | numeric | Defense timeouts left. |
+
+## The model
+
+**Algorithm.** XGBoost gradient-boosted trees, `objective=multi:softprob` over
+`num_class=7`, `eval_metric=mlogloss`, `eta=0.025`, `max_depth=5` — the
+`fastrmodels` EP recipe. The 7 class probabilities are dotted with the
+nflfastR point map to produce a scalar EP:
+
+`{Touchdown:+7, Opp_Touchdown:−7, Field_Goal:+3, Opp_Field_Goal:−3, Safety:+2, Opp_Safety:−2, No_Score:0}`
+
+(class order `0=TD, 1=Opp_TD, 2=FG, 3=Opp_FG, 4=Safety, 5=Opp_Safety, 6=No_Score`).
+Retrained on the **full 1999–2025 history (1,195,636 plays)** reshaped from
+`nfl-raw` to nflfastR parity.
+
+**Evaluation.** Two lenses — see [Parity](parity.md) for the nflfastR-parity gate
+and the LOSO calibration below.
+
+## Training data (LOSO report) and the render-time season
+
+```{python}
+ep_m = metrics["ep"]
+gt_show(
+    GT(pl.DataFrame({
+        "corpus": ["LOSO pool (training report, 1999–2025)", "render-time season (2025, nfl_model_pbp)"],
+        "plays": [ep_m["class_cal_per"][0]["n"], pbp.height],
+        "per_class_weighted_cal_error": [ep_m["class_cal_error"], None],
+    }).to_pandas())
+    .tab_header(title="EP evaluation corpora",
+                subtitle="the LOSO metrics are frozen training-report artifacts; the render-time season is live")
+    .fmt_number(columns="plays", sep_mark=",", decimals=0)
+    .fmt_number(columns="per_class_weighted_cal_error", decimals=4)
+)
+```
+
+## Calibration
+
+A 7-class softprob model is checked **per next-score class** — each class
+probability binned against whether that class was the realized next score (the
+nflfastR / cfbscrapR signature). This is a **probability-scale** reliability
+check, directly comparable to the WP and CP numbers. On the **1999–2025**
+leave-one-season-out pool the **per-class weighted calibration error is
+0.0058** — on par with WP (0.0026) and better than CP (0.0136). The
+high-variance modal class (`No_Score`, 0.012) carries most of the error; the
+rare scoring classes (safeties, 0.003) are tight.
+
+```{python}
+#| fig-cap: "Per-class LOSO reliability — predicted class probability (bin) vs realized frequency, from the committed report artifact."
+cc = pl.read_parquet(FIG / "ep_class_calibration.parquet")
+(
+    ggplot(cc.to_pandas(), aes("bin", "actual"))
+    + geom_abline(slope=1, intercept=0, linetype="dashed", color="gray")
+    + geom_point(aes(size="n_plays"), color="#2a6f97", alpha=0.8)
+    + geom_line(color="#2a6f97")
+    + facet_wrap("~by", scales="free")
+    + labs(x="predicted class probability", y="realized frequency",
+           title="EP per-class calibration (LOSO 1999–2025)")
+    + theme_minimal()
+)
+```
+
+::: {.callout-note}
+## Why not a single points-scale number
+Binning the scalar `ep` against realized next-score *value* reads ≈0.07 **points**,
+but that is dominated by the absolute level of the next-score label — nflfastR's
+own `ep` sits the same ~0.1 points above the realized-next-score mean — so it is
+**not** comparable to the probability-scale figures above, nor to WP/CP. The
+per-class reliability and the parity (`ep` r 0.996) are the honest, comparable
+signals; the model is not miscalibrated.
+:::
+
+```{python}
+#| fig-cap: "EP by yardline, recomputed at render time on the 2025 season — the nflfastR signature curve."
+mut = ep_wp._make_model_mutations(pbp)
+first = mut.filter((pl.col("down") == 1) & (pl.col("ydstogo") == 10))
+byy = (
+    first.group_by("yardline_100")
+    .agg(pl.col("ep").mean().alias("mean_ep"), pl.len().alias("n"))
+    .filter(pl.col("n") >= 20)
+    .sort("yardline_100")
+)
+(
+    ggplot(byy.to_pandas(), aes("yardline_100", "mean_ep"))
+    + geom_line(color="#2a6f97") + geom_point(aes(size="n"), color="#2a6f97", alpha=0.6)
+    + labs(x="yards from opponent end zone", y="mean EP (1st & 10)",
+           title="EP by yardline — 2025 season, published surface")
+    + theme_minimal()
+)
+```
+
+The EP-by-yardline curve rises smoothly from own-goal-line to a sharp red-zone
+climb — the shape that makes EPA a meaningful per-play currency.
+
+## Feature importance & SHAP
+
+```{python}
+gain = bst.get_score(importance_type="gain")
+imp = pl.DataFrame({"feature": list(gain.keys()), "gain": [float(v) for v in gain.values()]}).sort("gain", descending=True)
+gt_show(
+    GT(imp.head(12).to_pandas())
+    .tab_header(title="Top 12 features by gain — committed EP booster")
+    .fmt_number(columns="gain", decimals=1)
+)
+```
+
+```{python}
+#| fig-cap: "TreeSHAP (margin space), mean |contribution| per feature aggregated across the 7 class margins; 4,000-play sample from the 2025 season."
+X = mut.select(feats).to_numpy().astype(np.float32)
+rng = np.random.default_rng(11)
+idx = rng.choice(X.shape[0], size=min(4000, X.shape[0]), replace=False)
+contribs = bst.predict(xgb.DMatrix(X[idx], feature_names=feats), pred_contribs=True)
+# multiclass pred_contribs is 3-D: (n, num_class, n_feats+1)
+mean_abs = np.abs(contribs[:, :, :-1]).mean(axis=(0, 1))
+sh = pl.DataFrame({"feature": feats, "mean_abs_shap": mean_abs.tolist()}).sort("mean_abs_shap", descending=True)
+(
+    ggplot(sh.to_pandas(), aes("reorder(feature, mean_abs_shap)", "mean_abs_shap"))
+    + geom_col(fill="#2a6f97")
+    + coord_flip()
+    + labs(x="", y="mean |SHAP| (class-margin space)",
+           title="EP TreeSHAP importance — 2025 sample")
+    + theme_minimal()
+)
+```
+
+`yardline_100` dominates (field position is the backbone of EP), followed by
+`half_seconds_remaining` and the down one-hots; the era and stadium one-hots
+apply level shifts rather than driving the surface — matching the nflfastR EP
+post. Because EP is a softprob dot-product, exact SHAP exists per class margin,
+not for the scalar `ep`; the chart aggregates |contribution| across the seven
+margins and is labeled accordingly.
+
+## Results — the surface in use
+
+```{python}
+teams = (
+    pbp.filter(pl.col("epa").is_not_null() & pl.col("posteam").is_not_null()
+               & pl.col("play_type").is_in(["pass", "run"]))
+    .group_by("posteam")
+    .agg(pl.len().alias("plays"), pl.col("epa").mean().alias("off_epa_play"))
+    .sort("off_epa_play", descending=True).head(10)
+    .with_columns(
+        ("<img src='https://a.espncdn.com/i/teamlogos/nfl/500/"
+         + pl.col("posteam").str.to_lowercase() + ".png' height='36'/>").alias("logo"))
+)
+gt_show(
+    GT(teams.select("logo", "posteam", "plays", "off_epa_play").to_pandas())
+    .tab_header(title="Top 10 offenses by EPA/play — 2025 season",
+                subtitle="EPA is the first difference of this model's EP surface")
+    .fmt_markdown(columns="logo")
+    .fmt_number(columns="plays", sep_mark=",", decimals=0)
+    .fmt_number(columns="off_epa_play", decimals=3)
+    .cols_label(logo="", posteam="Offense", plays="Plays", off_epa_play="EPA/play")
+)
+```
+
+## Limitations
+
+EP is a **start-of-play** quantity; it does not know the result of the current
+play (that is what EPA captures). Top-1 class accuracy is inherently capped by
+irreducible next-score noise, not miscalibration — the model is well-calibrated
+in aggregate even where individual outcomes are unpredictable. The 7-class point
+map is fixed, and the model is blind to personnel and in-play participants by
+design.
+
+## Provenance
+
+| field | value |
+|---|---|
+| `model_type` | ep |
+| `objective` | multi:softprob (num_class=7) |
+| `features` | 18 (see above) |
+| `label` | next_score_class |
+| `training_seasons` | 1999–2025 |
+| `n_training_rows` | 1,195,636 |
+| `hyperparameters` | eta=0.025, max_depth=5 |
+| `lineage` | nflfastR EP model · nflverse `fastrmodels` (Ben Baldwin) |
+| `parity` | `ep` r 0.996 · `epa` r 0.994 |
+| `artifact` | `models/ep_model.ubj` (committed; also on `nfl_model_artifacts`) |
+| `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
+
+## Avenues for improvement & open issues
+
+- **Era interactions** — era dummies were evaluated and rejected on
+  calibration; richer era x feature interactions (kickoff rules, OT format)
+  remain unexplored.
+- **Known issue:** kickoff/PAT rows depend on the feature-substitution
+  convention (touchback yardline, down/ydstogo resets) — any rule change
+  (e.g. dynamic kickoff) requires revisiting those constants before retrain.

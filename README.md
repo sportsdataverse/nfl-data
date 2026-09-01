@@ -60,8 +60,9 @@ flowchart TB;
 ```
 
 Drivers are the four cron workflows (`nfl_pbp_cron.yml`, `nfl_model_pipeline.yml`,
-`nfl_ratings_weekly.yml`, `nfl_rosters_players_cron.yml`); each invokes the module
-CLIs above. Raw per-game JSON is fetched from
+`nfl_ratings_weekly.yml`, `nfl_rosters_players_cron.yml`); each invokes the numbered
+stages above (run subsets locally via `scripts/nfl_data.sh` / `scripts/nfl_models.sh`
+by number or name). Raw per-game JSON is fetched from
 [`nfl-raw`](https://github.com/sportsdataverse/nfl-raw) over HTTP — never a clone.
 
 [nfl-raw repository (source: api.nfl.com Shield API)](https://github.com/sportsdataverse/nfl-raw)

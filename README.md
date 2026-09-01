@@ -36,9 +36,9 @@ flowchart TB;
 
     subgraph B[nfl-data];
         direction TB;
-        B0[python -m native_pbp build]-->B1[python -m model_training.play_level train];
-        B1[python -m model_training.play_level train]-->B2[python -m model_training.decision_models train-all];
-        B2[python -m model_training.decision_models train-all]-->B3[python -m nfl_model_publish pbp / artifacts];
+        B0[python -m native_pbp build]-->B1[nfl_model_01_ep ... 05_xyac - scripts/nfl_models.sh];
+        B1[nfl_model_01_ep ... 05_xyac - scripts/nfl_models.sh]-->B2[nfl_model_06_xpass ... 11_punt];
+        B2[nfl_model_06_xpass ... 11_punt]-->B3[python -m nfl_model_publish pbp / artifacts];
         B3[python -m nfl_model_publish pbp / artifacts]-->B4[python -m nfl_ratings_weekly];
     end;
 

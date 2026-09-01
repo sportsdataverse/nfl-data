@@ -85,6 +85,17 @@ uv sync
 uv run pytest          # hermetic suite (integration tests deselected by default)
 ```
 
+## Reports & explainers
+
+<!-- BEGIN GENERATED: reports -->
+
+| Report | What it is | Last updated |
+|---|---|---|
+| [Model reports & cards](docs/models/) | 14 files, one per item | 2026-06-24 |
+| [`-raw` → `-data` Migration Playbook (CFB reference → NFL target)](docs/raw-to-data-migration-playbook.md) | explainer | 2026-06-24 |
+
+<!-- END GENERATED: reports -->
+
 ## Automation & status
 
 <!-- BEGIN GENERATED: status -->

@@ -91,7 +91,8 @@ uv run pytest          # hermetic suite (integration tests deselected by default
 
 | Report | What it is | Last updated |
 |---|---|---|
-| [Model reports & cards](docs/models/) | 14 files, one per item | 2026-06-24 |
+| [Model registry](models/REGISTRY.md) | model | artifact | gates | retrain, one row per published model | 2026-09-01 |
+| [Model reports & cards](docs/models/) | 14 files, one per item | 2026-09-01 |
 | [`-raw` → `-data` Migration Playbook (CFB reference → NFL target)](docs/raw-to-data-migration-playbook.md) | explainer | 2026-06-24 |
 
 <!-- END GENERATED: reports -->

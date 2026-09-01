@@ -1,7 +1,7 @@
 # NFL Model Pipeline — one CI job per numbered model stage + opt-in publish
 #
 # One model = one job: the matrix runs the numbered per-model pipelines in
-# python/nfl_model_build/ (nfl_model_NN_<model>.py — thin entries over the
+# python/ (nfl_model_NN_<model>.py, flat — thin entries over the
 # shared model_training package). The stage list's single home is
 # models/manifest.yaml; tests/test_model_manifest.py keeps this matrix honest
 # (a stage added there without a manifest row goes red).
@@ -136,7 +136,7 @@ jobs:
         if: steps.sel.outputs.selected == 'true'
         working-directory: nfl-data/python
         run: |
-          uv run --no-sync --project .. python -c "import model_training.play_level, model_training.decision_models, nfl_model_build; print('trainer surface OK')"
+          uv run --no-sync --project .. python -c "import model_training.play_level, model_training.decision_models; print('trainer surface OK')"
 
       - name: Run stage
         if: steps.sel.outputs.selected == 'true'
@@ -151,7 +151,7 @@ jobs:
               if [ -n "${NROUNDS}" ]; then EXTRA="--nrounds ${NROUNDS}"; fi
               ;;
           esac
-          uv run --no-sync --project .. python -m "nfl_model_build.${STAGE}" ${EXTRA}
+          uv run --no-sync --project .. python -m "${STAGE}" ${EXTRA}
 
       # Retained even when publishing is off, so a retrain can be inspected and
       # compared against the released models before anyone overwrites them.

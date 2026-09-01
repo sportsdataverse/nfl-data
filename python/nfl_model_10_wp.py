@@ -6,7 +6,7 @@ operability — fingerprint skip/--force, gate rc, ledger append.
 
 Usage::
 
-    python -m nfl_model_build.nfl_model_10_wp [--force] ...
+    python -m nfl_model_10_wp [--force] ...
     scripts/nfl_models.sh 10
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
-    from nfl_model_build._stage import decision_parser, run_stage
+    from model_training._stage import decision_parser, run_stage
 
     args = decision_parser("nfl_model_10_wp").parse_args(argv)
     out_dir = Path(args.out_dir)

@@ -14,7 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "models" / "manifest.yaml"
 REGISTRY = ROOT / "models" / "REGISTRY.md"
-STAGES_DIR = ROOT / "python" / "nfl_model_build"
+STAGES_DIR = ROOT / "python"
 
 KNOWN_TAGS = {"nfl_model_artifacts", "nfl_4th_down_models"}
 
@@ -59,7 +59,7 @@ def test_stage_scripts_and_manifest_agree_bidirectionally():
 
 def test_stage_modules_import_and_expose_main():
     for p in _stage_files():
-        mod = import_module(f"nfl_model_build.{p.stem}")
+        mod = import_module(p.stem)
         assert callable(getattr(mod, "main", None)), f"{p.stem} has no main()"
 
 
@@ -92,7 +92,7 @@ def test_decision_models_match_publish_routing():
     )
 
 
-DATA_STAGES_DIR = ROOT / "python" / "nfl_data_build"
+DATA_STAGES_DIR = ROOT / "python"
 
 
 def _data_pipelines() -> dict:
@@ -110,5 +110,5 @@ def test_data_stages_and_manifest_agree_bidirectionally():
 
 def test_data_stage_modules_import_and_expose_main():
     for p in sorted(DATA_STAGES_DIR.glob("nfl_data_[0-9][0-9]_*.py")):
-        mod = import_module(f"nfl_data_build.{p.stem}")
+        mod = import_module(p.stem)
         assert callable(getattr(mod, "main", None)), f"{p.stem} has no main()"

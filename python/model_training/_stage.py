@@ -7,7 +7,7 @@ the shared ``model_training`` package -> record fingerprint -> append a
 
 The training logic stays in ``model_training`` (single implementation); this
 layer owns per-model operability only. Run stages via
-``python -m nfl_model_build.nfl_model_NN_<model>`` or ``scripts/nfl_models.sh``.
+``python -m nfl_model_NN_<model>`` or ``scripts/nfl_models.sh``.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def parse_seasons(values: list[str]) -> list[int]:
 
 
 def play_level_parser(name: str, *, xyac: bool = False) -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog=f"nfl_model_build.{name}")
+    p = argparse.ArgumentParser(prog=f"python -m nfl_model_NN_{name}")
     p.add_argument("--seasons", nargs="+", default=DEFAULT_SEASONS, metavar="YEAR")
     p.add_argument("--data-dir", default="data", metavar="DIR")
     p.add_argument("--models-dir", default="models", metavar="DIR")
@@ -50,7 +50,7 @@ def play_level_parser(name: str, *, xyac: bool = False) -> argparse.ArgumentPars
 
 
 def decision_parser(name: str) -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog=f"nfl_model_build.{name}")
+    p = argparse.ArgumentParser(prog=f"python -m nfl_model_NN_{name}")
     p.add_argument("--out-dir", default="out", metavar="DIR")
     p.add_argument(
         "--nrounds",

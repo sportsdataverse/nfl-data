@@ -8,7 +8,7 @@
 #   scripts/nfl_models.sh --force 06       # pass --force through to the stages
 #   NFL_MODELS_ARGS="--nrounds 5" scripts/nfl_models.sh 06   # extra stage args
 #
-# Stage list = python/nfl_model_build/nfl_model_NN_<model>.py (single home:
+# Stage list = python/nfl_model_NN_<model>.py (single home:
 # models/manifest.yaml; tests/test_model_manifest.py keeps them in lockstep).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -27,7 +27,7 @@ fi
 FORCE=""
 if [ "${1:-}" = "--force" ]; then FORCE="--force"; shift; fi
 
-mapfile -t ALL < <(ls python/nfl_model_build/nfl_model_[0-9][0-9]_*.py | sort)
+mapfile -t ALL < <(ls python/nfl_model_[0-9][0-9]_*.py | sort)
 
 SELECTED=()
 if [ "$#" -eq 0 ]; then
@@ -57,7 +57,7 @@ for f in "${SELECTED[@]}"; do
   mod="$(basename "${f}" .py)"
   echo "== ${mod}"
   # shellcheck disable=SC2086
-  PYTHONPATH=python "${PY}" -m "nfl_model_build.${mod}" ${FORCE} ${NFL_MODELS_ARGS:-} || {
+  PYTHONPATH=python "${PY}" -m "${mod}" ${FORCE} ${NFL_MODELS_ARGS:-} || {
     rc=$?
     echo "== ${mod} FAILED (rc=${rc})"
     break

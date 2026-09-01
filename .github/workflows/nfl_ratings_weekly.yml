@@ -72,7 +72,7 @@ jobs:
         env:
           SEASONS: ${{ steps.seasons.outputs.seasons }}
         run: |
-          uv run --no-sync python -m nfl_data_build.nfl_data_05_ratings_weekly \
+          uv run --no-sync python -m nfl_data_05_ratings_weekly \
             --seasons "$SEASONS" \
             --out ../out/nfl_ratings_weekly
 
@@ -85,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
           SEASONS: ${{ steps.seasons.outputs.seasons }}
         run: |
-          uv run --no-sync python -m nfl_data_build.nfl_data_05_ratings_weekly \
+          uv run --no-sync python -m nfl_data_05_ratings_weekly \
             --seasons "$SEASONS" \
             --out ../out/nfl_ratings_weekly \
             --publish

@@ -135,10 +135,10 @@ jobs:
         run: |
           # Track B: fetch per-game JSON over HTTP (read-through cache, fail-soft)
           # instead of checking out the 3GB+ nfl-raw repo.
-          uv run --no-sync python -m nfl_data_build.nfl_data_01_ingest \
+          uv run --no-sync python -m nfl_data_01_ingest \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --cache-dir "$GITHUB_WORKSPACE/_raw_cache"
-          uv run --no-sync python -m nfl_data_build.nfl_data_02_model_pbp build \
+          uv run --no-sync python -m nfl_data_02_model_pbp build \
             --enrich \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --raw-dir "$GITHUB_WORKSPACE/_raw_cache" \
@@ -155,7 +155,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run --no-sync python -m nfl_data_build.nfl_data_03_pbp_publish \
+          uv run --no-sync python -m nfl_data_03_pbp_publish \
             --parquet-dir out/model_pbp \
             --tag nfl_model_pbp \
             --repo sportsdataverse/sportsdataverse-data

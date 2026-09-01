@@ -90,3 +90,31 @@ suites:
         artifact: punt_data.parquet
         release_tag: nfl_model_artifacts
         # distribution artifact, not a fitted booster — no feature set
+
+# Data pipelines (Option A: numbered domain packages). Same discipline as the
+# model stages: python/nfl_data_build/nfl_data_NN_*.py are thin entries over
+# the library packages; run subsets with scripts/nfl_data.sh. Data stages do
+# NOT fingerprint-skip — they are refresh jobs whose inputs change upstream
+# without a code change.
+data_pipelines:
+  ingest:
+    stage: python/nfl_data_build/nfl_data_01_ingest.py
+    wraps: nfl_data_ingest
+    workflow: nfl_pbp_cron.yml
+  model_pbp:
+    stage: python/nfl_data_build/nfl_data_02_model_pbp.py
+    wraps: native_pbp
+    workflow: nfl_pbp_cron.yml
+  pbp_publish:
+    stage: python/nfl_data_build/nfl_data_03_pbp_publish.py
+    wraps: nfl_model_publish pbp
+    workflow: nfl_pbp_cron.yml
+    release_tag: nfl_model_pbp
+  rosters_players:
+    stage: python/nfl_data_build/nfl_data_04_rosters_players.py
+    wraps: nfl_model_publish (rosters / players / player-stats / team-stats / qbr)
+    workflow: nfl_rosters_players_cron.yml
+  ratings_weekly:
+    stage: python/nfl_data_build/nfl_data_05_ratings_weekly.py
+    wraps: nfl_ratings_weekly
+    workflow: nfl_ratings_weekly.yml

@@ -147,7 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run --no-sync python -m nfl_model_publish rosters \
+          uv run --no-sync python -m nfl_data_build.nfl_data_04_rosters_players rosters \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --out out/rosters \
             --tag nfl_rosters \
@@ -159,7 +159,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run --no-sync python -m nfl_model_publish players \
+          uv run --no-sync python -m nfl_data_build.nfl_data_04_rosters_players players \
             --out out/players \
             --tag nfl_players \
             --repo sportsdataverse/sportsdataverse-data
@@ -192,7 +192,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run --no-sync python -m nfl_model_publish player-stats \
+          uv run --no-sync python -m nfl_data_build.nfl_data_04_rosters_players player-stats \
             --seasons "${{ steps.ps_seasons.outputs.seasons }}" \
             --out out/player_stats \
             --tag nfl_player_stats \
@@ -227,7 +227,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run --no-sync python -m nfl_model_publish team-stats \
+          uv run --no-sync python -m nfl_data_build.nfl_data_04_rosters_players team-stats \
             --seasons "${{ steps.ts_seasons.outputs.seasons }}" \
             --out out/team_stats \
             --tag nfl_team_stats \
@@ -261,7 +261,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          uv run --no-sync python -m nfl_model_publish qbr \
+          uv run --no-sync python -m nfl_data_build.nfl_data_04_rosters_players qbr \
             --seasons "${{ steps.qbr_seasons.outputs.seasons }}" \
             --out out/qbr \
             --tag nfl_espn_qbr \

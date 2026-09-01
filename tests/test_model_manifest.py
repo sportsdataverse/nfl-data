@@ -90,3 +90,25 @@ def test_decision_models_match_publish_routing():
         "decision_models manifest and publish routing diverged: "
         f"manifest-only={manifest - routed}, routing-only={routed - manifest}"
     )
+
+
+DATA_STAGES_DIR = ROOT / "python" / "nfl_data_build"
+
+
+def _data_pipelines() -> dict:
+    return yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))["data_pipelines"]
+
+
+def test_data_stages_and_manifest_agree_bidirectionally():
+    files = {p.stem for p in DATA_STAGES_DIR.glob("nfl_data_[0-9][0-9]_*.py")}
+    manifest = {Path(m["stage"]).stem for m in _data_pipelines().values()}
+    assert files == manifest, f"files-only={files - manifest}, manifest-only={manifest - files}"
+    for name, m in _data_pipelines().items():
+        assert (ROOT / m["stage"]).is_file(), f"{name} stage script missing"
+        assert (ROOT / ".github" / "workflows" / m["workflow"]).is_file(), f"{name} workflow missing"
+
+
+def test_data_stage_modules_import_and_expose_main():
+    for p in sorted(DATA_STAGES_DIR.glob("nfl_data_[0-9][0-9]_*.py")):
+        mod = import_module(f"nfl_data_build.{p.stem}")
+        assert callable(getattr(mod, "main", None)), f"{p.stem} has no main()"

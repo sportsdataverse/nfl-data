@@ -69,7 +69,70 @@ by number or name). Raw per-game JSON is fetched from
 
 [sportsdataverse-py (Shield wrappers, `.nfl` submodule)](https://github.com/sportsdataverse/sportsdataverse-py)
 
-## Layout
+## Repository layout
+
+<!-- BEGIN GENERATED: layout -->
+
+```
+nfl-data/
+├── R/   # R pipeline stages and publish toolchain
+│   ├── _data_utils.R
+│   └── nfl_publish_model_pbp.R
+├── dev/   # working notes, not part of the pipeline
+├── docs/   # explainers, model reports and dataset docs
+│   ├── models/
+│   └── superpowers/
+├── features/   # feature-set definitions
+├── models/   # model artifacts, cards and the registry
+├── models_fullhist/
+├── out/
+│   ├── nfl_ratings_weekly/
+│   └── nfl_ratings_weekly_early/
+├── python/   # Python pipeline stages, numbered in build order
+│   ├── data/
+│   ├── model_training/
+│   ├── models/
+│   ├── native_pbp/
+│   ├── nfl_data_ingest/
+│   ├── nfl_model_publish/
+│   ├── nfl_ratings_weekly/
+│   ├── out/
+│   ├── conftest.py
+│   ├── nfl_data_01_ingest.py
+│   ├── nfl_data_02_model_pbp.py
+│   ├── nfl_data_03_pbp_publish.py
+│   ├── nfl_data_04_rosters_players.py
+│   ├── nfl_data_05_ratings_weekly.py
+│   ├── nfl_model_01_ep.py
+│   ├── nfl_model_02_wp_spread.py
+│   └── … 9 more
+├── scripts/   # bash drivers (the daily/weekly entry points)
+│   ├── nfl_data.sh
+│   └── nfl_models.sh
+├── tests/   # test suite
+│   ├── native_pbp/
+│   ├── nfl_data_ingest/
+│   ├── nfl_model_publish/
+│   ├── __init__.py
+│   ├── test_constants.py
+│   ├── test_decision_models_parity.py
+│   ├── test_decision_models_trainer_smoke.py
+│   ├── test_feature_sets.py
+│   ├── test_features.py
+│   ├── test_fetcher.py
+│   ├── test_figures_report.py
+│   ├── test_fingerprint.py
+│   ├── test_id_conventions.py
+│   ├── test_ingest.py
+│   ├── test_labels.py
+│   ├── test_metrics.py
+│   └── … 7 more
+└── tools/   # repo-local helper scripts
+    ├── hooks/
+    └── nfl4th_models/
+```
+
+<!-- END GENERATED: layout -->
 
 - `python/` — uv project. `native_pbp/` (compiled-PBP builder, nflfastR parity), `nfl_data_ingest/`
   (URL-ingest of nfl-raw JSON), `model_training/play_level/` (EP/WP/CP trainer + reports),

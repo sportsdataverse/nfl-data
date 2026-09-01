@@ -61,3 +61,11 @@ inherits the home-perspective framing and the EP model's drift through `home_ep`
 | `hyperparameters` | eta=0.025, max_depth=5, nrounds=500 |
 | `lineage` | nfl4th decision-WP model |
 | `parity` | P(win) corr 0.9947 (gate ≥0.99) |
+
+## Avenues for improvement & open issues
+
+- **Unify with the main WP family** — the nfl4th contract keeps a separate
+  home-perspective model; folding it into the spread family would remove a
+  dual-maintenance surface.
+- **Known issue:** trains on cal_data.rds (2001-2020); its window lags the
+  main models and a missing file silently skips the model in train-all.

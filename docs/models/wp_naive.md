@@ -67,3 +67,10 @@ carries the same per-play noise caveat.
 | `hyperparameters` | eta=0.2, max_depth=4 |
 | `lineage` | nflfastR naive-WP model · nflverse `fastrmodels` (Ben Baldwin) |
 | `parity` | `wp` r 0.997 |
+
+## Avenues for improvement & open issues
+
+- Primarily a fallback when no market prior exists; improvement effort
+  belongs in the spread model. **Known issue:** naive WP is systematically
+  miscalibrated for large early leads relative to the spread model — expected,
+  but worth a documented delta figure.

@@ -82,3 +82,10 @@ passer skill.
 | `hyperparameters` | eta=0.025, max_depth=4 |
 | `lineage` | nflfastR CP/CPOE model · nflverse `fastrmodels` (Ben Baldwin) |
 | `parity` | `cpoe` scale-correct (percentage points) |
+
+## Avenues for improvement & open issues
+
+- **Separation/coverage features** — public pbp lacks them; NGS-derived
+  aggregates are the plausible lever.
+- **Known issue:** CPOE is percentage-point scaled (100x) by convention —
+  consumers routinely mis-scale it; the column doc must stay loud.

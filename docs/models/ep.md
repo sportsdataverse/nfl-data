@@ -101,3 +101,12 @@ design.
 | `hyperparameters` | eta=0.025, max_depth=5 |
 | `lineage` | nflfastR EP model · nflverse `fastrmodels` (Ben Baldwin) |
 | `parity` | `ep` r 0.996 · `epa` r 0.994 |
+
+## Avenues for improvement & open issues
+
+- **Era interactions** — era dummies were evaluated and rejected on
+  calibration; richer era x feature interactions (kickoff rules, OT format)
+  remain unexplored.
+- **Known issue:** kickoff/PAT rows depend on the feature-substitution
+  convention (touchback yardline, down/ydstogo resets) — any rule change
+  (e.g. dynamic kickoff) requires revisiting those constants before retrain.

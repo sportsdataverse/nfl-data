@@ -77,3 +77,10 @@ the construction pipeline upstream, not the model head.
 | `hyperparameters` | eta=0.05, max_depth=5 |
 | `lineage` | nflfastR spread-WP model · nflverse `fastrmodels` (Ben Baldwin) |
 | `parity` | `vegas_wp` r 0.998 · `wpa` r ≈0.89 (SNR ceiling) |
+
+## Avenues for improvement & open issues
+
+- **Line movement** — the model sees a static spread; closing-line or in-week
+  movement would sharpen early-game WP.
+- **Known issue:** `spread_time`'s decay exponent (-4.0) is a fitted constant
+  frozen in model_vars — it must travel with any retrain.

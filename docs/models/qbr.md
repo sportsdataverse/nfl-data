@@ -54,3 +54,11 @@ components.
 | `target` | ESPN raw Total QBR (per quarterback-game) |
 | `lineage` | ESPN Total QBR · EPA components from the EP model |
 | `distribution` | bundled in sportsdataverse |
+
+## Avenues for improvement & open issues
+
+- **Opponent adjustment** — the QBR-style rating is unadjusted for defense
+  faced.
+- **Known issue:** the registry's qbr row remains an external TODO (trainer
+  not in `model_training/`) — this report documents the bundled artifact, not
+  an in-repo recipe.

@@ -51,3 +51,9 @@ decision).
 | `lineage` | nfl4th punt model |
 | `parity` | freq-weighted TV 0.105 (informational; full-history vs nfl4th 2010–19) |
 | `distribution` | bundled in sportsdataverse |
+
+## Avenues for improvement & open issues
+
+- **Returner identity and directional punting** are absent.
+- **Known issue:** as a distribution artifact it has no gate of its own —
+  errors surface only through the 4th-down decision calibration.

@@ -61,3 +61,11 @@ mostly by the ~48% success level against the empirical XP make rate.
 | `lineage` | nfl4th two-point model |
 | `parity` | P(success) corr 0.806 (informational; 2010–2025, vintage-drift) |
 | `distribution` | bundled in sportsdataverse |
+
+## Avenues for improvement & open issues
+
+- **Sparse-sample ceiling** — a documented soft gate (~0.87 parity) because
+  the data vintage is thin; pooling college two-point data is a plausible
+  transfer-learning experiment.
+- **Known issue:** the soft gate means CI tolerates parity misses here —
+  reviewers must not read its PASS as equivalent to the hard-gated models.

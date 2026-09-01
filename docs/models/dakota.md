@@ -47,3 +47,9 @@ parent models.
 | `parents` | EP model · CP model |
 | `lineage` | nflfastR `dakota` (adjusted EPA + CPOE composite) |
 | `surface` | player-stats aggregation (per passer) |
+
+## Avenues for improvement & open issues
+
+- **Recalibration cadence** — dakota blends EPA/CPOE; its coefficients should
+  be re-examined whenever either input model is retrained.
+- **Known issue:** no dedicated gate — it inherits its inputs' validation.

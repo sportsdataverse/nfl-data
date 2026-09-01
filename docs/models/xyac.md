@@ -74,3 +74,11 @@ in `sportsdataverse` — it is download-on-demand and cached on first use.
 | `hyperparameters` | eta=0.025, max_depth=4 |
 | `lineage` | nflfastR `add_xyac` |
 | `distribution` | download-on-demand (not bundled in sportsdataverse) |
+
+## Avenues for improvement & open issues
+
+- **Continuous target** — the 76-class distribution could be compared against
+  a monotone continuous head; distributional calibration beyond the mean is
+  unevaluated.
+- **Known issue:** `distance_to_sticks` sign conventions bit once already
+  (recorded gotcha) — any feature change must re-verify it.

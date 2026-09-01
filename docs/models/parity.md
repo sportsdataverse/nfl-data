@@ -73,3 +73,10 @@ parity path.
 - **xPass** — the nflverse dropback model.
 - **Artifacts** — published as `nfl_model_artifacts` (EP / WP / CP) and
   `nfl_4th_down_models`, bundled in `sportsdataverse`.
+
+## Avenues for improvement & open issues
+
+- **WPA parity ceiling (~0.89)** is an SNR limit of first-differencing WP —
+  documented as exact-derivation-verified; do not chase it as a bug.
+- **Avenue:** extend parity to the decision surfaces' rare branches (onside,
+  end-of-half edge cases) where sample sizes finally allow.

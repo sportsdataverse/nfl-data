@@ -58,3 +58,9 @@ not in xpass itself.
 | `lineage` | nflverse dropback model |
 | `parity` | P(pass) corr 0.989 (informational; full-history vs nflverse 2006+) |
 | `distribution` | bundled in sportsdataverse |
+
+## Avenues for improvement & open issues
+
+- **Motion/personnel data** — the known ceiling-lifter absent from public pbp.
+- **Known issue:** era one-hots make the earliest seasons the reference class;
+  a new era needs an explicit dummy, not silent absorption.

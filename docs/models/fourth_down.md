@@ -66,3 +66,10 @@ modern game only.
 | `lineage` | nfl4th go-for-it model |
 | `parity` | mean-gain corr 0.986 (informational; full-history vs nfl4th 2014–19) |
 | `distribution` | download-on-demand (large 76-class model) |
+
+## Avenues for improvement & open issues
+
+- **Coach-level tendencies** — decision calibration is league-wide; a
+  coach-indexed layer would localize it.
+- **Known issue:** the 76-class yards head shares the xYAC machinery — the
+  multiclass pred_contribs 3-D gotcha applies to any explainability pass.

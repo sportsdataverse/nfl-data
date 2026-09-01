@@ -55,3 +55,9 @@ with caution (this is the freq-weighted vs full-grid corr gap).
 | `lineage` | nfl4th field-goal model (was mgcv GAM) |
 | `parity` | attempted-cells corr 0.971 · freq-weighted 0.986 (informational, era-aware full-history) |
 | `distribution` | bundled in sportsdataverse |
+
+## Avenues for improvement & open issues
+
+- **Weather/altitude/kicker aging** — none are features; kicker identity is.
+- **Known issue:** parity vs the R oracle sits at 0.971 — below the other
+  boosters, documented, and worth a targeted divergence audit.

@@ -12,6 +12,7 @@ from __future__ import annotations
 import polars as pl
 
 # Reuse the canonical mutation engine from play_level — DO NOT re-implement.
+from model_training.play_level.constants import SPREAD_TIME_DECAY_EXPONENT
 from model_training.play_level.features import make_model_mutations
 
 from .constants import (
@@ -142,7 +143,8 @@ def prepare_fd_data(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns(yards.alias("_yards_gained"))
 
     out = out.filter(
-        pl.col("play_type_nfl").is_in(["RUSH", "PASS", "SACK"]) | (pl.col("first_down_penalty").fill_null(0) == 1)
+        pl.col("play_type_nfl").is_in(["RUSH", "PASS", "SACK"])
+        | (pl.col("first_down_penalty").fill_null(0) == 1)
     )
     out = out.with_columns((pl.col("_yards_gained") + 10).cast(pl.Int32).alias("label"))
     return out.select([*FD_FEATURES, "label"])
@@ -175,7 +177,9 @@ def prepare_two_pt_data(df: pl.DataFrame) -> pl.DataFrame:
         & (pl.col("week") <= 17)
     )
     out = add_spread_total_features(out)
-    out = out.with_columns((pl.col("two_point_conv_result") == "success").cast(pl.Int32).alias("label"))
+    out = out.with_columns(
+        (pl.col("two_point_conv_result") == "success").cast(pl.Int32).alias("label")
+    )
     return out.select([*TWO_PT_FEATURES, "label"])
 
 
@@ -282,8 +286,13 @@ def prepare_wp_data(df: pl.DataFrame) -> pl.DataFrame:
     )
     out = out.with_columns(
         # spread_line is already home-perspective in nflfastR (negative = home favored)
-        (pl.col("spread_line") * (pl.col("elapsed_share") * -4.0).exp()).alias("spread_time"),
-        (pl.col("home_score_differential") / (pl.col("elapsed_share") * -4.0).exp()).alias("Diff_Time_Ratio"),
+        (
+            pl.col("spread_line") * (pl.col("elapsed_share") * SPREAD_TIME_DECAY_EXPONENT).exp()
+        ).alias("spread_time"),
+        (
+            pl.col("home_score_differential")
+            / (pl.col("elapsed_share") * SPREAD_TIME_DECAY_EXPONENT).exp()
+        ).alias("Diff_Time_Ratio"),
     )
     # home_receive_2h_ko: home opened the game on defense (i.e. kicked off) -> they
     # receive the 2nd-half kickoff. First non-null defteam in the game == kicking team.

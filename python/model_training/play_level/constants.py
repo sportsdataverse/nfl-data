@@ -3,6 +3,7 @@
 Canonical source: fastrmodels/data-raw/MODELS.R (Ben Baldwin, nflverse/fastrmodels)
 Feature derivations: nflfastR/R/helper_add_ep_wp.R + helper_add_cp_cpoe.R
 """
+
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
@@ -66,6 +67,20 @@ EP_HYPERPARAMS: dict = {
     "nrounds": 525,
     "seed": 2013,
 }
+
+# ---------------------------------------------------------------------------
+# Fitted constant shared by EVERY WP feature frame (spread and naive both read
+# Diff_Time_Ratio; the decision-suite nfl4th wp reuses it): the clock-decay
+# exponent in
+#     spread_time     = posteam_spread     * exp(SPREAD_TIME_DECAY_EXPONENT * elapsed_share)
+#     Diff_Time_Ratio = score_differential / exp(SPREAD_TIME_DECAY_EXPONENT * elapsed_share)
+# nflfastR MODELS.R fixed it at -4. It travels with the artifact: every WP model
+# card records it under derived_feature_constants.spread_time_decay_exponent,
+# features/wp*_v1.yaml registers it, and tests/test_feature_sets.py asserts
+# trainer == registry == applier (sdv-py model_vars.SPREAD_TIME_DECAY_EXPONENT).
+# ---------------------------------------------------------------------------
+
+SPREAD_TIME_DECAY_EXPONENT: float = -4.0
 
 # ---------------------------------------------------------------------------
 # WP-spread — win probability with spread (binary:logistic)

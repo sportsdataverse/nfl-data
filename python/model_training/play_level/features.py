@@ -6,6 +6,7 @@ Python translation of:
 
 All functions accept and return polars DataFrames.
 """
+
 from __future__ import annotations
 
 import polars as pl
@@ -13,6 +14,7 @@ import polars as pl
 from .constants import (
     CP_FEATURES,
     EP_FEATURES,
+    SPREAD_TIME_DECAY_EXPONENT,
     WP_NAIVE_FEATURES,
     WP_SPREAD_FEATURES,
     XYAC_FEATURES,
@@ -22,11 +24,11 @@ from .constants import (
 # buckets: 1999-2001, 2002-2005, 2006-2013, 2014-2017, 2018+ (opensourcefootball EP/WP
 # models post). Prior cutoffs (2001, 2019) misbucketed 2001 -> era1 and 2018 -> era3.
 _ERA_BOUNDS: list[tuple[int, int, str]] = [
-    (0, 2002, "era0"),      # 1999-2001 (pre-expansion)
-    (2002, 2006, "era1"),   # 2002-2005 (pre-CPOE)
-    (2006, 2014, "era2"),   # 2006-2013 (pre-LOB rules change)
-    (2014, 2018, "era3"),   # 2014-2017
-    (2018, 9999, "era4"),   # 2018+
+    (0, 2002, "era0"),  # 1999-2001 (pre-expansion)
+    (2002, 2006, "era1"),  # 2002-2005 (pre-CPOE)
+    (2006, 2014, "era2"),  # 2006-2013 (pre-LOB rules change)
+    (2014, 2018, "era3"),  # 2014-2017
+    (2018, 9999, "era4"),  # 2018+
 ]
 
 
@@ -41,9 +43,7 @@ def make_model_mutations(df: pl.DataFrame) -> pl.DataFrame:
         era0..era4, down1..down4
     """
     # home indicator
-    df = df.with_columns(
-        (pl.col("posteam") == pl.col("home_team")).cast(pl.Float64).alias("home")
-    )
+    df = df.with_columns((pl.col("posteam") == pl.col("home_team")).cast(pl.Float64).alias("home"))
 
     # roof one-hot: 'closed' and 'dome' both map to dome=1
     df = df.with_columns(
@@ -91,13 +91,19 @@ def _add_wp_aux(df: pl.DataFrame) -> pl.DataFrame:
         .otherwise(-pl.col("spread_line"))
         .alias("posteam_spread")
     )
-    # spread_time = posteam_spread * exp(-4 * elapsed_share)
+    # spread_time = posteam_spread * exp(SPREAD_TIME_DECAY_EXPONENT * elapsed_share) -- the fitted
+    # constant lives in constants.py and is written into every WP model card.
     df = df.with_columns(
-        (pl.col("posteam_spread") * (pl.col("elapsed_share") * -4.0).exp()).alias("spread_time")
+        (
+            pl.col("posteam_spread") * (pl.col("elapsed_share") * SPREAD_TIME_DECAY_EXPONENT).exp()
+        ).alias("spread_time")
     )
-    # Diff_Time_Ratio = score_differential / exp(-4 * elapsed_share)
+    # Diff_Time_Ratio = score_differential / exp(SPREAD_TIME_DECAY_EXPONENT * elapsed_share)
     df = df.with_columns(
-        (pl.col("score_differential") / (pl.col("elapsed_share") * -4.0).exp()).alias("Diff_Time_Ratio")
+        (
+            pl.col("score_differential")
+            / (pl.col("elapsed_share") * SPREAD_TIME_DECAY_EXPONENT).exp()
+        ).alias("Diff_Time_Ratio")
     )
     return df
 
@@ -175,11 +181,18 @@ def prepare_cp_data(df: pl.DataFrame) -> pl.DataFrame:
     # valid_pass: complete|incomplete|interception AND air_yards in [-15, 70) AND has receiver + location
     df = df.with_columns(
         pl.when(
-            ((pl.col("complete_pass") == 1) | (pl.col("incomplete_pass") == 1) | (pl.col("interception") == 1))
+            (
+                (pl.col("complete_pass") == 1)
+                | (pl.col("incomplete_pass") == 1)
+                | (pl.col("interception") == 1)
+            )
             & pl.col("air_yards").is_not_null()
             & (pl.col("air_yards") >= -15.0)
             & (pl.col("air_yards") < 70.0)
-            & (pl.col("receiver_player_id").is_not_null() | pl.col("receiver_player_name").is_not_null())
+            & (
+                pl.col("receiver_player_id").is_not_null()
+                | pl.col("receiver_player_name").is_not_null()
+            )
             & pl.col("pass_location").is_not_null()
         )
         .then(pl.lit(1.0))
@@ -238,6 +251,4 @@ def label_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         DataFrame with ``next_score_class`` as Int32, values clipped to [0, 6].
     """
-    return df.with_columns(
-        pl.col("next_score_class").cast(pl.Int32).clip(0, 6)
-    )
+    return df.with_columns(pl.col("next_score_class").cast(pl.Int32).clip(0, 6))

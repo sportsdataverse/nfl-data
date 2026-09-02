@@ -9,6 +9,7 @@ Usage::
     python -m nfl_model_10_wp [--force] ...
     scripts/nfl_models.sh 10
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -32,22 +33,38 @@ def main(argv: list[str] | None = None) -> int:
         try:
             raw = load_wp_cal_data(None)
         except FileNotFoundError as exc:
-            print(f"[wp] SKIPPED ({exc})")
+            # run_stage makes this loud: ledger status=SKIPPED, rc 1 unless --allow-skip.
             return {"skipped": True, "reason": str(exc)}
-        train_raw = raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS)) if "season" in raw.columns else raw
-        hold_raw = raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS)) if "season" in raw.columns else raw
+        train_raw = (
+            raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS))
+            if "season" in raw.columns
+            else raw
+        )
+        hold_raw = (
+            raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS))
+            if "season" in raw.columns
+            else raw
+        )
         df = prepare_wp_data(train_raw)
         print(f"[wp] training on {df.height:,} plays...")
         model = train_wp(df, nrounds=args.nrounds, output_path=out_dir / "wp_model.ubj")
         return V.validate_wp(model, prepare_wp_data(hold_raw))
 
-
     return run_stage(
-        name="wp", suite="decision_models", force=args.force,
-        config={"model": "wp", "training_data": "cal_data.rds (2001-2020, MODELS.R)",
-                "source": args.source, "nrounds": args.nrounds},
+        name="wp",
+        suite="decision_models",
+        force=args.force,
+        config={
+            "model": "wp",
+            "training_data": "cal_data.rds (2001-2020, MODELS.R)",
+            "source": args.source,
+            "nrounds": args.nrounds,
+        },
         artifacts=[out_dir / "wp_model.ubj"],
-        train=train, smoke=args.nrounds is not None, soft_gate=False,
+        train=train,
+        smoke=args.nrounds is not None,
+        soft_gate=False,
+        allow_skip=args.allow_skip,
     )
 
 

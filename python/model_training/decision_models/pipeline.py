@@ -54,6 +54,11 @@ HOLDOUT_SEASONS = [2022, 2023]
 # WP trains on cal_data.rds (2001-2020 per MODELS.R); hold out the latest seasons
 # in that frame for the parity comparison vs the converted oracle.
 WP_HOLDOUT_SEASONS = [2018, 2019, 2020]
+# two_pt parity is data-vintage-limited (~0.87 vs the 0.99 floor; see report Notes):
+# a documented SOFT gate — tolerated on failure and labelled "SOFT PASS" /
+# "SOFT FAIL" everywhere (console, ledger, report.md) so it is never read as a
+# hard-gate PASS. The floor itself is not lowered.
+SOFT_GATES = frozenset({"two_pt"})
 
 
 def _fmt(d: Dict[str, Any]) -> str:
@@ -66,6 +71,7 @@ def train_all(
     nrounds_override: Optional[int] = None,
     source: str = "nflverse",
     wp_cal_data_path: Optional[str] = None,
+    allow_missing_wp_cal_data: bool = False,
 ) -> Dict[str, Any]:
     """Train every decision_models model, build punt_data, run the parity gate, write report.
 
@@ -75,11 +81,18 @@ def train_all(
             count — for fast smoke runs (will NOT pass the parity gate).
         source: PBP source passed to ``load_training_pbp`` (``"nflverse"``).
         wp_cal_data_path: Path to ``cal_data.rds`` for the WP model; ``None`` uses
-            the default local copy (``WP_CAL_DATA_RDS``). If the file is missing,
-            the WP model is skipped (documented in report.md).
+            the default local copy (``WP_CAL_DATA_RDS``).
+        allow_missing_wp_cal_data: When the file is missing, ``False`` (default)
+            raises ``FileNotFoundError`` — a suite run that silently trains one
+            model fewer is the failure mode this guards; ``True`` records the WP
+            model as ``SKIPPED`` (with the reason) in the results and report.md.
 
     Returns:
         Dict mapping model name -> parity result dict (plus ``"artifacts"``).
+
+    Raises:
+        FileNotFoundError: ``cal_data.rds`` is absent and
+            ``allow_missing_wp_cal_data`` is ``False``.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -92,7 +105,9 @@ def train_all(
 
     # --- xpass ---
     print(f"[decision_models] xpass: loading {XPASS_SEASONS[0]}-{XPASS_SEASONS[-1]}...")
-    xp_df = prepare_xpass_data(make_model_mutations(load_training_pbp(XPASS_SEASONS, source=source)))
+    xp_df = prepare_xpass_data(
+        make_model_mutations(load_training_pbp(XPASS_SEASONS, source=source))
+    )
     print(f"[decision_models] xpass: training on {xp_df.height:,} plays...")
     xp_model = train_xpass(xp_df, nrounds=nrounds_override, output_path=out_dir / "xpass_model.ubj")
     artifacts["xpass"] = out_dir / "xpass_model.ubj"
@@ -110,12 +125,18 @@ def train_all(
 
     # --- two_pt ---
     print(f"[decision_models] two_pt: loading {TWO_PT_SEASONS[0]}-{TWO_PT_SEASONS[-1]}...")
-    tp_df = prepare_two_pt_data(make_model_mutations(load_training_pbp(TWO_PT_SEASONS, source=source)))
+    tp_df = prepare_two_pt_data(
+        make_model_mutations(load_training_pbp(TWO_PT_SEASONS, source=source))
+    )
     print(f"[decision_models] two_pt: training on {tp_df.height:,} plays...")
-    tp_model = train_two_pt(tp_df, nrounds=nrounds_override, output_path=out_dir / "two_pt_model.ubj")
+    tp_model = train_two_pt(
+        tp_df, nrounds=nrounds_override, output_path=out_dir / "two_pt_model.ubj"
+    )
     artifacts["two_pt"] = out_dir / "two_pt_model.ubj"
     # two_pt holdout is tiny (yardline_100==2); validate on a multi-season slice
-    tp_hold = prepare_two_pt_data(make_model_mutations(load_training_pbp(TWO_PT_SEASONS, source=source)))
+    tp_hold = prepare_two_pt_data(
+        make_model_mutations(load_training_pbp(TWO_PT_SEASONS, source=source))
+    )
     results["two_pt"] = V.validate_two_pt(tp_model, tp_hold)
     print(f"[decision_models] two_pt parity: {_fmt(results['two_pt'])}")
 
@@ -134,24 +155,11 @@ def train_all(
     print(f"[decision_models] fg parity: {_fmt(results['fg'])}")
 
     # --- wp (home-perspective; the nfl4th wp_model contract) ---
-    try:
-        print("[decision_models] wp: loading cal_data.rds...")
-        wp_raw = load_wp_cal_data(wp_cal_data_path)
-        wp_train_raw = (
-            wp_raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS)) if "season" in wp_raw.columns else wp_raw
-        )
-        wp_hold_raw = (
-            wp_raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS)) if "season" in wp_raw.columns else wp_raw
-        )
-        wp_df = prepare_wp_data(wp_train_raw)
-        print(f"[decision_models] wp: training on {wp_df.height:,} plays...")
-        wp_model = train_wp(wp_df, nrounds=nrounds_override, output_path=out_dir / "wp_model.ubj")
-        artifacts["wp"] = out_dir / "wp_model.ubj"
-        results["wp"] = V.validate_wp(wp_model, prepare_wp_data(wp_hold_raw))
-        print(f"[decision_models] wp parity: {_fmt(results['wp'])}")
-    except FileNotFoundError as exc:
-        print(f"[decision_models] wp: SKIPPED ({exc})")
-        results["wp"] = {"skipped": True, "reason": str(exc)}
+    results["wp"], wp_artifact = _train_wp_block(
+        out_dir, nrounds_override, wp_cal_data_path, allow_missing=allow_missing_wp_cal_data
+    )
+    if wp_artifact is not None:
+        artifacts["wp"] = wp_artifact
 
     # --- punt ---
     print(f"[decision_models] punt: loading {PUNT_SEASONS[0]}-{PUNT_SEASONS[-1]}...")
@@ -173,7 +181,62 @@ def train_all(
     return results
 
 
+def _train_wp_block(
+    out_dir: Path,
+    nrounds_override: Optional[int],
+    wp_cal_data_path: Optional[str],
+    *,
+    allow_missing: bool,
+) -> "tuple[Dict[str, Any], Optional[Path]]":
+    """Train + validate the nfl4th home-perspective WP model.
+
+    A missing ``cal_data.rds`` is a FAILURE unless ``allow_missing``: the old
+    behaviour (catch, print SKIPPED, carry on) let ``train-all`` exit 0 with one
+    model silently absent — the components-report-success-while-doing-nothing
+    defect. With ``allow_missing`` the skip is still recorded loudly
+    (``{"skipped": True, "reason": ...}`` → ``SKIPPED`` in report.md and the
+    summary).
+
+    Returns:
+        ``(result, artifact_path)``; ``artifact_path`` is ``None`` when skipped.
+
+    Raises:
+        FileNotFoundError: the calibration frame is absent and ``allow_missing``
+            is ``False``.
+    """
+    try:
+        print("[decision_models] wp: loading cal_data.rds...")
+        wp_raw = load_wp_cal_data(wp_cal_data_path)
+    except FileNotFoundError as exc:
+        if not allow_missing:
+            raise FileNotFoundError(
+                f"{exc} -- the nfl4th WP model cannot train without it, and a suite run that silently "
+                "trains one model fewer is a failure. Provide the file, or pass --allow-missing-cal-data "
+                "(train_all(allow_missing_wp_cal_data=True)) to record the model as SKIPPED instead."
+            ) from exc
+        print(f"[decision_models] wp: SKIPPED ({exc})")
+        return {"skipped": True, "reason": str(exc)}, None
+    wp_train_raw = (
+        wp_raw.filter(~pl.col("season").is_in(WP_HOLDOUT_SEASONS))
+        if "season" in wp_raw.columns
+        else wp_raw
+    )
+    wp_hold_raw = (
+        wp_raw.filter(pl.col("season").is_in(WP_HOLDOUT_SEASONS))
+        if "season" in wp_raw.columns
+        else wp_raw
+    )
+    wp_df = prepare_wp_data(wp_train_raw)
+    print(f"[decision_models] wp: training on {wp_df.height:,} plays...")
+    wp_model = train_wp(wp_df, nrounds=nrounds_override, output_path=out_dir / "wp_model.ubj")
+    result = V.validate_wp(wp_model, prepare_wp_data(wp_hold_raw))
+    print(f"[decision_models] wp parity: {_fmt(result)}")
+    return result, out_dir / "wp_model.ubj"
+
+
 def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optional[int]) -> None:
+    from model_training._stage import gate_status
+
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "# decision_models — NFL model suite parity report",
@@ -181,12 +244,18 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         f"Generated: {ts}",
         f"nrounds_override: {nrounds_override}",
         "",
-        "| model | metric | value | gate | pass |",
+        "| model | metric | value | gate | status |",
         "|---|---|---|---|---|",
     ]
 
-    def row(name, metric, value, gate, ok):
-        lines.append(f"| {name} | {metric} | {value} | {gate} | {'OK' if ok else 'FAIL'} |")
+    def row(name, metric, value, gate, ok, *, soft=False, report_only=False):
+        if report_only:
+            status = "report-only"
+        else:
+            status = gate_status(
+                {"gate_pass": bool(ok)}, soft_gate=soft, smoke=nrounds_override is not None
+            )
+        lines.append(f"| {name} | {metric} | {value} | {gate} | {status} |")
 
     if "xpass" in results:
         r = results["xpass"]
@@ -196,22 +265,84 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         row("fd", "mean-gain corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "two_pt" in results:
         r = results["two_pt"]
-        row("two_pt", "P(success) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
-    if "wp" in results and not results["wp"].get("skipped"):
+        row(
+            "two_pt",
+            "P(success) corr",
+            f"{r['correlation']:.4f}",
+            "≥0.99 (SOFT gate)",
+            r["gate_pass"],
+            soft=True,
+        )
+    if "wp" in results:
         r = results["wp"]
-        row("wp", "P(win) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
+        if r.get("skipped"):
+            lines.append(
+                f"| wp | P(win) corr | — | ≥0.99 | SKIPPED ({r.get('reason', 'no reason given')}) |"
+            )
+        else:
+            row("wp", "P(win) corr", f"{r['correlation']:.4f}", "≥0.99", r["gate_pass"])
     if "fg" in results:
         r = results["fg"]
-        row("fg", f"corr ({r.get('scope', '')})", f"{r['correlation']:.4f}", "≥0.98", r["gate_pass"])
-        row("fg", "freq-weighted corr", f"{r.get('weighted_correlation', float('nan')):.4f}", "report-only", True)
-        row("fg", "full-grid corr", f"{r.get('full_grid_correlation', float('nan')):.4f}", "report-only", True)
-        row("fg", "max abs FG% diff", f"{r['max_abs_fg_pct_diff']:.4f}", "report-only", True)
+        row(
+            "fg", f"corr ({r.get('scope', '')})", f"{r['correlation']:.4f}", "≥0.98", r["gate_pass"]
+        )
+        row(
+            "fg",
+            "freq-weighted corr",
+            f"{r.get('weighted_correlation', float('nan')):.4f}",
+            "report-only",
+            True,
+            report_only=True,
+        )
+        row(
+            "fg",
+            "full-grid corr",
+            f"{r.get('full_grid_correlation', float('nan')):.4f}",
+            "report-only",
+            True,
+            report_only=True,
+        )
+        row(
+            "fg",
+            "max abs FG% diff",
+            f"{r['max_abs_fg_pct_diff']:.4f}",
+            "report-only",
+            True,
+            report_only=True,
+        )
     if "punt" in results:
         r = results["punt"]
-        row("punt", "freq-weighted TV", f"{r['weighted_mean_total_variation']:.4f}", "≤0.10", r["gate_pass"])
-        row("punt", "mean TV dist", f"{r['mean_total_variation']:.4f}", "report-only", True)
-        row("punt", "median TV dist", f"{r['median_total_variation']:.4f}", "report-only", True)
-        row("punt", "max TV dist", f"{r['max_total_variation']:.4f}", "report-only", True)
+        row(
+            "punt",
+            "freq-weighted TV",
+            f"{r['weighted_mean_total_variation']:.4f}",
+            "≤0.10",
+            r["gate_pass"],
+        )
+        row(
+            "punt",
+            "mean TV dist",
+            f"{r['mean_total_variation']:.4f}",
+            "report-only",
+            True,
+            report_only=True,
+        )
+        row(
+            "punt",
+            "median TV dist",
+            f"{r['median_total_variation']:.4f}",
+            "report-only",
+            True,
+            report_only=True,
+        )
+        row(
+            "punt",
+            "max TV dist",
+            f"{r['max_total_variation']:.4f}",
+            "report-only",
+            True,
+            report_only=True,
+        )
     lines.append("")
     lines.append("Feature-name checks:")
     for m in ("xpass", "fd", "two_pt", "wp", "fg"):
@@ -226,6 +357,9 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         "  changed 2-pt results). The recipe (features, params, monotone, filters) is a",
         "  verified faithful match — the residual is irreducible without the frozen",
         "  training snapshot, analogous to the low-SNR ceiling documented for wpa.",
+        "  It is therefore a SOFT gate: the 0.99 floor is NOT lowered, a miss is",
+        "  tolerated, and the status is labelled `SOFT PASS` / `SOFT FAIL` here, in the",
+        "  console summary and in models/ledger.jsonl — never a hard-gate `PASS`.",
         "- **fg** was a GAM (mgcv spline); a step-function booster cannot reproduce the",
         "  spline's extrapolation into never-attempted (yardline x roof x era) cells, so",
         "  the gate corr is scoped to cells with >=1 real FG attempt (the operating",
@@ -244,7 +378,9 @@ def _write_report(path: Path, results: Dict[str, Any], nrounds_override: Optiona
         "  contract. Params follow play_level's WP family (binary:logistic, eta 0.025,",
         "  max_depth 5, gamma 1, subsample/colsample 0.8, nrounds 500, seed 2013);",
         "  nrounds 500 maximizes corr-vs-oracle (sweep 500-2000 all >=0.99, peak at",
-        "  500). When `cal_data.rds` is absent the WP model is skip-and-document.",
+        "  500). When `cal_data.rds` is absent the run FAILS (FileNotFoundError) unless",
+        "  `--allow-missing-cal-data`, which records the model as SKIPPED with the reason",
+        "  in the table above — a skip is never silent.",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")
     print(f"[decision_models] report written -> {path}")

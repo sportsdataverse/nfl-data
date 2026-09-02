@@ -12,8 +12,12 @@ jupyter: python3
 ```{python}
 #| output: false
 import json
+import numpy as np
 import polars as pl
 from pathlib import Path
+from plotnine import (
+    ggplot, aes, geom_histogram, geom_hline, facet_wrap, labs, theme_minimal,
+)
 from great_tables import GT
 from IPython.display import HTML, display
 
@@ -25,6 +29,19 @@ metrics = json.loads((FIG / "metrics.json").read_text())
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
+
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
+
 ```
 
 The headline validation for the NFL model suite is **parity with nflfastR**: the
@@ -90,6 +107,7 @@ fixed calibration frame, so it still reproduces its oracle.
 | [Field Goal](fg.md) | attempted-cells corr | **0.971** (freq-wt 0.986) | informational — era-aware, 1999–2025 |
 | [Two-Point](two_pt.md) | P(success) corr | **0.806** | informational — 2010–2025, vintage-drift |
 | [Punt distribution](punt.md) | freq-weighted TV dist | **0.105** | informational — full-history |
+| [Punt distribution](punt.md) | freq-weighted KS **vs reality** | **0.147** (≤0.22) | gate — realized landings, last 3 seasons |
 
 ## Two honest ceilings (not bugs)
 
@@ -103,6 +121,348 @@ first-differencing.
 snapshot (726 rows) that current nflverse PBP has since revised. The recipe is a
 verified faithful match; the residual is irreducible without the frozen training
 data — the same kind of ceiling as `wpa`.
+
+## Parity on the rare branches
+
+The headline table above is the aggregate. The branches that actually break
+models are rare by construction, so they contribute almost nothing to a
+whole-season correlation and can be badly wrong while it stays at 0.99. This
+section scores the same 2025 columns **within** those branches, against the
+nflverse published values, and reports the sample size beside every number
+because most of these are small enough that the sample size is the finding.
+
+```{python}
+#| output: false
+import requests
+from sportsdataverse.nfl import load_nfl_pbp, update_config
+
+CACHE = ROOT / "docs" / "models" / ".cache"
+CACHE.mkdir(exist_ok=True)
+update_config(cache_mode="filesystem", cache_dir=str(CACHE / "sdv"))
+
+pbp_path = CACHE / "model_pbp_2025.parquet"
+if not pbp_path.exists():
+    pbp_path.write_bytes(_fetch(
+        "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
+        timeout=600))
+ours = pl.read_parquet(pbp_path)
+
+# nflverse's own published values for the same plays. play_id is Float64 in the
+# nflverse frame and Int64 in model_pbp -- cast BEFORE the join or it silently
+# raises rather than silently mismatching (polars refuses the mixed-dtype key).
+nv = load_nfl_pbp([2025]).with_columns(pl.col("play_id").cast(pl.Int64))
+assert nv.schema["play_id"] == ours.schema["play_id"]
+assert nv.schema["game_id"] == ours.schema["game_id"]
+
+joined = ours.select(
+    "game_id", "play_id", "ep", "epa", "wp", "vegas_wp", "wpa", "desc", "qtr",
+    "kickoff_attempt", "extra_point_attempt", "two_point_attempt", "safety",
+    "half_seconds_remaining", "game_seconds_remaining", "score_differential",
+    "down", "field_goal_result", "fourth_down_recommendation", "penalty",
+).join(
+    nv.select("game_id", "play_id",
+              pl.col("ep").alias("ep_nv"), pl.col("epa").alias("epa_nv"),
+              pl.col("wp").alias("wp_nv"), pl.col("vegas_wp").alias("vegas_wp_nv"),
+              pl.col("wpa").alias("wpa_nv")),
+    on=["game_id", "play_id"], how="inner",
+)
+
+def _paired(df, col):
+    return df.filter(pl.col(col).is_not_null() & pl.col(f"{col}_nv").is_not_null()
+                     & pl.col(col).is_finite() & pl.col(f"{col}_nv").is_finite())
+
+def branch_r(df, col):
+    d = _paired(df, col)
+    if d.height < 3:
+        return float("nan")
+    a, b = d[col].to_numpy(), d[f"{col}_nv"].to_numpy()
+    # A branch where either side is constant has zero variance, so r is 0/0.
+    # Report it as undefined rather than as a number.
+    if a.std() == 0 or b.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(a, b)[0, 1])
+
+def branch_bias(df, col):
+    """Mean signed error, ours - nflverse. Correlation cannot see a level shift."""
+    d = _paired(df, col)
+    return float((d[col] - d[f"{col}_nv"]).mean()) if d.height else float("nan")
+
+def branch_mae(df, col):
+    d = _paired(df, col)
+    return float((d[col] - d[f"{col}_nv"]).abs().mean()) if d.height else float("nan")
+
+lower = pl.col("desc").fill_null("").str.to_lowercase()
+branches = [
+    ("all plays", joined),
+    ("onside kicks", joined.filter(lower.str.contains("onside"))),
+    ("all kickoffs", joined.filter(pl.col("kickoff_attempt") == 1)),
+    ("last 2 min of a half", joined.filter(pl.col("half_seconds_remaining") <= 120)),
+    ("last 30 s of a half", joined.filter(pl.col("half_seconds_remaining") <= 30)),
+    ("last 2 min, one score", joined.filter((pl.col("game_seconds_remaining") <= 120)
+                                            & (pl.col("score_differential").abs() <= 8))),
+    ("overtime", joined.filter(pl.col("qtr") >= 5)),
+    ("PATs", joined.filter(pl.col("extra_point_attempt") == 1)),
+    ("two-point tries", joined.filter(pl.col("two_point_attempt") == 1)),
+    ("safeties", joined.filter(pl.col("safety") == 1)),
+    ("4th downs w/ a recommendation", joined.filter(pl.col("fourth_down_recommendation").is_not_null())),
+    ("field-goal attempts", joined.filter(pl.col("field_goal_result").is_not_null())),
+    ("penalties", joined.filter(pl.col("penalty") == 1)),
+]
+rare = pl.DataFrame([
+    {"branch": name, "n": df.height, "ep": branch_r(df, "ep"), "epa": branch_r(df, "epa"),
+     "wp": branch_r(df, "wp"), "vegas_wp": branch_r(df, "vegas_wp"), "wpa": branch_r(df, "wpa"),
+     "wp_bias": branch_bias(df, "wp"), "wp_mae": branch_mae(df, "wp"),
+     "ep_bias": branch_bias(df, "ep"), "ep_mae": branch_mae(df, "ep")}
+    for name, df in branches
+])
+_b = {r["branch"]: r for r in rare.to_dicts()}
+```
+
+```{python}
+gt_show(
+    GT(rare.to_pandas())
+    .tab_header(title="Parity vs nflverse within rare branches — 2025",
+                subtitle="Pearson r on the plays in each branch; read n first, then the r")
+    .fmt_number(columns=["ep", "epa", "wp", "vegas_wp", "wpa"], decimals=3)
+    .fmt_number(columns=["wp_bias", "wp_mae", "ep_bias", "ep_mae"], decimals=4)
+    .fmt_number(columns="n", sep_mark=",", decimals=0)
+    .cols_label(branch="Branch", n="Plays", wp_bias="wp bias", wp_mae="wp MAE",
+                ep_bias="ep bias", ep_mae="ep MAE")
+)
+```
+
+How to read this, because several of these numbers look alarming and are not:
+
+- **Onside kicks (n = 53) and overtime (n = 309) show low `wp` correlation
+  (0.22, 0.25) for a reason that is not disagreement.** Both branches have
+  almost no *variance* in the quantity being correlated — an onside kick happens
+  when the game is nearly decided, so every play in the branch sits at a similar
+  extreme WP. Pearson r divides by that variance, so a branch where both models
+  agree "this is ~0.97 for the leading team" scores near zero. The correlation is
+  the wrong statistic on a degenerate slice, and quoting the correlation as a
+  parity failure would be a mistake. But the right check on such a slice is
+  **agreement in level**, which correlation cannot see — and measuring it does
+  not exonerate these branches:
+
+  | branch | `wp` bias | `wp` MAE |
+  |---|---|---|
+  | all plays | `{python} f"{_b['all plays']['wp_bias']:+.4f}"` | `{python} f"{_b['all plays']['wp_mae']:.4f}"` |
+  | onside kicks | `{python} f"{_b['onside kicks']['wp_bias']:+.4f}"` | `{python} f"{_b['onside kicks']['wp_mae']:.4f}"` |
+  | overtime | `{python} f"{_b['overtime']['wp_bias']:+.4f}"` | `{python} f"{_b['overtime']['wp_mae']:.4f}"` |
+
+  Onside kicks carry a systematic ~8-point WP bias, and **overtime is
+  materially divergent**: its MAE is roughly
+  `{python} f"{_b['overtime']['wp_mae'] / _b['all plays']['wp_mae']:.0f}"`× the
+  all-plays figure. Correlation hid that, and so would the aggregate — a
+  branch-sized error is invisible in a 46,000-play average. This is a real open
+  issue, recorded below, not an artefact of the statistic.
+- **PATs and two-point tries are the same artefact, deliberately.** Both models
+  feature-substitute these rows (down→1, ydstogo→10, fixed yardline), so
+  predicted `ep` is near-constant across the branch by construction — on
+  two-point tries it is constant enough that `r` is **undefined** (a zero-variance
+  side makes it 0/0), which is why that cell is blank rather than small. The
+  level agreement is what remains meaningful, and it is tight: `ep` MAE of
+  `{python} f"{_b['two-point tries']['ep_mae']:.4f}"` on two-point tries and
+  `{python} f"{_b['PATs']['ep_mae']:.4f}"` on PATs. `epa` on two-point tries
+  still correlates at `{python} f"{_b['two-point tries']['epa']:.3f}"` because
+  the *outcome* varies even when the pre-play state does not.
+- **The branches with real spread agree.** Penalties (n = 3,559) sit at 0.997 /
+  0.994, 4th downs carrying a recommendation (n = 4,290) at 0.993 / 0.992, and
+  the last two minutes of a half (n = 6,262) at 0.981 / 0.964. These are the
+  slices where a genuine construction bug would show, and they do not.
+- **Safeties (n = 12) are reported and should not be gated on.** Twelve plays is
+  an anecdote; it is in the table so the count is visible rather than implied.
+
+`wpa` sits near 0.6–0.8 in every branch for the reason the aggregate does — it is
+a first difference, so it inherits amplified noise. See the ceiling note above.
+
+## Distributional heads: is the *shape* right, not just the mean?
+
+`xyac_model` and `fd_model` are 76-class multinomials, but every check in this
+suite scores a scalar summary of them (`xyac_mean_yardage`, mean predicted
+gain). A model can nail the mean of a distribution while getting its shape
+badly wrong, and nothing above would notice. This section scores the xYAC head's
+full predictive distribution.
+
+Two proper tools, neither needing a new dependency:
+
+- **PIT (probability integral transform)** — where the realized YAC falls in the
+  predicted CDF. If the distribution is honest, PIT values are uniform on
+  [0, 1]; a hump in the middle means over-dispersion, a U-shape means
+  over-confidence. YAC is discrete, so this uses the *randomized* PIT
+  (`F(y−1) + U·p(y)`), which is uniform for a correctly specified discrete
+  forecast.
+- **CRPS** — the proper scoring rule for a whole predictive distribution,
+  reported against a climatology baseline (the empirical marginal YAC
+  distribution) so the number means something.
+
+```{python}
+#| output: false
+import xgboost as xgb
+from sportsdataverse.nfl.ep_wp import XYAC_FEATURES, _make_cp_mutations
+
+# models/*.ubj is gitignored, so prefer a local artifact but fall back to the
+# release rather than making this document unrenderable on a fresh clone.
+xyac_path = ROOT / "models" / "xyac_model.ubj"
+if not xyac_path.is_file():
+    xyac_path = CACHE / "xyac_model.ubj"
+    if not xyac_path.exists():
+        xyac_path.write_bytes(_fetch(
+            "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_artifacts/xyac_model.ubj",
+            timeout=900))
+xyac = xgb.Booster()
+xyac.load_model(str(xyac_path))
+NUM_CLASSES, MIN_YAC = 76, -5
+rng = np.random.default_rng(20260901)
+
+def score_season(season):
+    nvs = load_nfl_pbp([season])
+    mask = ((pl.col("complete_pass") == 1) & pl.col("air_yards").is_not_null()
+            & (pl.col("air_yards") >= -15) & (pl.col("air_yards") < 70)
+            & pl.col("receiver_player_name").is_not_null() & pl.col("pass_location").is_not_null()
+            & ((pl.col("yardline_100") - pl.col("air_yards")) != 0)
+            & pl.col("yards_after_catch").is_not_null())
+    caught = nvs.filter(mask)
+    feats = _make_cp_mutations(caught).with_columns(
+        (pl.col("yardline_100") - pl.col("air_yards")).alias("distance_to_goal"))
+    X = feats.select(XYAC_FEATURES).to_numpy(allow_copy=True).astype(np.float32)
+    probs = xyac.predict(xgb.DMatrix(X, feature_names=XYAC_FEATURES))
+    if probs.ndim == 1:
+        probs = probs.reshape(-1, NUM_CLASSES)
+    y = caught["yards_after_catch"].to_numpy().astype(float)
+    k = np.clip(np.round(y), MIN_YAC, 70).astype(int) - MIN_YAC
+    cdf = np.cumsum(probs, axis=1)
+    idx = np.arange(len(k))
+    below = np.where(k > 0, cdf[idx, np.maximum(k - 1, 0)], 0.0)
+    pit = below + rng.random(len(k)) * probs[idx, k]
+    step = (np.arange(NUM_CLASSES)[None, :] >= k[:, None]).astype(float)
+    crps = float(np.mean(np.sum((cdf - step) ** 2, axis=1)))
+    marginal = np.bincount(k, minlength=NUM_CLASSES).astype(float)
+    marginal /= marginal.sum()
+    clim_cdf = np.cumsum(marginal)[None, :].repeat(len(k), axis=0)
+    crps_clim = float(np.mean(np.sum((clim_cdf - step) ** 2, axis=1)))
+    deciles = np.histogram(pit, bins=10, range=(0, 1))[0] / len(pit)
+
+    # Per-air-yards-depth slices. The deep bucket is the one the prose below
+    # singles out, so it is computed here rather than asserted.
+    air = caught["air_yards"].to_numpy()
+    per_slice = []
+    for lo, hi, label in [(-15, 0, "screen (< 0)"), (0, 5, "0-4"), (5, 10, "5-9"),
+                          (10, 20, "10-19"), (20, 70, "deep (20+)")]:
+        m = (air >= lo) & (air < hi)
+        if m.sum() < 100:
+            continue
+        d = np.histogram(pit[m], bins=10, range=(0, 1))[0] / m.sum()
+        per_slice.append({
+            "season": season, "air_yards": label, "n": int(m.sum()),
+            "crps": float(np.mean(np.sum((cdf[m] - step[m]) ** 2, axis=1))),
+            "pit_max_decile_dev": float(np.max(np.abs(d - 0.1))),
+        })
+
+    return {
+        "season": season, "completions": len(k),
+        "crps": crps, "crps_climatology": crps_clim, "crps_skill": 1 - crps / crps_clim,
+        "pit_max_decile_dev": float(np.max(np.abs(deciles - 0.1))),
+        "coverage_50": float(np.mean((pit > 0.25) & (pit < 0.75))),
+        "coverage_90": float(np.mean((pit > 0.05) & (pit < 0.95))),
+        "mean_predicted": float((probs @ (np.arange(NUM_CLASSES) + MIN_YAC)).mean()),
+        "mean_realized": float(y.mean()),
+    }, pit, per_slice
+
+dist_rows, pits, slice_rows = [], {}, []
+for season in (2023, 2024, 2025):
+    row, pit, per_slice = score_season(season)
+    dist_rows.append(row)
+    pits[season] = pit
+    slice_rows.extend(per_slice)
+dist = pl.DataFrame(dist_rows)
+depth = pl.DataFrame(slice_rows)
+deep = depth.filter(pl.col("air_yards") == "deep (20+)")
+shallow = depth.filter(pl.col("air_yards") != "deep (20+)")
+```
+
+```{python}
+gt_show(
+    GT(dist.select("season", "completions", "crps", "crps_climatology", "crps_skill",
+                   "pit_max_decile_dev", "coverage_50", "coverage_90").to_pandas())
+    .tab_header(title="xYAC distributional calibration — the 76-class head, not its mean",
+                subtitle="PIT uniformity and CRPS against a climatology baseline")
+    .fmt_number(columns=["crps", "crps_climatology", "crps_skill", "pit_max_decile_dev",
+                         "coverage_50", "coverage_90"], decimals=4)
+    .fmt_number(columns="completions", sep_mark=",", decimals=0)
+    .cols_label(season="Season", completions="Completions", crps="CRPS",
+                crps_climatology="CRPS (climatology)", crps_skill="Skill",
+                pit_max_decile_dev="PIT max decile dev", coverage_50="50% cov",
+                coverage_90="90% cov")
+)
+```
+
+```{python}
+#| fig-cap: "PIT histograms by season. A correctly specified distributional forecast is uniform; the dashed line is the uniform target."
+pit_df = pl.DataFrame({
+    "season": [str(s) for s in pits for _ in range(len(pits[s]))],
+    "pit": np.concatenate([pits[s] for s in pits]),
+})
+(
+    ggplot(pit_df.to_pandas(), aes("pit"))
+    + geom_histogram(aes(y="..density.."), bins=20, fill="#2a6f97", alpha=0.85)
+    + geom_hline(yintercept=1.0, linetype="dashed", color="#b3252c")
+    + facet_wrap("~season")
+    + labs(x="PIT (randomized)", y="density",
+           title="xYAC PIT histograms — flat is correct")
+    + theme_minimal()
+)
+```
+
+**The 76-class head is well calibrated as a distribution, not just in the mean.**
+No decile of the PIT deviates from its 10% target by more than 0.7 points in any
+season; central coverage lands at 50.2% and 90.3% against nominal 50% and 90%;
+and CRPS beats the climatology baseline by 11–13%. That last number is the
+honest ceiling statement — YAC is mostly irreducible, so an 11–13% improvement
+over "predict the league-wide YAC distribution every time" is what the geometry
+in the features is worth, and it is why per-completion correlation on the mean
+looks unimpressive while the model is nonetheless doing real work.
+
+Calibration is not uniform across throw depth, so the slice the eye should go to
+is computed rather than asserted:
+
+```{python}
+gt_show(
+    GT(depth.sort(["season", "air_yards"]).to_pandas())
+    .tab_header(title="xYAC distributional calibration by throw depth",
+                subtitle="deep throws are the thinnest-sampled and the least well calibrated")
+    .fmt_number(columns=["crps", "pit_max_decile_dev"], decimals=4)
+    .fmt_number(columns="n", sep_mark=",", decimals=0)
+    .cols_label(season="Season", air_yards="Air yards", n="Completions",
+                crps="CRPS", pit_max_decile_dev="PIT max decile dev")
+)
+```
+
+Deep throws (air yards ≥ 20) are the worst slice on both measures: PIT max
+decile deviation of
+`{python} f"{deep['pit_max_decile_dev'].min():.4f}"`–`{python} f"{deep['pit_max_decile_dev'].max():.4f}"`
+against at most `{python} f"{shallow['pit_max_decile_dev'].max():.4f}"` everywhere
+else, on only `{python} f"{deep['n'].min():,}"`–`{python} f"{deep['n'].max():,}"`
+completions a season, with CRPS rising to
+`{python} f"{deep['crps'].min():.2f}"`–`{python} f"{deep['crps'].max():.2f}"` as
+the YAC distribution there is both wider and thinner-sampled. Still small in
+absolute terms — but it is the slice to watch, not the headline.
+
+**A monotone continuous head was not fitted** for the comparison the xYAC card
+raises. The reason is that it is not cheap in the sense that matters: a
+continuous head needs a distributional loss to be comparable at all (scoring a
+point prediction against CRPS is not the same question), and a fair comparison
+means a retrain plus a gate, not a render-time fit. The result above also lowers
+the prior on it helping — the classification head's shape is already close to
+calibrated, so a continuous reparameterisation would be buying smoothness in the
+tail, not accuracy.
+
+**On explainability for these heads**: `pred_contribs=True` returns
+`(n, 76, p+1)` for a multiclass booster — a per-class attribution *tensor*, not
+the 2-D matrix the binary models return, so `contribs[:, :-1]` and
+`contribs.sum(axis=1)` are both wrong for xYAC and `fd_model`. Aggregate
+deliberately (mean |SHAP| over classes) or pick a class. This is a recorded
+gotcha and it is why neither card ships a per-play SHAP pass.
 
 ## Why parity *and* LOSO
 
@@ -126,5 +486,34 @@ parity path.
 
 - **WPA parity ceiling (~0.89)** is an SNR limit of first-differencing WP —
   documented as exact-derivation-verified; do not chase it as a bug.
-- **Avenue:** extend parity to the decision surfaces' rare branches (onside,
-  end-of-half edge cases) where sample sizes finally allow.
+- **Resolved (2026-09-01, PR #29):** parity now covers the rare branches
+  (onside, kickoffs, end-of-half, overtime, PATs, two-point tries, safeties,
+  field goals) with sample sizes reported beside every number. The honest
+  finding is that **most of those branches cannot be judged by correlation at
+  all** — onside kicks (n=53) and overtime (n=309) have almost no WP variance
+  within the branch, so Pearson r collapses even where the two models agree, and
+  PATs/two-point tries are feature-substituted to a near-constant `ep` by
+  construction. The branches with real spread (penalties, 4th downs, end-of-half)
+  agree at 0.96–0.997.
+- **Resolved (2026-09-01, PR #29):** the distributional heads are now scored as
+  distributions, not just means — xYAC PIT uniformity and CRPS vs climatology.
+- **Open issue (found 2026-09-02, PR #29): overtime win probability diverges
+  materially from nflverse.** Measured on 2025: `wp` MAE
+  `{python} f"{_b['overtime']['wp_mae']:.3f}"` and bias
+  `{python} f"{_b['overtime']['wp_bias']:+.3f}"` on
+  `{python} f"{_b['overtime']['n']:,}"` overtime plays, against
+  `{python} f"{_b['all plays']['wp_mae']:.3f}"` / `{python} f"{_b['all plays']['wp_bias']:+.3f}"`
+  across all plays. Onside kicks show a smaller but systematic
+  `{python} f"{_b['onside kicks']['wp_bias']:+.3f}"` bias. OT is where the
+  sudden-death/possession rules make the WP state machine genuinely different,
+  so this is the first place to look; it is NOT explained by the low-variance
+  argument above, which is about correlation only. No gate covers per-branch
+  level error today — that is the gap this measurement exposes.
+- **Avenue:** the same PIT/CRPS treatment for `fd_model`'s 76-class head. It is
+  the same machinery, but the label is a *decision-conditioned* gain (teams
+  choose which 4th downs to attempt), so the realized sample is selected and a
+  naive PIT would read as miscalibration that is really selection.
+- **Known issue:** these branch correlations are single-season (2025). Pooling
+  seasons would tighten onside/safety counts, but the branch definitions drift
+  with rule changes (the 2024 kickoff overhaul in particular), so pooling would
+  trade sampling noise for era heterogeneity rather than removing uncertainty.

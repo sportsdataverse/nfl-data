@@ -3,6 +3,7 @@ title: "Field Goal (`fg_model`)"
 format:
   gfm:
     fig-dpi: 120
+    wrap: none
 execute:
   echo: false
   warning: false
@@ -21,6 +22,7 @@ from plotnine import (
 )
 from great_tables import GT
 from IPython.display import HTML, display
+from sportsdataverse.nfl import load_nfl_schedule
 from sportsdataverse.nfl.ep_wp import _load_model
 
 ROOT = Path.cwd()
@@ -30,20 +32,33 @@ CACHE = ROOT / "docs" / "models" / ".cache"
 CACHE.mkdir(exist_ok=True)
 pbp_path = CACHE / "model_pbp_2025.parquet"
 if not pbp_path.exists():
-    pbp_path.write_bytes(requests.get(
+    pbp_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
-        timeout=600).content)
+        timeout=600))
 pbp = pl.read_parquet(pbp_path)
 bst = _load_model("fg_model.ubj")
 ros_path = CACHE / "roster_2025.parquet"
 if not ros_path.exists():
-    ros_path.write_bytes(requests.get(
+    ros_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
-        timeout=300).content)
+        timeout=300))
 ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
+
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
+
 ```
 
 The field-goal model estimates the probability a placekick is **made**, given
@@ -168,13 +183,282 @@ gt_show(
 )
 ```
 
+## Where the 0.97 parity actually comes from
+
+The FG model's parity against the R oracle (attempted-cells corr ~0.97) is the
+lowest of the boosters, so this section localizes it rather than leaving it as a
+headline number. The oracle is the nfl4th `mgcv` GAM, scored over its own grid
+and committed at `models/oracles/fg_model_grid_nfl4th.csv` (provenance in that
+directory's README); the booster is scored over the same grid here.
+
+**Scope: 2014–2025.** The nfl4th GAM is fit on 2014+ and its grid carries a
+two-level era flag that this repo maps onto `era3`/`era4`, so a 1999–2013
+attempt matches no grid cell. Comparing those seasons against this oracle would
+be comparing them against a model that never saw them; the booster-vs-reality
+section further down is the one that runs on all 27 published seasons.
+
+```{python}
+#| output: false
+ORACLES = ROOT / "models" / "oracles"
+grid = pl.read_csv(ORACLES / "fg_model_grid_nfl4th.csv").with_columns(
+    pl.col("fg_model_roof").cast(pl.Utf8).str.zfill(2).str.slice(0, 1).cast(pl.Int32).alias("fg_roof"),
+    pl.col("fg_model_roof").cast(pl.Utf8).str.zfill(2).str.slice(1, 1).cast(pl.Int32).alias("fg_era"),
+).with_columns(
+    pl.lit(0).cast(pl.Int32).alias("era0"), pl.lit(0).cast(pl.Int32).alias("era1"),
+    pl.lit(0).cast(pl.Int32).alias("era2"),
+    (1 - pl.col("fg_era")).cast(pl.Int32).alias("era3"),
+    pl.col("fg_era").cast(pl.Int32).alias("era4"),
+)
+grid = grid.with_columns(
+    pl.Series("ours", bst.predict(xgb.DMatrix(grid.select(feats).to_numpy().astype(float),
+                                              feature_names=feats)))
+)
+
+# The cells real kicks actually occupy. Scoped to 2014-2025 deliberately: the
+# nfl4th GAM is fit on 2014+ (`_punt_and_fg_models.R`, `seasons <- 2014:current`)
+# and its grid carries only a two-level era, which this repo maps onto era3/era4.
+# A 1999-2013 attempt is era3=0, era4=0, matches no grid cell, and would simply
+# be dropped by the join below -- so the audit says 2014-2025 and means it.
+GAM_ORACLE_SEASONS = range(2014, 2026)
+att_frames = []
+for season in GAM_ORACLE_SEASONS:
+    p = CACHE / f"model_pbp_{season}.parquet"
+    if not p.exists():
+        p.write_bytes(_fetch(
+            f"https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_{season}.parquet",
+            timeout=600))
+    att_frames.append(
+        pl.read_parquet(p)
+        .filter(pl.col("field_goal_result").is_in(["made", "missed", "blocked"]))
+        .select("season", "yardline_100", "roof")
+    )
+att = pl.concat(att_frames, how="vertical_relaxed").with_columns(
+    (pl.col("roof") == "outdoors").cast(pl.Int32).alias("fg_roof"),
+    (pl.col("season") >= 2018).cast(pl.Int32).alias("era4"),
+    ((pl.col("season") >= 2014) & (pl.col("season") < 2018)).cast(pl.Int32).alias("era3"),
+)
+cells = att.group_by(["yardline_100", "fg_roof", "era3", "era4"]).agg(pl.len().alias("attempt_n"))
+obs = (
+    grid.with_columns(pl.col("yardline_100").cast(pl.Int64))
+    .join(cells.with_columns(pl.col("yardline_100").cast(pl.Int64)),
+          on=["yardline_100", "fg_roof", "era3", "era4"], how="inner")
+    .with_columns((pl.col("yardline_100") + 17).alias("dist"))
+)
+
+def corr(df, a="ours", b="prob"):
+    return float(np.corrcoef(df[a].to_numpy(), df[b].to_numpy())[0, 1])
+
+buckets = (
+    obs.with_columns(
+        pl.when(pl.col("dist") < 30).then(pl.lit("under 30"))
+        .when(pl.col("dist") < 40).then(pl.lit("30-39"))
+        .when(pl.col("dist") < 50).then(pl.lit("40-49"))
+        .when(pl.col("dist") < 60).then(pl.lit("50-59"))
+        .otherwise(pl.lit("60+")).alias("bucket"))
+)
+order = ["under 30", "30-39", "40-49", "50-59", "60+"]
+rows = []
+for b in order:
+    g = buckets.filter(pl.col("bucket") == b)
+    rows.append({"distance": b, "grid_cells": g.height, "attempts": int(g["attempt_n"].sum()),
+                 "corr_vs_GAM": corr(g),
+                 "mean_abs_diff": float((g["ours"] - g["prob"]).abs().mean()),
+                 "max_abs_diff": float((g["ours"] - g["prob"]).abs().max())})
+by_distance = pl.DataFrame(rows)
+```
+
+```{python}
+gt_show(
+    GT(by_distance.to_pandas())
+    .tab_header(title="FG parity vs the nfl4th GAM, by kick distance",
+                subtitle="attempted cells only; the disagreement is not spread across the range")
+    .fmt_number(columns=["corr_vs_GAM", "mean_abs_diff", "max_abs_diff"], decimals=4)
+    .cols_label(distance="Distance", grid_cells="Cells", attempts="Attempts",
+                corr_vs_GAM="corr vs GAM", mean_abs_diff="mean |diff|", max_abs_diff="max |diff|")
+)
+```
+
+**The residual is the long-distance tail, and nothing else.** Inside 50 yards —
+where 10,819 of the 12,788 attempted-cell attempts live — the two models agree
+to a mean absolute make-probability difference of 0.005–0.012. From 50 yards the
+agreement degrades (0.047), and past 60 it collapses (0.173 mean, 0.347 max) on
+**86 attempts across the 12 audited seasons**. That is the whole story of the headline
+number: the cells that carry the disagreement are the cells almost nobody kicks
+from, which is also why the frequency-weighted correlation (0.988) is so much
+higher than the unweighted one.
+
+The mechanism is the one the model card already names, now measured: the GAM is
+a smooth spline that keeps extrapolating a graceful decline past the attempted
+domain, while the booster is a monotone step function with a
+`min_child_weight` floor, so it flattens where it has no data. Neither is
+"right" out there — the GAM's long tail is an extrapolation too, not evidence.
+
+Two candidate explanations that the data rules **out**:
+
+```{python}
+era = []
+for label, expr in [("era3 (2014-17, grid fg_era=0)", pl.col("era3") == 1),
+                    ("era4 (2018+, grid fg_era=1)", pl.col("era4") == 1)]:
+    g = obs.filter(expr)
+    era.append({"slice": label, "cells": g.height, "attempts": int(g["attempt_n"].sum()),
+                "corr_vs_GAM": corr(g), "mean_abs_diff": float((g["ours"] - g["prob"]).abs().mean())})
+for label, expr in [("indoor / retractable", pl.col("fg_roof") == 0),
+                    ("outdoors", pl.col("fg_roof") == 1)]:
+    g = obs.filter(expr)
+    era.append({"slice": label, "cells": g.height, "attempts": int(g["attempt_n"].sum()),
+                "corr_vs_GAM": corr(g), "mean_abs_diff": float((g["ours"] - g["prob"]).abs().mean())})
+gt_show(
+    GT(pl.DataFrame(era).to_pandas())
+    .tab_header(title="The same parity, sliced by era mapping and by roof",
+                subtitle="neither slice separates -- the era-cell mapping is not the cause")
+    .fmt_number(columns=["corr_vs_GAM", "mean_abs_diff"], decimals=4)
+    .cols_label(slice="Slice", cells="Cells", attempts="Attempts",
+                corr_vs_GAM="corr vs GAM", mean_abs_diff="mean |diff|")
+)
+```
+
+The era-cell mapping (the grid's two-level `fg_era` is projected onto era3/era4)
+is a natural suspect and it is not the cause — both era slices land at the same
+correlation. Roof is a weak effect in the same direction as sample size.
+
+**Against reality, rather than against the GAM, the booster is well calibrated** —
+which is the reading that matters for a model in production:
+
+```{python}
+#| output: false
+fga_all = []
+for season in range(1999, 2026):
+    fga_all.append(
+        pl.read_parquet(CACHE / f"model_pbp_{season}.parquet")
+        .filter(pl.col("field_goal_result").is_in(["made", "missed", "blocked"]))
+        .select("game_id", "season", "yardline_100", "roof", "field_goal_result")
+    )
+hist = pl.concat(fga_all, how="vertical_relaxed").with_columns(
+    (pl.col("roof") == "outdoors").cast(pl.Int64).alias("fg_roof"),
+    (pl.col("field_goal_result") == "made").cast(pl.Float64).alias("made"),
+    (pl.col("season") >= 2018).cast(pl.Int64).alias("era4"),
+    ((pl.col("season") >= 2014) & (pl.col("season") < 2018)).cast(pl.Int64).alias("era3"),
+    ((pl.col("season") >= 2006) & (pl.col("season") < 2014)).cast(pl.Int64).alias("era2"),
+    ((pl.col("season") >= 2002) & (pl.col("season") < 2006)).cast(pl.Int64).alias("era1"),
+    (pl.col("season") < 2002).cast(pl.Int64).alias("era0"),
+)
+hist = hist.with_columns(
+    pl.Series("p", bst.predict(xgb.DMatrix(hist.select(feats).to_numpy().astype(np.float32),
+                                           feature_names=feats)))
+)
+sched_all = load_nfl_schedule(list(range(1999, 2026))).select(
+    "game_id", "surface", pl.col("roof").alias("roof_sched"), "temp", "wind", "stadium_id")
+hist = hist.join(sched_all, on="game_id", how="left")
+by_surface = (
+    # Raw labels carry a trailing-space variant ("grass " alongside "grass") and
+    # an empty string; grouping the raw column splits grass across two rows and
+    # makes the per-surface read ambiguous.
+    hist.with_columns(pl.col("surface").str.strip_chars().str.to_lowercase().alias("surface"))
+    .filter(pl.col("surface").is_not_null() & (pl.col("surface") != ""))
+    .group_by("surface").agg(pl.len().alias("n"), pl.col("made").mean().alias("empirical"),
+                             pl.col("p").mean().alias("model"))
+    .filter(pl.col("n") >= 200)
+    .with_columns((pl.col("model") - pl.col("empirical")).alias("bias"))
+    .sort("n", descending=True)
+)
+```
+
+```{python}
+gt_show(
+    GT(by_surface.to_pandas())
+    .tab_header(title="Model vs realized make rate by playing surface, 1999–2025",
+                subtitle="surface is NOT a model feature; a large bias here would be a real gap")
+    .fmt_number(columns=["empirical", "model", "bias"], decimals=4)
+    .cols_label(surface="Surface", n="Attempts", empirical="Empirical", model="Model", bias="Bias")
+)
+```
+
+Every surface with a usable sample sits within 0.025 of its realized make rate,
+and most within 0.01. Per-season bias behaves the same way (mostly under 0.02).
+**So the honest verdict on the 0.97: it is a disagreement between two functional
+forms in a region neither has data for, not a defect in the shipped model.** It
+should not be "fixed" by chasing the GAM into the extrapolated tail.
+
+## Weather and altitude: measured, not modelled
+
+The card lists weather as an absent feature. Here is what it is worth, as a
+residual analysis on outdoor attempts (the schedule carries `temp` and `wind`):
+
+```{python}
+out = hist.filter((pl.col("roof_sched") == "outdoors")
+                  & pl.col("temp").is_not_null() & pl.col("wind").is_not_null()
+                  ).with_columns((pl.col("made") - pl.col("p")).alias("residual"))
+wind = (
+    out.with_columns(pl.col("wind").cut([5, 10, 15, 20], left_closed=True).alias("bucket"))
+    .group_by("bucket").agg(pl.len().alias("n"), pl.col("residual").mean().alias("mean_residual"),
+                            pl.col("made").mean().alias("empirical"), pl.col("p").mean().alias("model"))
+    .sort("bucket").with_columns(pl.col("bucket").cast(pl.Utf8))
+)
+temp = (
+    out.with_columns(pl.col("temp").cut([32, 50, 70], left_closed=True).alias("bucket"))
+    .group_by("bucket").agg(pl.len().alias("n"), pl.col("residual").mean().alias("mean_residual"),
+                            pl.col("made").mean().alias("empirical"), pl.col("p").mean().alias("model"))
+    .sort("bucket").with_columns(pl.col("bucket").cast(pl.Utf8))
+)
+gt_show(
+    GT(pl.concat([wind.with_columns(pl.lit("wind (mph)").alias("variable")),
+                  temp.with_columns(pl.lit("temp (F)").alias("variable"))])
+       .select("variable", "bucket", "n", "empirical", "model", "mean_residual").to_pandas())
+    .tab_header(title=f"FG residual by wind and temperature — {out.height:,} outdoor attempts",
+                subtitle="residual = made - model; a monotone gradient is unmodelled signal")
+    .fmt_number(columns=["empirical", "model", "mean_residual"], decimals=4)
+    .cols_label(variable="Variable", bucket="Bucket", n="Attempts",
+                empirical="Empirical", model="Model", mean_residual="Mean residual")
+)
+```
+
+Both gradients are monotone and material: kicks in under 5 mph beat the model by
+**+2.5 points of make probability** and kicks in 20+ mph fall short by **−3.1**,
+a 5.6-point spread the model currently attributes to nothing. Temperature runs
+the same way (**−4.2** below freezing to **+1.2** above 70°F), though wind and
+cold co-occur, so these are not independent effects — a joint fit would split
+less signal between them than the two tables suggest separately.
+
+```{python}
+den = hist.filter(pl.col("roof_sched") == "outdoors").with_columns(
+    pl.col("stadium_id").is_in(["DEN00", "DEN97"]).alias("mile_high"),
+    (pl.col("made") - pl.col("p")).alias("residual"))
+gt_show(
+    GT(den.group_by("mile_high").agg(
+        pl.len().alias("n"), pl.col("residual").mean().alias("mean_residual"),
+        (pl.col("yardline_100") + 17).mean().alias("mean_distance")).sort("mile_high").to_pandas())
+    .tab_header(title="Altitude, by the crudest possible proxy: is the game in Denver?",
+                subtitle="Denver kicks beat the model despite being LONGER on average")
+    .fmt_number(columns=["mean_residual", "mean_distance"], decimals=4)
+    .cols_label(mile_high="Denver", n="Attempts", mean_residual="Mean residual",
+                mean_distance="Mean distance (yd)")
+)
+```
+
+Denver attempts beat the model by **+3.1 points** while being **1.2 yards
+longer** on average — the sign and magnitude thin air predicts. This is a proxy,
+not an altitude feature: a real one needs a stadium-elevation table, which does
+not exist in the nflverse schedule. **The source to use is the USGS Elevation
+Point Query Service** (`https://epqs.nationalmap.gov/v1/json?x=<lon>&y=<lat>`;
+free, no key, US-only, which covers every NFL venue except the international
+games) keyed by stadium coordinates, committed as a ~40-row `stadium_id ->
+elevation_m` lookup. That table is the missing input; nothing else blocks the
+feature.
+
+None of this is a retrain — it is a measurement of what a retrain would have to
+gain. Adding `wind`, `temp` and elevation to a model whose only real feature is
+distance is a materially different model, and it inherits a new dependency
+(schedule weather is missing or wrong for some older games), so it belongs in a
+gated retrain rather than in this document.
+
 ## Limitations
 
 Distance is everything plus a coarse roof/era shift — **no kicker identity, wind,
-or weather**. The step-function booster does not extrapolate the smooth GAM tail
-past the attempted domain, so very long / never-attempted cells should be read
-with caution (this is the freq-weighted vs full-grid corr gap). The render-time
-scoring above pins era4 for current-season attempts, which is exact for 2018+.
+or weather**, and the section above quantifies what the last two cost. The
+step-function booster does not extrapolate the smooth GAM tail past the attempted
+domain, so very long / never-attempted cells should be read with caution (this is
+the freq-weighted vs full-grid corr gap). The render-time scoring above pins era4
+for the 2025 attempts it scores, which is exact for 2018+.
 
 ## Provenance
 
@@ -192,7 +476,21 @@ scoring above pins era4 for current-season attempts, which is exact for 2018+.
 
 ## Avenues for improvement & open issues
 
-- **Weather/altitude/kicker aging** — none are features; kicker identity is
-  the FGOE residual above, which is exactly the leaderboard's point.
-- **Known issue:** parity vs the R oracle sits at 0.971 — below the other
-  boosters, documented, and worth a targeted divergence audit.
+- **Resolved (2026-09-01, PR #29):** *the 0.97 parity audit.* The residual is
+  the long-distance tail and nothing else: corr vs the GAM is 0.961 under 30
+  yards, 0.950 at 30-39, 0.954 at 40-49, 0.864 at 50-59 and 0.679 at 60+ (86
+  attempts in the 12 audited seasons). Era mapping and roof do not separate. Against reality
+  the booster is well calibrated (per-surface bias <= 0.025), so the number is a
+  functional-form disagreement in a region neither model has data for -- an
+  honest residual, not a defect to chase.
+- **Resolved (2026-09-01, PR #29):** *weather measured.* Wind and temperature
+  carry monotone, unmodelled residual gradients (+2.5 to -3.1 points of make
+  probability across wind buckets; -4.2 to +1.2 across temperature), and Denver
+  kicks beat the model by 3.1 points while being 1.2 yards longer.
+- **Altitude still needs a source**, named in the card: a stadium-elevation
+  lookup from the USGS Elevation Point Query Service keyed by venue coordinates.
+  Until that ~40-row table is committed, "altitude" is a Denver dummy.
+- **Kicker aging** remains unexamined; kicker identity is deliberately the FGOE
+  residual, which is the leaderboard's point.
+- **Known issue:** wind and cold co-occur, so the two weather tables above
+  double-count shared signal -- a joint fit would attribute less to each.

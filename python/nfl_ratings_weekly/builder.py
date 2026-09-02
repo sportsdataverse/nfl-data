@@ -7,6 +7,7 @@ import logging
 from typing import Callable, Optional
 
 import polars as pl
+from sportsdataverse.errors import NoDataError
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +69,15 @@ def build_season(
     frames: list[pl.DataFrame] = []
     built: list[int] = []
     for week, cutoff in week_starts(schedule):
-        d = ratings_fn(season, as_of_date=dt.date.fromisoformat(cutoff))
+        try:
+            d = ratings_fn(season, as_of_date=dt.date.fromisoformat(cutoff))
+        except NoDataError as e:
+            # The season's pbp asset is not published yet (nflverse creates
+            # play_by_play_<season>.parquet at kickoff; the Tuesday cron starts
+            # Sep 1). Zero rows before kickoff is the answer, not a failure --
+            # and no later week can succeed against the same absent asset.
+            log.info("season %s: no published pbp yet (%s) -- skipped", season, e)
+            break
         if d.height:
             # 1999-2000 pbp carries plays with an empty-string team that survives
             # nfl_ratings' null filter and emits a garbage "" team row — drop it

@@ -55,3 +55,32 @@ def test_build_season_empty_when_no_weeks():
         schedule_fn=lambda seasons: _schedule(),
     )
     assert out.height == 0
+
+
+def test_build_season_skips_unpublished_pbp_season():
+    """Before kickoff the season's pbp asset is absent (NoDataError), which the
+    Tuesday cron hit on its first in-season fire (2026-09-01). That is zero rows,
+    not a failure -- and the builder must not raise or retry every week."""
+    from sportsdataverse.errors import NoDataError
+
+    calls: list[dt.date] = []
+
+    def absent(season, *, as_of_date):
+        calls.append(as_of_date)
+        raise NoDataError("play_by_play_2026.parquet: 404")
+
+    out = build_season(2026, ratings_fn=absent, schedule_fn=lambda seasons: _schedule())
+    assert out.height == 0
+    assert len(calls) == 1
+
+
+def test_cli_publish_exits_zero_when_no_season_has_vintages_yet(monkeypatch, tmp_path):
+    """--publish with nothing built is the pre-kickoff state, not an error: the
+    scheduled Tuesday run must go green and simply publish nothing (Sourcery on
+    nfl-data #27)."""
+    import nfl_ratings_weekly.__main__ as cli
+
+    monkeypatch.setattr(cli, "build_season", lambda season: pl.DataFrame())
+    rc = cli.main(["--seasons", "2026", "--out", str(tmp_path), "--publish"])
+    assert rc == 0
+    assert list(tmp_path.glob("*.parquet")) == []

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import urllib.error
 from typing import Callable, Optional
 
 import polars as pl
@@ -78,21 +77,6 @@ def build_season(
             # Sep 1). Zero rows before kickoff is the answer, not a failure --
             # and no later week can succeed against the same absent asset.
             log.info("season %s: no published pbp yet (%s) -- skipped", season, e)
-            break
-        except urllib.error.HTTPError as e:
-            # Same condition, different exception. The loader reads the release
-            # asset straight into polars, so an absent one surfaces as a raw
-            # urllib 404 and never becomes NoDataError -- which is how the first
-            # scheduled run (2026-09-01) died on a case this function already
-            # handled. The test raised NoDataError, so it passed while
-            # production 404'd.
-            #
-            # ONLY 404/410. A 5xx or a rate-limit is transient, and treating one
-            # as "no data" would silently publish an empty ratings week on a
-            # green run.
-            if e.code not in (404, 410):
-                raise
-            log.info("season %s: pbp asset absent (HTTP %s) -- skipped", season, e.code)
             break
         if d.height:
             # 1999-2000 pbp carries plays with an empty-string team that survives

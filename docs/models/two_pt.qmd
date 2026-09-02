@@ -146,5 +146,7 @@ mostly by the ~48% success level against the empirical XP make rate.
 - **Sparse-sample ceiling** — a documented soft gate (~0.87 parity) because
   the data vintage is thin; pooling college two-point data is a plausible
   transfer-learning experiment.
-- **Known issue:** the soft gate means CI tolerates parity misses here —
-  reviewers must not read its PASS as equivalent to the hard-gated models.
+- **Resolved (2026-09-01, PR #28):** `_stage.gate_status()` labels the soft
+  gate `SOFT PASS` / `SOFT FAIL` in the console, `models/ledger.jsonl`,
+  report.md and the train-all summary, so it can never read as a hard-gate
+  `PASS`; the 0.99 floor is unchanged.

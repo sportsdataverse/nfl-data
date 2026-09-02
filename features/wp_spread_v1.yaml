@@ -19,3 +19,10 @@ columns:
 - yardline_100
 - posteam_timeouts_remaining
 - defteam_timeouts_remaining
+# Fitted constant the derived columns above (spread_time, Diff_Time_Ratio) are
+# built with. Equality with the code constant AND the sdv-py applier is gated by
+# tests/test_feature_sets.py; the trainer writes the same value into the model
+# card (derived_feature_constants.spread_time_decay_exponent).
+derived_constants:
+  spread_time_decay_exponent: -4.0
+  source_constant: model_training.play_level.constants.SPREAD_TIME_DECAY_EXPONENT

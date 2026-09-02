@@ -189,5 +189,8 @@ not in xpass itself.
 ## Avenues for improvement & open issues
 
 - **Motion/personnel data** — the known ceiling-lifter absent from public pbp.
-- **Known issue:** era one-hots make the earliest seasons the reference class;
-  a new era needs an explicit dummy, not silent absorption.
+- **Resolved (2026-09-01, sportsdataverse-py PR #422):** a season beyond
+  `ERA_MAX_KNOWN_SEASON` (the era-aware retrain corpus end) now raises
+  `EraCoverageWarning` from every era-building helper instead of being
+  absorbed into `era4` silently; the constant is bumped at each era-aware
+  retrain, which is where a new dummy would be evaluated.

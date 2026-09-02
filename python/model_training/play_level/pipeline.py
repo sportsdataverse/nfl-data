@@ -1,4 +1,4 @@
-﻿"""Training orchestrator for NFL EP/WP/CP models.
+"""Training orchestrator for NFL EP/WP/CP models.
 
 Chains ingest → label → train in a single call.  Each stage is a thin
 module-level wrapper so tests can monkeypatch without touching the library.
@@ -20,6 +20,7 @@ CLI::
 
     uv run python -m model_training.play_level --help
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -31,19 +32,23 @@ import polars as pl
 # Thin wrappers — monkeypatchable in tests
 # ---------------------------------------------------------------------------
 
+
 def _download_pbp(seasons: List[int], data_dir: Path) -> List[Path]:
     from .ingest import download_pbp
+
     return download_pbp(seasons, output_dir=data_dir)
 
 
 def _load_pbp(seasons: List[int], data_dir: Path) -> pl.DataFrame:
     from .ingest import load_local_pbp
+
     return load_local_pbp(seasons, data_dir=data_dir)
 
 
 def _load_native(seasons: List[int]) -> pl.DataFrame:
     """Reconstruct PBP from the committed nfl/raw Shield library (no nflverse dep)."""
     from .ingest import load_native_pbp
+
     return load_native_pbp(seasons)
 
 
@@ -62,44 +67,65 @@ def _resolve_pbp(seasons: List[int], data_dir: Path, download: bool, source: str
     return _load_pbp(seasons, data_dir)
 
 
+def wp_card_extra() -> dict:
+    """Card fields every WP model (spread + naive) carries beyond the shared contract.
+
+    ``derived_feature_constants`` records the fitted constants the feature frame
+    was built with so they travel with the artifact; the sdv-py applier
+    (``ep_wp._load_booster_from``) refuses a model whose card disagrees with its
+    own ``model_vars.SPREAD_TIME_DECAY_EXPONENT``.
+    """
+    from .constants import SPREAD_TIME_DECAY_EXPONENT
+
+    return {"derived_feature_constants": {"spread_time_decay_exponent": SPREAD_TIME_DECAY_EXPONENT}}
+
+
 def _build_ep(df: pl.DataFrame) -> pl.DataFrame:
     from .label import build_ep_training_set
+
     return build_ep_training_set(df)
 
 
 def _build_wp(df: pl.DataFrame, variant: str) -> pl.DataFrame:
     from .label import build_wp_training_set
+
     return build_wp_training_set(df, variant=variant)  # type: ignore[arg-type]
 
 
 def _build_cp(df: pl.DataFrame) -> pl.DataFrame:
     from .label import build_cp_training_set
+
     return build_cp_training_set(df)
 
 
 def _train_ep(df: pl.DataFrame, output_path: Path):
     from .trainer import train_ep
+
     return train_ep(df, output_path=output_path)
 
 
 def _train_wp_spread(df: pl.DataFrame, output_path: Path):
     from .trainer import train_wp_spread
+
     return train_wp_spread(df, output_path=output_path)
 
 
 def _train_wp_naive(df: pl.DataFrame, output_path: Path):
     from .trainer import train_wp_naive
+
     return train_wp_naive(df, output_path=output_path)
 
 
 def _train_cp(df: pl.DataFrame, output_path: Path):
     from .trainer import train_cp
+
     return train_cp(df, output_path=output_path)
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def run_ep_pipeline(
     seasons: List[int],
@@ -164,6 +190,26 @@ def run_wp_pipeline(
         _train_wp_spread(wp_df, output_path)
     else:
         _train_wp_naive(wp_df, output_path)
+    from .constants import (
+        WP_NAIVE_FEATURES,
+        WP_NAIVE_HYPERPARAMS,
+        WP_SPREAD_FEATURES,
+        WP_SPREAD_HYPERPARAMS,
+    )
+    from .model_card import write_model_card
+
+    spread = variant == "spread"
+    write_model_card(
+        output_path,
+        model_type="wp_spread" if spread else "wp_naive",
+        features=WP_SPREAD_FEATURES if spread else WP_NAIVE_FEATURES,
+        label="label",
+        seasons=seasons,
+        n_rows=wp_df.height,
+        hyperparams=WP_SPREAD_HYPERPARAMS if spread else WP_NAIVE_HYPERPARAMS,
+        source="nflverse",
+        extra=wp_card_extra(),
+    )
     return output_path
 
 
@@ -258,10 +304,19 @@ def run_full_pipeline(
     )
     from .model_card import write_model_card
 
-    def _card(path, mtype, feats, label, hp, n_rows):
+    def _card(path, mtype, feats, label, hp, n_rows, extra=None):
         if write_cards:
-            write_model_card(path, model_type=mtype, features=feats, label=label,
-                             seasons=seasons, n_rows=n_rows, hyperparams=hp, source=source)
+            write_model_card(
+                path,
+                model_type=mtype,
+                features=feats,
+                label=label,
+                seasons=seasons,
+                n_rows=n_rows,
+                hyperparams=hp,
+                source=source,
+                extra=extra,
+            )
 
     print("[pipeline] building EP training set...")
     ep_df = _build_ep(df)
@@ -276,7 +331,15 @@ def run_full_pipeline(
     print(f"[pipeline] WP-spread: {wp_spread_df.height:,} plays → training")
     wp_spread_path = models_dir / "wp_spread.ubj"
     _train_wp_spread(wp_spread_df, wp_spread_path)
-    _card(wp_spread_path, "wp_spread", WP_SPREAD_FEATURES, "label", WP_SPREAD_HYPERPARAMS, wp_spread_df.height)
+    _card(
+        wp_spread_path,
+        "wp_spread",
+        WP_SPREAD_FEATURES,
+        "label",
+        WP_SPREAD_HYPERPARAMS,
+        wp_spread_df.height,
+        extra=wp_card_extra(),
+    )
     print(f"[pipeline] WP-spread model saved → {wp_spread_path}")
 
     print("[pipeline] building WP-naive training set...")
@@ -284,7 +347,15 @@ def run_full_pipeline(
     print(f"[pipeline] WP-naive: {wp_naive_df.height:,} plays → training")
     wp_naive_path = models_dir / "wp_naive.ubj"
     _train_wp_naive(wp_naive_df, wp_naive_path)
-    _card(wp_naive_path, "wp_naive", WP_NAIVE_FEATURES, "label", WP_NAIVE_HYPERPARAMS, wp_naive_df.height)
+    _card(
+        wp_naive_path,
+        "wp_naive",
+        WP_NAIVE_FEATURES,
+        "label",
+        WP_NAIVE_HYPERPARAMS,
+        wp_naive_df.height,
+        extra=wp_card_extra(),
+    )
     print(f"[pipeline] WP-naive model saved → {wp_naive_path}")
 
     print("[pipeline] building CP training set...")

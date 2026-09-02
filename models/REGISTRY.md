@@ -22,7 +22,7 @@ Trained by `python -m model_training.play_level train` on the nflverse-parity
 |---|---|---|---|---|---|---|---|
 | Expected Points | `ep_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.996** (floor r 0.98) | 2026-06 | annual (Mar 1) |
 | Win Probability (naive) | `wp_naive.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.997**; WP Brier cap per parity.md | 2026-06 | annual (Mar 1) |
-| Win Probability (spread) | `wp_spread.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.998** (`vegas_wp`) | 2026-06 | annual (Mar 1) |
+| Win Probability (spread) | `wp_spread.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.998** (`vegas_wp`); fitted `spread_time` decay exponent −4.0 recorded in the card (`derived_feature_constants`) + `features/wp_spread_v1.yaml`, gated trainer == registry == applier (`tests/test_feature_sets.py`) | 2026-06 | annual (Mar 1) |
 | Completion Probability | `cp_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | CPOE scale-correct vs nflfastR (percentage-point scale) | 2026-06 | annual (Mar 1) |
 | Expected YAC | `xyac_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | 76-class faithful add_xyac reproduction (sdv-py #114) | 2026-06 | annual (Mar 1) |
 
@@ -35,7 +35,7 @@ gates in `decision_models/validate.py`, measured values in parity.md.
 |---|---|---|---|---|---|---|---|
 | Expected Pass | `xpass_model.ubj` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/decision_models` | P(pass) corr **0.9895** (validate threshold 0.99, informational — era-aware divergence) | 2026-06 | annual (Mar 1) |
 | Fourth-Down Yards | `fd_model.ubj` | `nfl_4th_down_models` | model_pbp 1999–2025, era-aware | `model_training/decision_models` | mean-gain corr **0.9856** (informational, era-aware) | 2026-06 | annual (Mar 1) |
-| nfl4th Decision WP | `wp_model.ubj` | `nfl_4th_down_models` | nfl4th cal_data (reproduction, unchanged) | `model_training/decision_models` | P(win) corr **0.9947** | 2026-06 | annual (Mar 1) |
+| nfl4th Decision WP | `wp_model.ubj` | `nfl_4th_down_models` | nfl4th `cal_data.rds` 2001–2020 (reproduction, unchanged; window lags the main models) | `model_training/decision_models` | P(win) corr **0.9947**; a missing `cal_data.rds` FAILS the stage / `train-all` (rc 1) — `--allow-skip` / `--allow-missing-cal-data` records `status: SKIPPED` + reason in `models/ledger.jsonl` and report.md instead | 2026-06 | annual (Mar 1) |
 
 ## Bundled-in-sdv-py artifacts (no release tag)
 
@@ -46,7 +46,7 @@ Copied into sdv-py's `sportsdataverse/nfl/models/` package data by
 | model | artifact(s) | release tag | training data | fitting script | gates at publish | last retrain | cadence |
 |---|---|---|---|---|---|---|---|
 | Field Goal | `fg_model.ubj` | — (sdv-py bundle) | model_pbp 1999–2025, era-aware | `model_training/decision_models` | attempted-cells corr **0.971** (freq-wt 0.986) vs GAM grid | 2026-06 | annual (Mar 1) |
-| Two-Point | `two_pt_model.ubj` | — (sdv-py bundle) | model_pbp 2010–2025 | `model_training/decision_models` | P(success) corr **0.806** (vintage drift documented in two_pt.md) | 2026-06 | annual (Mar 1) |
+| Two-Point | `two_pt_model.ubj` | — (sdv-py bundle) | model_pbp 2010–2025 | `model_training/decision_models` | **SOFT gate** — P(success) corr **0.806** vs the 0.99 floor (not lowered), recorded `SOFT FAIL` and tolerated by design (vintage drift documented in two_pt.md); labelled `SOFT PASS` / `SOFT FAIL` in CI, the ledger and report.md — never a hard-gate `PASS` | 2026-06 | annual (Mar 1) |
 | Punt Outcome Distribution | `punt_data.parquet` | — (sdv-py bundle) | model_pbp punt outcomes | `model_training/decision_models` | distributional (see punt.md) | 2026-06 | annual (Mar 1) |
 
 ## Decision surfaces published as data

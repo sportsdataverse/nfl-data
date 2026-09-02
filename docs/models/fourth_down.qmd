@@ -232,6 +232,7 @@ coaches = (
         pl.col("posteam").last().alias("team"),
         pl.col("should_go").mean().alias("model_go_rate"),
         pl.col("went").mean().alias("actual_go_rate"),
+        pl.col("should_go").sum().alias("n_should"),
         pl.col("went").filter(pl.col("should_go")).mean().alias("go_when_should"),
         pl.col("went").filter(~pl.col("should_go")).mean().alias("go_when_kick"),
         # go_boost is the WP gain (percentage points) the model attributes to
@@ -242,10 +243,32 @@ coaches = (
     .filter(pl.col("decisions") >= 150)
     .with_columns((pl.col("wp_forgone") / pl.col("decisions")).alias("wp_forgone_per_decision"))
     .join(teams, left_on="team", right_on="team_abbr", how="left")
-    .with_columns(("<img src='" + pl.col("team_logo_espn").fill_null("") + "' height='26'/>").alias("logo"))
+    .with_columns(("<img src='" + pl.col("team_logo_espn").fill_null("") + "' height='26' alt=''/>").alias("logo"))
     .sort("go_when_should", descending=True)
 )
 league_go_when_should = float(multi.filter(pl.col("should_go"))["went"].mean())
+
+# Wilson 95% score interval on go_when_should. A range of point estimates says
+# nothing on its own -- the smallest displayed group has ~150 decisions, so the
+# question is whether the spread survives sampling variation. Wilson rather than
+# normal-approximation because these are proportions near the tails on modest n.
+_Z = 1.959963984540054  # exact two-sided 95% normal quantile, not the 1.96 shorthand
+coaches = coaches.with_columns(
+    (
+        (pl.col("go_when_should") + _Z**2 / (2 * pl.col("n_should"))
+         - _Z * ((pl.col("go_when_should") * (1 - pl.col("go_when_should")) / pl.col("n_should")
+                  + _Z**2 / (4 * pl.col("n_should") ** 2)).sqrt()))
+        / (1 + _Z**2 / pl.col("n_should"))
+    ).alias("gws_lo"),
+    (
+        (pl.col("go_when_should") + _Z**2 / (2 * pl.col("n_should"))
+         + _Z * ((pl.col("go_when_should") * (1 - pl.col("go_when_should")) / pl.col("n_should")
+                  + _Z**2 / (4 * pl.col("n_should") ** 2)).sqrt()))
+        / (1 + _Z**2 / pl.col("n_should"))
+    ).alias("gws_hi"),
+)
+_top, _bot = coaches.row(0, named=True), coaches.row(coaches.height - 1, named=True)
+_disjoint = _top["gws_lo"] > _bot["gws_hi"]
 ```
 
 ```{python}
@@ -267,10 +290,15 @@ gt_show(
 
 Three things this makes visible that the league-wide number cannot:
 
-- **The spread is large and it is not noise.** Go-rate-when-the-model-says-go
-  runs from 25% to 50% across coaches — the most aggressive coach in the sample
-  goes twice as often as the most conservative *in the same recommended
-  situations*.
+- **The spread is large, and it survives sampling variation.** Go-rate-when-the-
+  model-says-go runs from 25% to 50% across coaches — the most aggressive coach
+  in the sample goes twice as often as the most conservative *in the same
+  recommended situations*. A range of point estimates alone would not establish
+  that, so the extremes carry Wilson 95% intervals:
+  `{python} f"{_top['coach']} {_top['go_when_should']:.1%} [{_top['gws_lo']:.1%}, {_top['gws_hi']:.1%}] on n={int(_top['n_should'])}"`
+  versus
+  `{python} f"{_bot['coach']} {_bot['go_when_should']:.1%} [{_bot['gws_lo']:.1%}, {_bot['gws_hi']:.1%}] on n={int(_bot['n_should'])}"`
+  — `{python} "disjoint, so the gap is not sampling noise" if _disjoint else "OVERLAPPING, so the extremes are not separable at 95% and the range should be read as observed spread only"`.
 - **Every coach is conservative relative to the model.** Even the top of the
   table converts only half of the model's go recommendations. The gap is
   systematic, not a handful of outliers, which is the honest reading: either

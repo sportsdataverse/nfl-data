@@ -218,8 +218,11 @@ and TV is reported alongside.
 
 **The finding the gate exposes.** The surface is systematically optimistic about
 where the returning team ends up, and the gap is growing: 0.27 yards on
-2010–2014, 2.12 pooled over 2020–2025, 2.77 in 2024 alone. Modern coverage pins
-returners deeper than a full-history surface says. That is inside the band and
+2010–2014, 2.12 pooled over 2020–2025, 2.77 in 2024 alone. Recent punts land
+deeper than a full-history surface predicts; nothing here identifies *why*, and
+no coverage variable enters this comparison — returner behaviour and coverage
+scheme are plausible explanations discussed below, not measured ones. That is
+inside the band and
 is documented rather than gated away — the ceiling was set above the worst
 observed value precisely so it detects a *regression* rather than re-flagging
 drift already described here. If the gap keeps widening, the honest response is

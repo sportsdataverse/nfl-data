@@ -1,8 +1,10 @@
 """Hermetic tests for the nfl_ratings_weekly builder (no network)."""
 
 import datetime as dt
+import urllib.error
 
 import polars as pl
+import pytest
 from nfl_ratings_weekly.builder import build_season, week_starts
 
 
@@ -58,9 +60,13 @@ def test_build_season_empty_when_no_weeks():
 
 
 def test_build_season_skips_unpublished_pbp_season():
-    """Before kickoff the season's pbp asset is absent (NoDataError), which the
-    Tuesday cron hit on its first in-season fire (2026-09-01). That is zero rows,
-    not a failure -- and the builder must not raise or retry every week."""
+    """Before kickoff the season's pbp asset is absent, which is zero rows, not
+    a failure -- and the builder must not raise or retry every week.
+
+    This test asserted the NoDataError spelling only, and passed, while the
+    first in-season fire (2026-09-01) died: the loader reads the release asset
+    straight into polars, so the real exception is a raw urllib 404. The
+    HTTPError case below is the one production actually raises."""
     from sportsdataverse.errors import NoDataError
 
     calls: list[dt.date] = []
@@ -72,6 +78,33 @@ def test_build_season_skips_unpublished_pbp_season():
     out = build_season(2026, ratings_fn=absent, schedule_fn=lambda seasons: _schedule())
     assert out.height == 0
     assert len(calls) == 1
+
+
+def _http_error(code: int) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError("https://example/pbp.parquet", code, "boom", {}, None)
+
+
+def test_build_season_skips_a_404_pbp_asset():
+    """What the 2026-09-01 run actually hit: urllib 404, never NoDataError."""
+    calls: list[dt.date] = []
+
+    def absent(season, *, as_of_date):
+        calls.append(as_of_date)
+        raise _http_error(404)
+
+    out = build_season(2026, ratings_fn=absent, schedule_fn=lambda seasons: _schedule())
+    assert out.height == 0
+    assert len(calls) == 1
+
+
+def test_build_season_does_not_swallow_a_transient_http_error():
+    """A 5xx is not "no data". Treating one as absence would publish an empty
+    ratings week on a green run -- the failure mode this repo keeps hitting."""
+    def flaky(season, *, as_of_date):
+        raise _http_error(503)
+
+    with pytest.raises(urllib.error.HTTPError):
+        build_season(2026, ratings_fn=flaky, schedule_fn=lambda seasons: _schedule())
 
 
 def test_cli_publish_exits_zero_when_no_season_has_vintages_yet(monkeypatch, tmp_path):

@@ -51,6 +51,8 @@ __all__ = [
     "validate_fg",
     "validate_wp",
     "validate_punt",
+    "validate_punt_holdout",
+    "realized_punt_landings",
 ]
 
 
@@ -315,4 +317,173 @@ def validate_punt(
         "max_total_variation": float(np.max(tv_arr)) if tv_arr.size else float("nan"),
         "gate_pass": weighted <= threshold,
         "n_yardlines": len(shared),
+    }
+# ---------------------------------------------------------------------------
+# punt — distribution gate against HELD-OUT seasons (not the R oracle)
+# ---------------------------------------------------------------------------
+#: Max freq-weighted per-yardline KS distance vs realized holdout landings.
+#: Observed on the shipped surface (2026-09-01): 0.0874 on 2010-2014 (seasons
+#: inside the classic training span), 0.1223 pooled 2020-2025, worst single
+#: season 0.1881 (2024). The ceiling sits above the worst observed value so it
+#: catches a regression without firing on the drift already documented in
+#: docs/models/punt.md. Never raise it to make a build pass -- diagnose instead.
+PUNT_HOLDOUT_KS_MAX: float = 0.22
+#: Max |surface expected landing - realized mean landing| in yards on the holdout
+#: snap mix. Observed 2026-09-01: 0.27 yd on 2010-2014, 2.12 yd pooled 2020-2025,
+#: worst single season 2.58 (2024). Same never-lower rule.
+PUNT_HOLDOUT_MEAN_YARDS_MAX: float = 3.5
+#: A yardline needs this many real holdout punts before its empirical landing
+#: distribution is worth comparing against. Below it the comparison measures
+#: sampling noise, not the surface.
+PUNT_HOLDOUT_MIN_PUNTS_PER_YARDLINE: int = 25
+
+
+def realized_punt_landings(pbp: pl.DataFrame) -> pl.DataFrame:
+    """Derive realized punt landing spots from PBP, mirroring ``build_punt_data``.
+
+    Applies the same ``yardline_after`` construction the builder uses (end-zone
+    NA->20, BLOCKED NA->yardline_100, cap 100, 0->1) so the comparison is
+    like-for-like, then keeps ``yardline_100 > 30`` -- the builder's own domain.
+
+    Punts are selected on ``play_type == "punt"``; the builder uses the nflverse
+    ``play_type_nfl == "PUNT"``, which the published ``model_pbp`` corpus does
+    not carry. Both select the same plays.
+
+    Args:
+        pbp: PBP carrying ``desc``, ``play_type``, ``yardline_100``,
+            ``kick_distance``, ``return_yards``.
+
+    Returns:
+        One row per punt with ``yardline_100`` / ``yardline_after`` (Float64).
+    """
+    desc = pl.col("desc").fill_null("")
+    ya = pl.col("yardline_100") - pl.col("kick_distance") + pl.col("return_yards").fill_null(0)
+    ya = pl.when(desc.str.contains("end zone") & pl.col("kick_distance").is_null()).then(pl.lit(20.0)).otherwise(ya)
+    ya = (
+        pl.when(desc.str.contains("BLOCKED") & ya.is_null()).then(pl.col("yardline_100").cast(pl.Float64)).otherwise(ya)
+    )
+    ya = pl.when(ya > 100).then(pl.lit(100.0)).otherwise(ya)
+    ya = pl.when(ya == 0).then(pl.lit(1.0)).otherwise(ya)
+    return (
+        pbp.filter(pl.col("play_type") == "punt")
+        .select("desc", "yardline_100", "kick_distance", "return_yards")
+        .with_columns(ya.alias("yardline_after"))
+        .filter(pl.col("yardline_after").is_not_null() & (pl.col("yardline_100") > 30))
+        .select(
+            pl.col("yardline_100").cast(pl.Float64),
+            pl.col("yardline_after").cast(pl.Float64).round(0),
+        )
+    )
+
+
+def validate_punt_holdout(
+    ours: pl.DataFrame,
+    holdout_pbp: pl.DataFrame,
+    *,
+    ks_threshold: float = PUNT_HOLDOUT_KS_MAX,
+    mean_yards_threshold: float = PUNT_HOLDOUT_MEAN_YARDS_MAX,
+    min_punts_per_yardline: int = PUNT_HOLDOUT_MIN_PUNTS_PER_YARDLINE,
+) -> Dict[str, Any]:
+    """Gate the punt landing surface against REALITY on held-out seasons.
+
+    ``validate_punt`` answers "does this reproduce the R oracle"; this answers
+    "does this describe how punts actually land", which is the question the
+    4th-down decision layer's punt branch depends on and the one an oracle-only
+    gate cannot see. They are complementary: a surface can reproduce the oracle
+    perfectly and still no longer match the modern game.
+
+    **The gate statistic is KS, not total variation.** The surface is a smooth
+    KDE over ~50 discrete landing spots per snap yardline, while a single season
+    puts only ~45 punts on each yardline, so the empirical mass is spiky and TV
+    -- a sum of pointwise differences -- is dominated by that discreteness (0.39
+    per season vs 0.23 pooled, on a surface whose CDF tracks reality to 0.12).
+    KS compares CDFs and is not fooled by where a sparse sample falls inside a
+    bin. TV is still returned, as informational.
+
+    Args:
+        ours: ``build_punt_data`` output (or the shipped ``punt_data.parquet``).
+        holdout_pbp: PBP for the seasons to check against. Pass seasons OUTSIDE
+            the surface's training span for an honest read -- passing
+            in-training seasons measures fit, not generalization.
+        ks_threshold: Max freq-weighted KS distance.
+        mean_yards_threshold: Max |expected - realized| mean landing, in yards.
+        min_punts_per_yardline: Yardlines with fewer real punts are skipped.
+
+    Returns:
+        Dict with ``weighted_ks`` / ``max_ks`` / ``weighted_total_variation``,
+        ``mean_landing_surface`` / ``_realized`` / ``mean_landing_diff``,
+        ``n_punts``, ``n_yardlines``, and ``gate_pass`` (both criteria).
+    """
+    real = realized_punt_landings(holdout_pbp)
+    surface = (
+        ours.group_by(["yardline_100", "yardline_after"])
+        .agg(pl.col("pct").sum().alias("pct"))
+        .with_columns(
+            pl.col("yardline_100").cast(pl.Float64),
+            pl.col("yardline_after").cast(pl.Float64),
+        )
+    )
+
+    counts = real.group_by(["yardline_100", "yardline_after"]).agg(pl.len().alias("n"))
+    totals = counts.group_by("yardline_100").agg(pl.col("n").sum().alias("tot"))
+    empirical = counts.join(totals, on="yardline_100", how="inner").with_columns(
+        (pl.col("n") / pl.col("tot")).alias("p")
+    )
+    punts_at = {float(r["yardline_100"]): float(r["tot"]) for r in totals.iter_rows(named=True)}
+
+    def _by_yardline(df: pl.DataFrame, value: str) -> "dict[float, dict[float, float]]":
+        out: "dict[float, dict[float, float]]" = {}
+        for row in df.iter_rows(named=True):
+            out.setdefault(float(row["yardline_100"]), {})[float(row["yardline_after"])] = float(row[value])
+        return out
+
+    surf_by, emp_by = _by_yardline(surface, "pct"), _by_yardline(empirical, "p")
+    ks_vals, tv_vals, weights = [], [], []
+    for yardline in sorted(set(surf_by) & set(emp_by)):
+        if punts_at.get(yardline, 0.0) < min_punts_per_yardline:
+            continue
+        s_row, e_row = surf_by[yardline], emp_by[yardline]
+        cum_s = cum_e = ks = tv = 0.0
+        for spot in sorted(set(s_row) | set(e_row)):
+            s_p, e_p = s_row.get(spot, 0.0), e_row.get(spot, 0.0)
+            tv += abs(s_p - e_p)
+            cum_s += s_p
+            cum_e += e_p
+            ks = max(ks, abs(cum_s - cum_e))
+        ks_vals.append(ks)
+        tv_vals.append(0.5 * tv)
+        weights.append(punts_at[yardline])
+
+    ks_arr = np.asarray(ks_vals, dtype=np.float64)
+    tv_arr = np.asarray(tv_vals, dtype=np.float64)
+    w_arr = np.asarray(weights, dtype=np.float64)
+    have = ks_arr.size > 0 and w_arr.sum() > 0
+    weighted_ks = float(np.average(ks_arr, weights=w_arr)) if have else float("nan")
+
+    expected = surface.group_by("yardline_100").agg(
+        ((pl.col("yardline_after") * pl.col("pct")).sum() / pl.col("pct").sum()).alias("expected_after")
+    )
+    landed = (
+        real.group_by("yardline_100")
+        .agg(pl.col("yardline_after").mean().alias("realized_after"), pl.len().alias("n"))
+        .join(expected, on="yardline_100", how="inner")
+    )
+    if landed.height:
+        n_at = landed["n"].to_numpy().astype(float)
+        mean_surface = float(np.average(landed["expected_after"].to_numpy(), weights=n_at))
+        mean_realized = float(np.average(landed["realized_after"].to_numpy(), weights=n_at))
+    else:
+        mean_surface = mean_realized = float("nan")
+    mean_diff = mean_surface - mean_realized
+
+    return {
+        "weighted_ks": weighted_ks,
+        "max_ks": float(np.max(ks_arr)) if have else float("nan"),
+        "weighted_total_variation": (float(np.average(tv_arr, weights=w_arr)) if have else float("nan")),
+        "mean_landing_surface": mean_surface,
+        "mean_landing_realized": mean_realized,
+        "mean_landing_diff": mean_diff,
+        "n_punts": real.height,
+        "n_yardlines": int(ks_arr.size),
+        "gate_pass": bool(have and weighted_ks <= ks_threshold and abs(mean_diff) <= mean_yards_threshold),
     }

@@ -11,6 +11,8 @@ jupyter: python3
 
 ```{python}
 #| output: false
+import sys
+
 import numpy as np
 import polars as pl
 import requests
@@ -27,6 +29,7 @@ from importlib.resources import files as _files
 ROOT = Path.cwd()
 while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
     ROOT = ROOT.parent
+sys.path.insert(0, str(ROOT / "python"))
 punt = pl.read_parquet(str(_files("sportsdataverse.nfl") / "models" / "punt_data.parquet"))
 CACHE = ROOT / "docs" / "models" / ".cache"
 CACHE.mkdir(exist_ok=True)
@@ -139,12 +142,87 @@ gt_show(
 )
 ```
 
+## The gate against reality
+
+The TV comparison above answers "does this reproduce nfl4th". It cannot answer
+"does this still describe how punts land", and the decision layer depends on the
+second. As of 2026-09-01 the surface carries a second, independent gate
+(`validate_punt_holdout`) that scores it against realized landings:
+
+```{python}
+#| output: false
+from model_training.decision_models.validate import (
+    PUNT_HOLDOUT_KS_MAX, PUNT_HOLDOUT_MEAN_YARDS_MAX, validate_punt_holdout,
+)
+
+def load_seasons(seasons):
+    frames = []
+    for season in seasons:
+        p = CACHE / f"model_pbp_{season}.parquet"
+        if not p.exists():
+            p.write_bytes(requests.get(
+                f"https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_{season}.parquet",
+                timeout=600).content)
+        frames.append(pl.read_parquet(p).select(
+            "desc", "play_type", "yardline_100", "kick_distance", "return_yards"))
+    return pl.concat(frames, how="vertical_relaxed")
+
+windows = [("2010–2014", list(range(2010, 2015))),
+           ("2020–2025", list(range(2020, 2026))),
+           ("2023–2025 (gate window)", [2023, 2024, 2025]),
+           ("2024 alone", [2024])]
+gate_rows = []
+for label, seasons in windows:
+    r = validate_punt_holdout(punt, load_seasons(seasons))
+    gate_rows.append({"window": label, "punts": r["n_punts"], "yardlines": r["n_yardlines"],
+                      "weighted_ks": r["weighted_ks"], "total_variation": r["weighted_total_variation"],
+                      "surface_mean": r["mean_landing_surface"], "realized_mean": r["mean_landing_realized"],
+                      "gap_yards": r["mean_landing_diff"], "passes": r["gate_pass"]})
+gate = pl.DataFrame(gate_rows)
+```
+
+```{python}
+gt_show(
+    GT(gate.to_pandas())
+    .tab_header(title="Punt surface vs realized landings",
+                subtitle=f"gate: freq-weighted KS <= {PUNT_HOLDOUT_KS_MAX}, "
+                         f"|mean landing gap| <= {PUNT_HOLDOUT_MEAN_YARDS_MAX} yd")
+    .fmt_number(columns=["weighted_ks", "total_variation"], decimals=4)
+    .fmt_number(columns=["surface_mean", "realized_mean", "gap_yards"], decimals=2)
+    .fmt_number(columns=["punts", "yardlines"], sep_mark=",", decimals=0)
+    .cols_label(window="Window", punts="Punts", yardlines="Yardlines",
+                weighted_ks="KS (freq-wt)", total_variation="TV (freq-wt)",
+                surface_mean="Surface", realized_mean="Realized",
+                gap_yards="Gap (yd)", passes="Passes")
+)
+```
+
+**Why KS and not TV.** The surface is a smooth KDE over ~50 discrete landing
+spots per snap yardline, but a single season puts only ~45 punts on each
+yardline, so the empirical mass is spiky. TV sums pointwise differences and is
+therefore dominated by that discreteness — it reads 0.39 on one season against
+0.23 pooled, on a surface whose *CDF* tracks reality to 0.12. KS compares CDFs
+and is not fooled by where a sparse sample falls inside a bin, so KS is the gate
+and TV is reported alongside.
+
+**The finding the gate exposes.** The surface is systematically optimistic about
+where the returning team ends up, and the gap is growing: 0.27 yards on
+2010–2014, 2.12 pooled over 2020–2025, 2.58 in 2024 alone. Modern coverage pins
+returners deeper than a full-history surface says. That is inside the band and
+is documented rather than gated away — the ceiling was set above the worst
+observed value precisely so it detects a *regression* rather than re-flagging
+drift already described here. If the gap keeps widening, the honest response is
+a recency-weighted rebuild, not a wider band.
+
 ## Limitations
 
 It is a **league-average empirical surface** — no punter identity, hang time, or
 coverage. KDE smoothing slightly blurs the per-yardline landing spread (the TV
 residual). Snap positions inside the 30 are excluded (where a punt is rarely the
-decision).
+decision). Because the artifact is fitted on the full history, the reality check
+above is a *recency* check rather than out-of-sample generalization: the gate
+window's seasons are inside the training span, so it detects "the surface no
+longer describes recent punting", which is the failure that matters here.
 
 ## Provenance
 
@@ -160,6 +238,18 @@ decision).
 
 ## Avenues for improvement & open issues
 
-- **Returner identity and directional punting** are absent.
-- **Known issue:** as a distribution artifact it has no gate of its own —
-  errors surface only through the 4th-down decision calibration.
+- **Resolved (2026-09-01, PR #29):** *it now has a gate of its own.*
+  `validate_punt_holdout` scores the surface against realized landings
+  (freq-weighted KS <= 0.22, |mean landing gap| <= 3.5 yd) and runs inside stage
+  11 alongside the oracle parity gate; both must pass. Errors no longer surface
+  only through the 4th-down decision calibration.
+- **The surface is 2.5 yards optimistic on recent seasons and drifting** (0.27 yd
+  gap on 2010-2014 vs 2.58 in 2024). A recency-weighted or era-aware rebuild is
+  the real fix; the gate exists to notice if it gets worse.
+- **Returner identity and directional punting** are absent. `punt_returner_player_id`
+  is in the pbp so a returner effect on the *return* component is tractable;
+  direction is not published anywhere. This matters more than it looks -- some of
+  the drift above is plausibly returner/coverage era, and separating them would
+  say whether the surface needs a rebuild or a covariate.
+- **Known issue:** the gate window sits inside the training span (the artifact is
+  full-history), so it is a recency check, not out-of-sample generalization.

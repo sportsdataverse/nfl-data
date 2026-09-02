@@ -25,6 +25,9 @@ jobs:
             python
             tests
             scripts
+            models
+            features
+            .github
             pyproject.toml
             uv.lock
           sparse-checkout-cone-mode: false

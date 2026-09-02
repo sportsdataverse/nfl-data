@@ -254,8 +254,13 @@ How to read this, because several of these numbers look alarming and are not:
   materially divergent**: its MAE is roughly
   `{python} f"{_b['overtime']['wp_mae'] / _b['all plays']['wp_mae']:.0f}"`× the
   all-plays figure. Correlation hid that, and so would the aggregate — a
-  branch-sized error is invisible in a 46,000-play average. This is a real open
-  issue, recorded below, not an artefact of the statistic.
+  branch-sized error is invisible in a 46,000-play average. Correlation hid it,
+  and so would the aggregate.
+
+  **The overtime divergence has since been traced and fixed — see the next
+  section.** The numbers above still show it because they score the *published*
+  `model_pbp_2025.parquet`, which was built before the fix; they will move on
+  the next republish, which is the point of leaving them computed.
 - **PATs and two-point tries are the same artefact, deliberately.** Both models
   feature-substitute these rows (down→1, ydstogo→10, fixed yardline), so
   predicted `ep` is near-constant across the branch by construction — on
@@ -482,6 +487,119 @@ parity path.
 - **Artifacts** — published as `nfl_model_artifacts` (EP / WP / CP) and
   `nfl_4th_down_models`, bundled in `sportsdataverse`.
 
+## Why overtime diverged
+
+The overtime gap was not a calibration problem, an era problem, or a
+low-variance artefact. **nflfastR does not run the win-probability boosters on
+overtime at all.** `helper_add_ep_wp.R::add_wp_variables` (L820-899) splits the
+frame before prediction: the models score `qtr <= 4`, and `qtr > 4` gets a
+closed form built from the expected-points class probabilities —
+
+    Sudden_Death_WP = fg_prob + td_prob + safety_prob
+
+with `vegas_wp` assigned the *same* value (the spread model is never consulted
+in overtime). sdv-py scored overtime with the boosters, i.e. asked them about a
+state upstream never asks them about.
+
+Both signatures are checkable directly against nflverse's own published
+columns, with no model involved:
+
+```{python}
+#| output: false
+_ot = nv.filter((pl.col("qtr") >= 5) & pl.col("wp").is_not_null()
+                & pl.col("vegas_wp").is_not_null())
+_sd = _ot["fg_prob"] + _ot["td_prob"] + _ot["safety_prob"]
+_ot_stats = {
+    "n": _ot.height,
+    "sudden_death_exact": float((_ot["wp"] - _sd).abs().lt(1e-9).mean()),
+    "vegas_eq_wp": float((_ot["vegas_wp"] - _ot["wp"]).abs().lt(1e-12).mean()),
+}
+_reg = nv.filter((pl.col("qtr") <= 4) & pl.col("wp").is_not_null()
+                 & pl.col("vegas_wp").is_not_null())
+_ot_stats["reg_vegas_eq_wp"] = float((_reg["vegas_wp"] - _reg["wp"]).abs().lt(1e-12).mean())
+_ot_stats["reg_n"] = _reg.height
+```
+
+On the `{python} f"{_ot_stats['n']:,}"` published overtime plays of 2025,
+nflverse's `wp` equals the sudden-death closed form **exactly** (to 1e-9) on
+`{python} f"{_ot_stats['sudden_death_exact']:.1%}"` of rows — the remainder are
+the One-FG branch, which uses `td_prob + fg_prob * Win_Back` on the first
+overtime drive — and `vegas_wp` equals `wp` bit-for-bit on
+`{python} f"{_ot_stats['vegas_eq_wp']:.1%}"`. The control is decisive: in
+regulation, across `{python} f"{_ot_stats['reg_n']:,}"` plays, `vegas_wp`
+equals `wp` on `{python} f"{_ot_stats['reg_vegas_eq_wp']:.3%}"`.
+
+The overlay is ported as `sportsdataverse.nfl.ep_wp._apply_ot_wp_overlay`,
+applied as step 3b of `enrich_nfl_pbp` (sdv-py PR #435). Rather than quote that
+PR's numbers, this card re-scores 2025's overtime games through **whatever
+`sportsdataverse` this repo currently pins** and reports the result, so the
+paragraph below moves on its own when the dependency picks the overlay up and
+cannot go stale the way a typed-in number would.
+
+```{python}
+#| output: false
+import sportsdataverse.nfl.ep_wp as _ep_wp
+from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp
+
+_has_overlay = hasattr(_ep_wp, "_apply_ot_wp_overlay")
+_ot_gids = nv.filter(pl.col("qtr") >= 5)["game_id"].unique().to_list()
+_ot_games = nv.filter(pl.col("game_id").is_in(_ot_gids))
+_re = enrich_nfl_pbp(
+    _ot_games.drop([c for c in ("ep", "epa", "wp", "vegas_wp", "wpa") if c in _ot_games.columns]),
+    method="lead_diff", add_fourth_down=False,
+).with_columns(_ot_games["wp"].alias("wp_nv"), _ot_games["down"].alias("down_nv"))
+
+def _ot_err(frame):
+    d = frame.filter(pl.col("wp").is_finite() & pl.col("wp_nv").is_finite())
+    a, b = d["wp"].to_numpy(), d["wp_nv"].to_numpy()
+    e = a - b
+    return {"n": len(e), "mae": float(np.abs(e).mean()), "bias": float(e.mean()),
+            "r": float(np.corrcoef(a, b)[0, 1])}
+
+_live = _ot_err(_re.filter(pl.col("qtr") >= 5))
+_live_real = _ot_err(_re.filter((pl.col("qtr") >= 5) & pl.col("down_nv").is_not_null()))
+_live_null = _ot_err(_re.filter((pl.col("qtr") >= 5) & pl.col("down_nv").is_null()))
+_live_ident = float(
+    _re.filter((pl.col("qtr") >= 5) & pl.col("wp").is_not_null() & pl.col("vegas_wp").is_not_null())
+       .select((pl.col("wp") - pl.col("vegas_wp")).abs().lt(1e-12)).to_series().mean()
+)
+
+_state = (
+    "already carries the overlay, so these are the fixed-state numbers"
+    if _has_overlay else
+    "does not carry the overlay yet (this repo pins sportsdataverse at main and PR 435 "
+    "has not landed there), so these are still the broken-state numbers and this "
+    "paragraph rewrites itself on the next dependency bump"
+)
+_expect = (
+    "which is the signature of the other, still-unported overlay described below"
+    if _has_overlay else
+    "which is not yet meaningful: with the overlay off every overtime row is wrong for "
+    "the same reason, so the split carries no information"
+)
+```
+
+The `sportsdataverse` this repo resolves today `{python} _state`. Re-scoring 2025's `{python} f"{len(_ot_gids)}"` overtime games gives overtime
+`wp` MAE `{python} f"{_live['mae']:.4f}"`, bias
+`{python} f"{_live['bias']:+.4f}"`, r `{python} f"{_live['r']:.3f}"` on
+`{python} f"{_live['n']:,}"` overtime plays, with `vegas_wp == wp` on
+`{python} f"{_live_ident:.1%}"` of them against nflverse's
+`{python} f"{_ot_stats['vegas_eq_wp']:.1%}"`.
+
+Split by `down` — real overtime plays `{python} f"{_live_real['mae']:.4f}"`
+(n = `{python} f"{_live_real['n']:,}"`) against
+`{python} f"{_live_null['mae']:.4f}"` (n = `{python} f"{_live_null['n']:,}"`)
+on `down`-null rows (PATs, two-point tries, markers) — `{python} _expect`.
+
+What PR #435 measured, gated, and this card will reproduce once the pin moves:
+over ten seasons and 3,171 overtime plays, overtime `wp` MAE falls from a
+0.097-0.173 band to 0.014-0.052 and r rises from 0.379-0.885 to >= 0.871,
+while the **all-plays** MAE *improves* (2025: 0.0145 -> 0.0135) and regulation
+rows stay byte-identical. The residual there concentrates on `down`-null rows
+because nflfastR's PAT fix carries no `qtr` guard and overwrites the overtime
+value on exactly those rows with a spread-model number — that overlay is
+**not** ported, and it is the open issue recorded below.
+
 ## Avenues for improvement & open issues
 
 - **WPA parity ceiling (~0.89)** is an SNR limit of first-differencing WP —
@@ -497,18 +615,26 @@ parity path.
   agree at 0.96–0.997.
 - **Resolved (2026-09-01, PR #29):** the distributional heads are now scored as
   distributions, not just means — xYAC PIT uniformity and CRPS vs climatology.
-- **Open issue (found 2026-09-02, PR #29): overtime win probability diverges
-  materially from nflverse.** Measured on 2025: `wp` MAE
-  `{python} f"{_b['overtime']['wp_mae']:.3f}"` and bias
-  `{python} f"{_b['overtime']['wp_bias']:+.3f}"` on
-  `{python} f"{_b['overtime']['n']:,}"` overtime plays, against
-  `{python} f"{_b['all plays']['wp_mae']:.3f}"` / `{python} f"{_b['all plays']['wp_bias']:+.3f}"`
-  across all plays. Onside kicks show a smaller but systematic
-  `{python} f"{_b['onside kicks']['wp_bias']:+.3f}"` bias. OT is where the
-  sudden-death/possession rules make the WP state machine genuinely different,
-  so this is the first place to look; it is NOT explained by the low-variance
-  argument above, which is about correlation only. No gate covers per-branch
-  level error today — that is the gap this measurement exposes.
+- **Resolved (2026-09-02, PR #32):** the overtime divergence recorded here on
+  2026-09-02 is explained and fixed. It was a **missing port**, not a modelling
+  gap: nflfastR never scores overtime with the WP boosters, and sdv-py did. See
+  "Why overtime diverged" above for the two signatures that identify it from
+  nflverse's own columns. Fixed in sdv-py PR #435
+  (`_apply_ot_wp_overlay`), gated on a committed five-era overtime fixture
+  (MAE ceiling 0.035 / |bias| 0.030 / r floor 0.98, each set from the observed
+  0.0209 / -0.0149 / 0.9945 and each failing when the overlay is stubbed out).
+  **The branch table above still shows the pre-fix numbers** because it scores
+  the published `model_pbp_2025.parquet`, which predates the fix; republishing
+  `nfl_model_pbp` moves them.
+- **Open issue (found 2026-09-02, PR #32): the PAT / kickoff WP overlays are
+  still unported.** `add_wp_variables` applies two more post-prediction fixes
+  sdv-py's nflverse path does not: a PAT / two-point fix (L932-1041, no `qtr`
+  guard) and a regulation-only kickoff-touchback re-score (L1043-1069). The
+  overtime residual localises to exactly the rows the first one covers
+  (2025 overtime: MAE 0.024 on `down`-non-null rows vs 0.083 on `down`-null
+  rows). Quantifying and porting them touches every PAT and kickoff in the
+  dataset, so it is its own change with its own before/after — deliberately not
+  folded into the overtime fix.
 - **Avenue:** the same PIT/CRPS treatment for `fd_model`'s 76-class head. It is
   the same machinery, but the label is a *decision-conditioned* gain (teams
   choose which 4th downs to attempt), so the realized sample is selected and a

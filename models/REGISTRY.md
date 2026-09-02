@@ -21,10 +21,31 @@ Trained by `python -m model_training.play_level train` on the nflverse-parity
 | model | artifact(s) | release tag | training data | fitting script | gates at publish | last retrain | cadence |
 |---|---|---|---|---|---|---|---|
 | Expected Points | `ep_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.996** (floor r 0.98) | 2026-06 | annual (Mar 1) |
-| Win Probability (naive) | `wp_naive.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.997**; WP Brier cap per parity.md | 2026-06 | annual (Mar 1) |
-| Win Probability (spread) | `wp_spread.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.998** (`vegas_wp`); fitted `spread_time` decay exponent −4.0 recorded in the card (`derived_feature_constants`) + `features/wp_spread_v1.yaml`, gated trainer == registry == applier (`tests/test_feature_sets.py`) | 2026-06 | annual (Mar 1) |
+| Win Probability (naive) | `wp_naive.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.997**; WP Brier cap per parity.md; **not applied in overtime** — nflfastR scores `qtr > 4` with a closed form off the EP class probabilities and sets `vegas_wp = wp` (`add_wp_variables` L820-899), ported as `_apply_ot_wp_overlay` (sdv-py PR #435). Overtime `wp` MAE vs nflverse **0.014-0.052** over 10 seasons / 3,171 overtime plays (was 0.097-0.173 unported); gated on `tests/fixtures/nfl_ep_wp/overtime_games.parquet` at MAE <= **0.035** / |bias| <= **0.030** / r >= **0.98**, set from the observed 0.0209 / -0.0149 / 0.9945 | 2026-06 | annual (Mar 1) |
+| Win Probability (spread) | `wp_spread.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.998** (`vegas_wp`); fitted `spread_time` decay exponent −4.0 recorded in the card (`derived_feature_constants`) + `features/wp_spread_v1.yaml`, gated trainer == registry == applier (`tests/test_feature_sets.py`); **not applied in overtime** — nflfastR scores `qtr > 4` with a closed form off the EP class probabilities and sets `vegas_wp = wp` (`add_wp_variables` L820-899), ported as `_apply_ot_wp_overlay` (sdv-py PR #435). Overtime `wp` MAE vs nflverse **0.014-0.052** over 10 seasons / 3,171 overtime plays (was 0.097-0.173 unported); gated on `tests/fixtures/nfl_ep_wp/overtime_games.parquet` at MAE <= **0.035** / |bias| <= **0.030** / r >= **0.98**, set from the observed 0.0209 / -0.0149 / 0.9945 | 2026-06 | annual (Mar 1) |
 | Completion Probability | `cp_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | CPOE scale-correct vs nflfastR (percentage-point scale) | 2026-06 | annual (Mar 1) |
 | Expected YAC | `xyac_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | 76-class faithful add_xyac reproduction (sdv-py #114) | 2026-06 | annual (Mar 1) |
+
+## Known limitations
+
+- **Win probability in overtime is not a model output.** Following nflfastR,
+  `qtr > 4` uses a closed form off the EP class probabilities
+  (`Sudden_Death_WP = fg_prob + td_prob + safety_prob`, or
+  `td_prob + fg_prob * Win_Back` on the first overtime drive from 2012), with
+  `vegas_wp` set equal to `wp` — the spread model is not consulted. It is
+  therefore **spread-blind in overtime by construction**, and any downstream
+  consumer reading `vegas_wp` in overtime is reading the naive number.
+  Fitting an overtime-specific WP model is **not supportable**: a WP model
+  needs one label per game, and the whole both-possess era has 66 overtime
+  games (2025 alone: 16) across 1,304 plays — too thin to gate. Measured
+  1999-2025: 444 overtime games / 8,715 plays over five incompatible rules
+  eras (pre-2012 sudden death, 2012 modified, 2017 10-minute, 2022 playoff
+  both-possess, 2025 regular-season both-possess).
+- **Two nflfastR WP overlays remain unported** on the nflverse path: the PAT /
+  two-point fix (`add_wp_variables` L932-1041) and the regulation kickoff
+  touchback re-score (L1043-1069). The residual overtime error localises to the
+  rows the first covers — 2025 overtime `wp` MAE 0.024 on `down`-non-null rows
+  against 0.083 on `down`-null rows.
 
 ## Decision models → `nfl_4th_down_models` / `nfl_model_artifacts`
 

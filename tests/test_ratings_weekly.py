@@ -55,3 +55,20 @@ def test_build_season_empty_when_no_weeks():
         schedule_fn=lambda seasons: _schedule(),
     )
     assert out.height == 0
+
+
+def test_build_season_skips_unpublished_pbp_season():
+    """Before kickoff the season's pbp asset is absent (NoDataError), which the
+    Tuesday cron hit on its first in-season fire (2026-09-01). That is zero rows,
+    not a failure -- and the builder must not raise or retry every week."""
+    from sportsdataverse.errors import NoDataError
+
+    calls: list[dt.date] = []
+
+    def absent(season, *, as_of_date):
+        calls.append(as_of_date)
+        raise NoDataError("play_by_play_2026.parquet: 404")
+
+    out = build_season(2026, ratings_fn=absent, schedule_fn=lambda seasons: _schedule())
+    assert out.height == 0
+    assert len(calls) == 1

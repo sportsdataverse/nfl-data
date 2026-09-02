@@ -20,7 +20,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           # Sparse: these repos carry large committed data trees and a full
-          # checkout is slow to useless here -- no test reads them (verified).
+          # checkout is slow to useless here. The suite reads python/, tests/,
+          # scripts/, models/ (REGISTRY.md + manifest.yaml; the artifacts are
+          # gitignored), features/ (the *_v1.yaml feature-set gates) and
+          # .github/ (workflow wiring asserts) -- keep this list in step with
+          # tests/test_model_manifest.py, test_model_registry.py, test_feature_sets.py.
           sparse-checkout: |
             python
             tests

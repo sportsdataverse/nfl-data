@@ -5,12 +5,25 @@ Network-free: every test injects runner/exists_check stubs so no gh calls are ma
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from nfl_model_publish.artifacts import plan_uploads, upload_artifacts
 
 # ---------------------------------------------------------------------------
 # Fixture seeder
 # ---------------------------------------------------------------------------
+
+#: release metadata sidecars -- asserted separately, not a data asset
+SIDECARS = ("timestamp.", "package_function.")
+
+
+def _data_calls(calls):
+    """gh calls minus the four release sidecars."""
+    return [
+        c
+        for c in calls
+        if not (c[:2] == ["release", "upload"] and Path(c[3]).name.startswith(SIDECARS))
+    ]
 
 def _seed(tmp_path):
     """Create two .ubj models with their .json card sidecars."""
@@ -84,7 +97,7 @@ def test_creates_release_when_missing(tmp_path):
     assert calls[0][:4] == ["release", "create", "nfl_model_artifacts", "--repo"]
     assert res["created_release"] is True
     # 1 create + 4 uploads
-    assert len(calls) == 5
+    assert len(_data_calls(calls)) == 5
     assert res["uploaded"] == 4
 
 
@@ -105,7 +118,7 @@ def test_skips_create_when_present(tmp_path):
     assert res["created_release"] is False
     assert all(c[:2] != ["release", "create"] for c in calls)
     assert res["uploaded"] == 4
-    assert len(calls) == 4
+    assert len(_data_calls(calls)) == 4
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +156,7 @@ def test_pattern_uploads_matching_glob(tmp_path):
         runner=lambda args: calls.append(args),
         exists_check=lambda tag, repo: True,  # skip create
     )
-    names = {c[3].rsplit("\\", 1)[-1].rsplit("/", 1)[-1] for c in calls}
+    names = {Path(c[3]).name for c in _data_calls(calls)}
     assert names == {"roster_2022.parquet", "roster_2023.parquet"}
     assert res["uploaded"] == 2
 

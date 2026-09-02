@@ -21,6 +21,10 @@ import shutil
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from sportsdataverse.release import upload_release_sidecars
+
+from nfl_model_publish.artifacts import PKG_FUNCTION
+
 from .artifacts import _RELEASE_BODY, _gh_release_exists, _gh_runner
 
 __all__ = [
@@ -215,6 +219,7 @@ def publish_decision_models_artifacts(
                 run(["release", "create", tag, "--repo", repo, "--title", tag, "--notes", body])
                 created_releases.append(tag)
 
+    stamped: set[str] = set()
     for u in uploads:
         tag, path = str(u["tag"]), str(u["path"])
         if dry_run:
@@ -223,6 +228,12 @@ def publish_decision_models_artifacts(
             continue
         run(["release", "upload", tag, path, "--repo", repo, "--clobber"])
         u["uploaded"] = True
+        stamped.add(tag)
+
+    # stamp LAST so each tag's timestamp describes a finished upload, and only
+    # for tags something actually uploaded to
+    for tag in sorted(stamped):
+        upload_release_sidecars(tag, runner=run, pkg_function=PKG_FUNCTION.get(tag), repo=repo)
 
     # Copy the sdv-py bundle artifacts out (sdv-py commits them; never uploaded).
     for b in bundle:

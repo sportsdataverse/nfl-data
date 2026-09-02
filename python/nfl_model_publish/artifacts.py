@@ -9,9 +9,32 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from sportsdataverse.release import upload_release_sidecars
+
 GH_TIMEOUT_SECONDS = 300
 
 # Release-notes body used when auto-creating a missing release.
+#: Release sidecar metadata: the loader a consumer reads each tag through.
+#: R's sportsdataverse_save() writes this as package_function.txt/.json beside
+#: every published asset; the Python publisher dropped it along with the
+#: timestamp pair, so the nfl_* tags have never carried either. The model-artifact
+#: tags have no reader -- they are consumed by sdv-py at model-load time, not by a
+#: loader -- so they name their producer, the convention the ncaa_*_rapm tags
+#: already carry on their published sidecars. A tag that is not listed still gets
+#: its timestamp re-stamped; it just ships no package_function.
+PKG_FUNCTION: dict[str, str] = {
+    "nfl_4th_down_models": "python/nfl_model_publish/decision_models_artifacts.py",
+    "nfl_espn_qbr": "sportsdataverse.nfl.load_nfl_espn_qbr()",
+    "nfl_model_artifacts": "python/nfl_model_publish/artifacts.py",
+    "nfl_model_pbp": 'sportsdataverse.nfl.load_nfl_pbp(source="sdv")',
+    "nfl_player_stats": 'sportsdataverse.nfl.load_nfl_player_stats(source="sdv")',
+    "nfl_players": 'sportsdataverse.nfl.load_nfl_players(source="sdv")',
+    "nfl_ratings_weekly": "sportsdataverse.nfl.load_nfl_ratings_weekly()",
+    "nfl_rosters": 'sportsdataverse.nfl.load_nfl_rosters(source="sdv")',
+    "nfl_team_stats": 'sportsdataverse.nfl.load_nfl_team_stats(source="sdv")',
+}
+
+
 _RELEASE_BODY = {
     "nfl_model_artifacts": (
         "NFL model artifacts (EP/WP-spread/WP-naive/CP .ubj) + model cards."
@@ -144,6 +167,12 @@ def upload_artifacts(
             continue
         run(["release", "upload", tag, str(f), "--repo", repo, "--clobber"])
         uploaded += 1
+
+    # stamp LAST so the timestamp describes a finished upload, and only when
+    # something actually uploaded -- a stamp on a no-op run would claim data
+    # moved when it did not
+    if uploaded:
+        upload_release_sidecars(tag, runner=run, pkg_function=PKG_FUNCTION.get(tag), repo=repo)
 
     return {
         "uploaded": uploaded,

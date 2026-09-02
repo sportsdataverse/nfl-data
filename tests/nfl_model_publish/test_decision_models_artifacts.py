@@ -18,6 +18,8 @@ from nfl_model_publish.decision_models_artifacts import (
     publish_decision_models_artifacts,
 )
 
+#: release metadata sidecars -- asserted separately, not a data asset
+SIDECARS = ("timestamp.", "package_function.")
 
 def _seed(tmp_path: Path) -> Path:
     """Seed all six decision_models artifacts with distinct fake bytes."""
@@ -114,7 +116,12 @@ def test_uploads_route_to_correct_releases(tmp_path: Path):
     assert created == {"nfl_model_artifacts", "nfl_4th_down_models"}
     assert set(res["created_releases"]) == created
     # uploads target the mapped tag
-    up_calls = [c for c in calls if c[:2] == ["release", "upload"]]
+    up_calls = [
+        c
+        for c in calls
+        if c[:2] == ["release", "upload"]
+        and not Path(c[3]).name.startswith(SIDECARS)
+    ]
     by_name = {Path(c[3]).name: c[2] for c in up_calls}
     assert by_name == {
         "xpass_model.ubj": "nfl_model_artifacts",
@@ -138,7 +145,12 @@ def test_skips_create_when_release_present(tmp_path: Path):
     assert res["created_releases"] == []
     assert all(c[:2] != ["release", "create"] for c in calls)
     # 3 uploads, no creates
-    assert len([c for c in calls if c[:2] == ["release", "upload"]]) == 3
+    assert len([
+        c
+        for c in calls
+        if c[:2] == ["release", "upload"]
+        and not Path(c[3]).name.startswith(SIDECARS)
+    ]) == 3
 
 
 def test_bundle_copied_out(tmp_path: Path):

@@ -47,7 +47,7 @@ Copied into sdv-py's `sportsdataverse/nfl/models/` package data by
 |---|---|---|---|---|---|---|---|
 | Field Goal | `fg_model.ubj` | — (sdv-py bundle) | model_pbp 1999–2025, era-aware | `model_training/decision_models` | attempted-cells corr **0.971** (freq-wt 0.986) vs GAM grid | 2026-06 | annual (Mar 1) |
 | Two-Point | `two_pt_model.ubj` | — (sdv-py bundle) | model_pbp 2010–2025 | `model_training/decision_models` | **SOFT gate** — P(success) corr **0.806** vs the 0.99 floor (not lowered), recorded `SOFT FAIL` and tolerated by design (vintage drift documented in two_pt.md); labelled `SOFT PASS` / `SOFT FAIL` in CI, the ledger and report.md — never a hard-gate `PASS` | 2026-06 | annual (Mar 1) |
-| Punt Outcome Distribution | `punt_data.parquet` | — (sdv-py bundle) | model_pbp punt outcomes | `model_training/decision_models` | **two** gates: oracle freq-wt TV **0.0652** (≤0.10) + reality freq-wt KS vs the last 3 seasons **0.1466** (≤0.22) and mean-landing gap **+2.46 yd** (≤3.5) — `validate_punt_holdout` | 2026-06 | annual (Mar 1) |
+| Punt Outcome Distribution | `punt_data.parquet` | — (sdv-py bundle) | model_pbp punt outcomes | `model_training/decision_models` | **two** gates: oracle freq-wt TV **0.0652** (≤0.10) + reality freq-wt KS vs the last 3 seasons **0.1466** (≤0.22) and mean-landing gap **+2.48 yd** (≤3.5) — `validate_punt_holdout` | 2026-06 | annual (Mar 1) |
 
 ## Decision surfaces published as data
 

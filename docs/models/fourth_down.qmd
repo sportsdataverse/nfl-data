@@ -3,6 +3,7 @@ title: "Fourth-Down Yards (`fd_model`)"
 format:
   gfm:
     fig-dpi: 120
+    wrap: none
 execute:
   echo: false
   warning: false
@@ -30,20 +31,33 @@ CACHE = ROOT / "docs" / "models" / ".cache"
 CACHE.mkdir(exist_ok=True)
 fd_path = CACHE / "fd_model.ubj"
 if not fd_path.exists():
-    fd_path.write_bytes(requests.get(
+    fd_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_4th_down_models/fd_model.ubj",
-        timeout=600).content)
+        timeout=600))
 bst = xgb.Booster()
 bst.load_model(str(fd_path))
 pbp_path = CACHE / "model_pbp_2025.parquet"
 if not pbp_path.exists():
-    pbp_path.write_bytes(requests.get(
+    pbp_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
-        timeout=600).content)
+        timeout=600))
 pbp = pl.read_parquet(pbp_path)
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
+
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
+
 ```
 
 The fourth-down yards model predicts the **distribution of yards gained** on a
@@ -192,9 +206,9 @@ frames = []
 for season in YEARS:
     path = CACHE / f"model_pbp_{season}.parquet"
     if not path.exists():
-        path.write_bytes(requests.get(
+        path.write_bytes(_fetch(
             f"https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_{season}.parquet",
-            timeout=600).content)
+            timeout=600))
     frames.append(
         pl.read_parquet(path)
         .filter((pl.col("down") == 4) & pl.col("fourth_down_recommendation").is_not_null())

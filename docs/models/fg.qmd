@@ -3,6 +3,7 @@ title: "Field Goal (`fg_model`)"
 format:
   gfm:
     fig-dpi: 120
+    wrap: none
 execute:
   echo: false
   warning: false
@@ -31,20 +32,33 @@ CACHE = ROOT / "docs" / "models" / ".cache"
 CACHE.mkdir(exist_ok=True)
 pbp_path = CACHE / "model_pbp_2025.parquet"
 if not pbp_path.exists():
-    pbp_path.write_bytes(requests.get(
+    pbp_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_2025.parquet",
-        timeout=600).content)
+        timeout=600))
 pbp = pl.read_parquet(pbp_path)
 bst = _load_model("fg_model.ubj")
 ros_path = CACHE / "roster_2025.parquet"
 if not ros_path.exists():
-    ros_path.write_bytes(requests.get(
+    ros_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
-        timeout=300).content)
+        timeout=300))
 ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
+
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
+
 ```
 
 The field-goal model estimates the probability a placekick is **made**, given
@@ -177,6 +191,12 @@ headline number. The oracle is the nfl4th `mgcv` GAM, scored over its own grid
 and committed at `models/oracles/fg_model_grid_nfl4th.csv` (provenance in that
 directory's README); the booster is scored over the same grid here.
 
+**Scope: 2014–2025.** The nfl4th GAM is fit on 2014+ and its grid carries a
+two-level era flag that this repo maps onto `era3`/`era4`, so a 1999–2013
+attempt matches no grid cell. Comparing those seasons against this oracle would
+be comparing them against a model that never saw them; the booster-vs-reality
+section further down is the one that runs on all 27 published seasons.
+
 ```{python}
 #| output: false
 ORACLES = ROOT / "models" / "oracles"
@@ -194,14 +214,19 @@ grid = grid.with_columns(
                                               feature_names=feats)))
 )
 
-# The cells real kicks actually occupy, from every published season.
+# The cells real kicks actually occupy. Scoped to 2014-2025 deliberately: the
+# nfl4th GAM is fit on 2014+ (`_punt_and_fg_models.R`, `seasons <- 2014:current`)
+# and its grid carries only a two-level era, which this repo maps onto era3/era4.
+# A 1999-2013 attempt is era3=0, era4=0, matches no grid cell, and would simply
+# be dropped by the join below -- so the audit says 2014-2025 and means it.
+GAM_ORACLE_SEASONS = range(2014, 2026)
 att_frames = []
-for season in range(1999, 2026):
+for season in GAM_ORACLE_SEASONS:
     p = CACHE / f"model_pbp_{season}.parquet"
     if not p.exists():
-        p.write_bytes(requests.get(
+        p.write_bytes(_fetch(
             f"https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_{season}.parquet",
-            timeout=600).content)
+            timeout=600))
     att_frames.append(
         pl.read_parquet(p)
         .filter(pl.col("field_goal_result").is_in(["made", "missed", "blocked"]))
@@ -257,7 +282,7 @@ gt_show(
 where 10,819 of the 12,788 attempted-cell attempts live — the two models agree
 to a mean absolute make-probability difference of 0.005–0.012. From 50 yards the
 agreement degrades (0.047), and past 60 it collapses (0.173 mean, 0.347 max) on
-**86 attempts across 27 seasons**. That is the whole story of the headline
+**86 attempts across the 12 audited seasons**. That is the whole story of the headline
 number: the cells that carry the disagreement are the cells almost nobody kicks
 from, which is also why the frequency-weighted correlation (0.988) is so much
 higher than the unweighted one.
@@ -325,7 +350,11 @@ sched_all = load_nfl_schedule(list(range(1999, 2026))).select(
     "game_id", "surface", pl.col("roof").alias("roof_sched"), "temp", "wind", "stadium_id")
 hist = hist.join(sched_all, on="game_id", how="left")
 by_surface = (
-    hist.filter(pl.col("surface").is_not_null())
+    # Raw labels carry a trailing-space variant ("grass " alongside "grass") and
+    # an empty string; grouping the raw column splits grass across two rows and
+    # makes the per-surface read ambiguous.
+    hist.with_columns(pl.col("surface").str.strip_chars().str.to_lowercase().alias("surface"))
+    .filter(pl.col("surface").is_not_null() & (pl.col("surface") != ""))
     .group_by("surface").agg(pl.len().alias("n"), pl.col("made").mean().alias("empirical"),
                              pl.col("p").mean().alias("model"))
     .filter(pl.col("n") >= 200)
@@ -429,7 +458,7 @@ or weather**, and the section above quantifies what the last two cost. The
 step-function booster does not extrapolate the smooth GAM tail past the attempted
 domain, so very long / never-attempted cells should be read with caution (this is
 the freq-weighted vs full-grid corr gap). The render-time scoring above pins era4
-for current-season attempts, which is exact for 2018+.
+for the 2025 attempts it scores, which is exact for 2018+.
 
 ## Provenance
 
@@ -450,7 +479,7 @@ for current-season attempts, which is exact for 2018+.
 - **Resolved (2026-09-01, PR #29):** *the 0.97 parity audit.* The residual is
   the long-distance tail and nothing else: corr vs the GAM is 0.961 under 30
   yards, 0.950 at 30-39, 0.954 at 40-49, 0.864 at 50-59 and 0.679 at 60+ (86
-  attempts in 27 seasons). Era mapping and roof do not separate. Against reality
+  attempts in the 12 audited seasons). Era mapping and roof do not separate. Against reality
   the booster is well calibrated (per-surface bias <= 0.025), so the number is a
   functional-form disagreement in a region neither model has data for -- an
   honest residual, not a defect to chase.

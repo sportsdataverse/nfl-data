@@ -12,6 +12,8 @@ interpolating the committed GAM term curves reproduces ``mgcv::predict.gam``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import polars as pl
 from model_training.play_level.validate import (
@@ -21,7 +23,8 @@ from model_training.play_level.validate import (
     validate_dakota,
 )
 
-ORACLE = "models/oracles"
+# Resolved from THIS file, not the CWD: pytest may be invoked from python/.
+ORACLE = Path(__file__).resolve().parents[1] / "models" / "oracles"
 
 
 def test_gam_interpolation_reproduces_mgcv():
@@ -30,7 +33,7 @@ def test_gam_interpolation_reproduces_mgcv():
     If this fails the interpolation is broken, not the fixture -- the fixture is
     literally predict.gam's own output. Measured max error 8.0e-06.
     """
-    chk = pl.read_csv(f"{ORACLE}/dakota_gam_check.csv")
+    chk = pl.read_csv(ORACLE / "dakota_gam_check.csv")
     got = dakota_gam_predict(chk["cpoe"].to_numpy(), chk["epa_per_play"].to_numpy())
     assert np.max(np.abs(got - chk["dakota"].to_numpy())) < 1e-4
 

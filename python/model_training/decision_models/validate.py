@@ -329,8 +329,9 @@ def validate_punt(
 #: docs/models/punt.md. Never raise it to make a build pass -- diagnose instead.
 PUNT_HOLDOUT_KS_MAX: float = 0.22
 #: Max |surface expected landing - realized mean landing| in yards on the holdout
-#: snap mix. Observed 2026-09-01: 0.27 yd on 2010-2014, 2.12 yd pooled 2020-2025,
-#: worst single season 2.58 (2024). Same never-lower rule.
+#: snap mix, over the SAME yardlines KS scores. Observed 2026-09-02: 0.27 yd on
+#: 2010-2014, 2.12 yd pooled 2020-2025, 2.48 on the 3-season gate window, worst
+#: single season 2.77 (2024). Same never-lower rule.
 PUNT_HOLDOUT_MEAN_YARDS_MAX: float = 3.5
 #: A yardline needs this many real holdout punts before its empirical landing
 #: distribution is worth comparing against. Below it the comparison measures
@@ -438,7 +439,7 @@ def validate_punt_holdout(
         return out
 
     surf_by, emp_by = _by_yardline(surface, "pct"), _by_yardline(empirical, "p")
-    ks_vals, tv_vals, weights = [], [], []
+    ks_vals, tv_vals, weights, qualified = [], [], [], []
     for yardline in sorted(set(surf_by) & set(emp_by)):
         if punts_at.get(yardline, 0.0) < min_punts_per_yardline:
             continue
@@ -453,6 +454,7 @@ def validate_punt_holdout(
         ks_vals.append(ks)
         tv_vals.append(0.5 * tv)
         weights.append(punts_at[yardline])
+        qualified.append(yardline)
 
     ks_arr = np.asarray(ks_vals, dtype=np.float64)
     tv_arr = np.asarray(tv_vals, dtype=np.float64)
@@ -467,6 +469,10 @@ def validate_punt_holdout(
         real.group_by("yardline_100")
         .agg(pl.col("yardline_after").mean().alias("realized_after"), pl.len().alias("n"))
         .join(expected, on="yardline_100", how="inner")
+        # Same qualified set as KS. Without this a yardline too sparse for KS to
+        # score could still swing the mean and fail the gate on its own -- two
+        # criteria measuring different populations is not a gate, it is a coin.
+        .filter(pl.col("yardline_100").is_in(qualified))
     )
     if landed.height:
         n_at = landed["n"].to_numpy().astype(float)

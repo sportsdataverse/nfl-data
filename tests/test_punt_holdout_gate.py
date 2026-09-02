@@ -109,14 +109,25 @@ def test_mean_yards_criterion_bites_when_ks_alone_would_pass():
     assert res["gate_pass"] is False
 
 
-def test_thin_yardlines_are_excluded_not_silently_scored():
-    """A yardline with too few real punts must drop out, not contribute noise."""
+def test_thin_yardlines_are_excluded_from_BOTH_criteria():
+    """A yardline too sparse for KS must not swing the mean criterion either.
+
+    One qualifying yardline that matches exactly, plus one 5-punt yardline whose
+    surface is 69 yards off. Before the qualified-set filter the sparse yardline
+    was excluded from KS but still weighted into the mean, giving a
+    mean_landing_diff of ~9.9 yd and failing the gate on data KS never scored --
+    two criteria measuring different populations.
+    """
     pbp = _pbp({60.0: [20.0] * 30, 75.0: [30.0] * 5})
     surface = _surface({60.0: {20.0: 1.0}, 75.0: {99.0: 1.0}})
     res = validate_punt_holdout(surface, pbp)
     assert res["n_yardlines"] == 1, "the 5-punt yardline must be excluded from KS"
     assert res["weighted_ks"] < 1e-9
-    # ...but it is still counted in n_punts, so the exclusion is visible.
+    # ...and excluded from the mean too: only the matching yardline is scored.
+    assert abs(res["mean_landing_diff"]) < 1e-9
+    assert res["mean_landing_surface"] == 20.0
+    assert res["gate_pass"] is True
+    # ...but it is still counted in n_punts, so the exclusion stays visible.
     assert res["n_punts"] == 35
 
 

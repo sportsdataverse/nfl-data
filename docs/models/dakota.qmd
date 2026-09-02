@@ -3,6 +3,7 @@ title: "dakota (QB efficiency metric)"
 format:
   gfm:
     fig-dpi: 120
+    wrap: none
 execute:
   echo: false
   warning: false
@@ -31,13 +32,13 @@ frames = {}
 for season in (2024, 2025):
     p = CACHE / f"model_pbp_{season}.parquet"
     if not p.exists():
-        p.write_bytes(requests.get(f"{DL}/model_pbp_{season}.parquet", timeout=600).content)
+        p.write_bytes(_fetch(f"{DL}/model_pbp_{season}.parquet", timeout=600))
     frames[season] = pl.read_parquet(p)
 ros_path = CACHE / "roster_2025.parquet"
 if not ros_path.exists():
-    ros_path.write_bytes(requests.get(
+    ros_path.write_bytes(_fetch(
         "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_rosters/roster_2025.parquet",
-        timeout=300).content)
+        timeout=300))
 ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset="gsis_id")
 
 def passer_season(df, season):
@@ -57,6 +58,19 @@ ps = {s: passer_season(frames[s], s) for s in frames}
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
+
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
+
 ```
 
 `dakota` is a **derived metric, not a trained model** — the nflfastR
@@ -169,7 +183,7 @@ gate_frames = []
 for season in range(2006, 2026):
     p = CACHE / f"model_pbp_{season}.parquet"
     if not p.exists():
-        p.write_bytes(requests.get(f"{DL}/model_pbp_{season}.parquet", timeout=600).content)
+        p.write_bytes(_fetch(f"{DL}/model_pbp_{season}.parquet", timeout=600))
     gate_frames.append(pl.read_parquet(p).select(gate_cols))
 gate_pbp = pl.concat(gate_frames, how="vertical_relaxed")
 g = validate_dakota(gate_pbp)

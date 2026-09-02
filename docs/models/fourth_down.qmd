@@ -150,10 +150,22 @@ curve = pl.concat([model_curve, emp])
 ```
 
 Teams *choose* which 4th downs to attempt, so the realized curve reflects
-selection (coaches go when they like the matchup) while the model curve is the
-unconditional estimate at a fixed neutral state — the gap between them is
-selection, not error. That distinction is the whole reason the decision layer
-values options with a model rather than empirical rates.
+selection while the model curve is the unconditional estimate at a fixed neutral
+state — the gap between them is selection, not error. That distinction is the
+whole reason the decision layer values options with a model rather than
+empirical rates.
+
+**What the selection actually is** was measured separately over 42,454 fourth
+downs, 2014–2025 REG (7,501 go attempts), and it is not the intuitive story.
+Coaches are *not* mainly going when they like the matchup: goers and non-goers
+differ by −0.60 SD on score differential and −0.57 SD on time remaining, but only
+−0.13 SD on market-implied team quality. **Selection is on game state, not on who
+is playing.** The pooled conversion gap is +11.6 pp, but it is compositional —
+within matched distance and field-position cells the gap *flips negative* (to
+−0.14 in the 3–5 and 6–10 yard cells). So the empirical curve sitting above the
+model is a mix effect, not evidence that attempted 4th downs are easier than the
+model thinks; conditioning on distance removes it and then some. Full method and
+numbers: `ClaudeCowork/notes/2026-09-02-odds-dispersion-and-postgame-we/`.
 
 ## The decision surface in use — 2025
 
@@ -269,6 +281,31 @@ coaches = coaches.with_columns(
 )
 _top, _bot = coaches.row(0, named=True), coaches.row(coaches.height - 1, named=True)
 _disjoint = _top["gws_lo"] > _bot["gws_hi"]
+
+# Wilson answers "are the two extremes separable?". It does not answer "how much
+# of the SPREAD is real?" -- for that, split the observed between-coach variance
+# into true and sampling parts. Note the >=150 cut is on `decisions` (all fourth
+# downs) while the ranking is on a rate denominated in `n_should`, a median of
+# roughly half that, so the cut does not bound the ranking's noise.
+_var_obs = float(coaches["go_when_should"].var())
+_pbar = league_go_when_should
+_var_noise = float((_pbar * (1 - _pbar) / coaches["n_should"]).mean())
+_var_true = max(_var_obs - _var_noise, 0.0)
+_reliability = _var_true / _var_obs if _var_obs else 0.0
+# empirical-Bayes shrinkage toward the league rate, weight = true/(true+noise)
+_shr = coaches.with_columns(
+    (_var_true / (_var_true + _pbar * (1 - _pbar) / pl.col("n_should"))).alias("w")
+).with_columns((_pbar + pl.col("w") * (pl.col("go_when_should") - _pbar)).alias("p_shrunk"))
+_rng_raw = float(coaches["go_when_should"].max() - coaches["go_when_should"].min())
+_rng_shr = float(_shr["p_shrunk"].max() - _shr["p_shrunk"].min())
+_ratio_raw = float(coaches["go_when_should"].max() / coaches["go_when_should"].min())
+_ratio_shr = float(_shr["p_shrunk"].max() / _shr["p_shrunk"].min())
+_nsh_med, _dec_med = int(coaches["n_should"].median()), int(coaches["decisions"].median())
+_churn = int(_shr.with_columns(
+    pl.col("go_when_should").rank(descending=True).alias("a"),
+    pl.col("p_shrunk").rank(descending=True).alias("b"),
+).filter((pl.col("a") - pl.col("b")).abs() >= 5).height)
+_max_shrunk = float(_shr["p_shrunk"].max())
 ```
 
 ```{python}
@@ -299,7 +336,23 @@ Three things this makes visible that the league-wide number cannot:
   versus
   `{python} f"{_bot['coach']} {_bot['go_when_should']:.1%} [{_bot['gws_lo']:.1%}, {_bot['gws_hi']:.1%}] on n={int(_bot['n_should'])}"`
   — `{python} "disjoint, so the gap is not sampling noise" if _disjoint else "OVERLAPPING, so the extremes are not separable at 95% and the range should be read as observed spread only"`.
-- **Every coach is conservative relative to the model.** Even the top of the
+  Separability is not the same question as magnitude, though, and the raw range
+  overstates the magnitude. The `>=150` cut is on `decisions`, while the ranked
+  rate is denominated in recommended-go plays — a median of
+  `{python} f"{_nsh_med}"` against `{python} f"{_dec_med}"` — so the cut never
+  bounded the ranking's noise. Splitting the between-coach variance into true and
+  sampling parts puts reliability at `{python} f"{_reliability:.2f}"`, i.e.
+  `{python} f"{(1-_reliability)*100:.0f}"`% of the visible spread is sampling
+  error. Shrinking each coach toward the league rate by his own precision narrows
+  the range from `{python} f"{_rng_raw*100:.1f}"` pp to
+  `{python} f"{_rng_shr*100:.1f}"` pp and the "twice as often" ratio to
+  `{python} f"{_ratio_shr:.1f}"`×. **Both readings are true: the spread is real
+  (Wilson) and smaller than it looks (shrinkage) — quote the shrunk range.** The
+  *ordering* is durable: `{python} f"{_churn}"` coaches move five or more places
+  under shrinkage.
+- **Every coach is conservative relative to the model**, and this survives
+  shrinkage — the most aggressive coach's shrunk rate is
+  `{python} f"{_max_shrunk:.1%}"`. Even the top of the
   table converts only half of the model's go recommendations. The gap is
   systematic, not a handful of outliers, which is the honest reading: either
   coaches price in things the model cannot see (personnel, weather, injury,
@@ -328,6 +381,17 @@ on penalty/lateral plays — label noise at the tails. The gain window is clippe
 to [−10, 65]. It predicts a *yardage distribution*, not the binary decision; the
 decision EV is computed downstream.
 
+**The recommendation is a point estimate with no interval, and the interval is
+wide.** Split-conformal prediction sets at 90% over the same 2014–2025 sample
+achieve 0.892 empirical coverage (CI [0.876, 0.907], clustered by game — the
+calibration is honest), but at that confidence **64.3% of go attempts are
+uncallable**: the prediction set contains both outcomes, so the model cannot
+distinguish convert from fail for roughly two thirds of the attempts it scores.
+Treat `fourth_down_recommendation` as a decision rule under uncertainty, not as a
+claim about what will happen on the play. This does not impugn the EV comparison
+— an EV rule is still correct on average when each individual call is uncertain —
+but it does bound how much weight a single flagged decision can carry.
+
 ## Provenance
 
 | field | value |
@@ -353,7 +417,12 @@ decision EV is computed downstream.
   was never satisfiable — the `*_wp_diff` columns are differences against the
   best option, so they are always `<= 0`. It now reads
   `fourth_down_recommendation`.
-- **Whether the residual gap is coaches or the model** is not settled here.
+- **Whether the residual gap is coaches or the model** got narrower on one side
+  (2026-09-02): "coaches price in unobservables" needs those unobservables to
+  correlate with the go decision, and measured selection is on game state
+  (−0.60 SD score differential) and barely on team quality (−0.13 SD) — a
+  *situational* rule rather than a matchup read. That weakens, without
+  eliminating, the unobservables story. It is still not settled here.
   Every coach being conservative relative to the surface is equally consistent
   with coaches pricing in unobservables and with the go branch being optimistic;
   separating them needs a holdout on realized outcomes, not more slicing.

@@ -160,5 +160,10 @@ inherits the home-perspective framing and the EP model's drift through `home_ep`
 - **Unify with the main WP family** — the nfl4th contract keeps a separate
   home-perspective model; folding it into the spread family would remove a
   dual-maintenance surface.
-- **Known issue:** trains on cal_data.rds (2001-2020); its window lags the
-  main models and a missing file silently skips the model in train-all.
+- **Resolved (2026-09-01, PR #28) — the silent skip:** a missing
+  `cal_data.rds` now fails the stage / `train-all` (rc 1) unless
+  `--allow-skip` / `--allow-missing-cal-data`, which record `status: SKIPPED`
+  with the reason in `models/ledger.jsonl` and report.md.
+- **Known issue:** the training window (2001-2020) still lags the main models;
+  extending it needs the calibration frame rebuilt from current `model_pbp`
+  (with `ep` and `Winner`) and the P(win) parity floor re-derived — not lowered.

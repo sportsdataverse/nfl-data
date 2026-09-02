@@ -21,6 +21,7 @@ from plotnine import (
 )
 from great_tables import GT
 from IPython.display import HTML, display
+from sportsdataverse.nfl import load_nfl_schedule, load_nfl_teams
 
 ROOT = Path.cwd()
 while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
@@ -143,27 +144,133 @@ values options with a model rather than empirical rates.
 ## The decision surface in use — 2025
 
 The published pbp carries the nfl4th-style decision columns (`go_wp_diff`,
-`fg_wp_diff`, `punt_wp_diff` — each option's WP against the best alternative),
-so the decision layer's output is directly observable:
+`fg_wp_diff`, `punt_wp_diff`) plus `fourth_down_recommendation`.
+
+**Read the `*_wp_diff` columns carefully**: each is that option's WP *minus the
+best option's*, so every one of them is `<= 0` and the recommended option is the
+one sitting at exactly `0`. A `go_wp_diff > 0` test is therefore always false —
+it is never satisfied on any play in any season — and a table built on it
+silently reports "the model never says go" plus an agreement rate that is really
+just the share of 4th downs teams did not go for. This document made that
+mistake until 2026-09-01. The unambiguous column is
+`fourth_down_recommendation`, which matches `go_wp_diff == 0` exactly (2025:
+2,004 of 2,004; 2024: 1,860 of 1,860), so it is what the tables below use.
 
 ```{python}
-dec = pbp.filter((pl.col("down") == 4) & pl.col("go_wp_diff").is_not_null())
-went = dec.filter(pl.col("play_type").is_in(["pass", "run"]))
-should = dec.filter(pl.col("go_wp_diff") > 0)
-agree = dec.with_columns(
-    (pl.col("play_type").is_in(["pass", "run"]) == (pl.col("go_wp_diff") > 0)).alias("agree"))
+dec = pbp.filter((pl.col("down") == 4) & pl.col("fourth_down_recommendation").is_not_null())
+dec = dec.with_columns(
+    pl.col("play_type").is_in(["pass", "run"]).fill_null(False).alias("went"),
+    (pl.col("fourth_down_recommendation") == "go").alias("should_go"),
+)
 gt_show(
     GT(pl.DataFrame({
-        "check": ["4th downs with decision columns", "model says GO (go_wp_diff > 0)",
-                  "teams actually went", "coach–model agreement rate"],
-        "value": [float(dec.height), float(should.height), float(went.height),
-                  float(agree["agree"].mean())],
+        "check": ["4th downs with a recommendation", "model says GO",
+                  "teams actually went", "went WHEN the model says go",
+                  "went when the model says kick", "coach–model agreement rate"],
+        "value": [float(dec.height), float(dec["should_go"].sum()), float(dec["went"].sum()),
+                  float(dec.filter(pl.col("should_go"))["went"].mean()),
+                  float(dec.filter(~pl.col("should_go"))["went"].mean()),
+                  float((dec["went"] == dec["should_go"]).mean())],
     }).to_pandas())
     .tab_header(title="Decision layer vs coaches — 2025 season",
-                subtitle="go_wp_diff > 0 means going for it maximizes WP among the four options")
+                subtitle="the model recommends going on ~47% of 4th downs; teams go on ~21%")
     .fmt_number(columns="value", decimals=3)
 )
 ```
+
+## Coach-indexed decision calibration, 2021–2025
+
+League-wide agreement hides the thing the decision surface is actually used to
+argue about, which is that coaches differ. Indexing by the coach on the sideline
+(from the schedule's `home_coach` / `away_coach`, assigned to whichever side had
+the ball) turns one number into a distribution:
+
+```{python}
+#| output: false
+YEARS = [2021, 2022, 2023, 2024, 2025]
+frames = []
+for season in YEARS:
+    path = CACHE / f"model_pbp_{season}.parquet"
+    if not path.exists():
+        path.write_bytes(requests.get(
+            f"https://github.com/sportsdataverse/sportsdataverse-data/releases/download/nfl_model_pbp/model_pbp_{season}.parquet",
+            timeout=600).content)
+    frames.append(
+        pl.read_parquet(path)
+        .filter((pl.col("down") == 4) & pl.col("fourth_down_recommendation").is_not_null())
+        .select("game_id", "season", "posteam", "home_team", "play_type",
+                "fourth_down_recommendation", "go_boost")
+    )
+multi = pl.concat(frames, how="vertical_relaxed")
+
+sched = load_nfl_schedule(YEARS).select("game_id", "home_coach", "away_coach")
+teams = load_nfl_teams().select("team_abbr", "team_logo_espn")
+multi = multi.join(sched, on="game_id", how="left").with_columns(
+    pl.when(pl.col("posteam") == pl.col("home_team")).then(pl.col("home_coach"))
+      .otherwise(pl.col("away_coach")).alias("coach"),
+    pl.col("play_type").is_in(["pass", "run"]).fill_null(False).alias("went"),
+    (pl.col("fourth_down_recommendation") == "go").alias("should_go"),
+).filter(pl.col("coach").is_not_null())
+
+coaches = (
+    multi.group_by("coach").agg(
+        pl.len().alias("decisions"),
+        pl.col("posteam").last().alias("team"),
+        pl.col("should_go").mean().alias("model_go_rate"),
+        pl.col("went").mean().alias("actual_go_rate"),
+        pl.col("went").filter(pl.col("should_go")).mean().alias("go_when_should"),
+        pl.col("went").filter(~pl.col("should_go")).mean().alias("go_when_kick"),
+        # go_boost is the WP gain (percentage points) the model attributes to
+        # going; summed over the recommended-go plays a coach kicked away, it is
+        # the WP that decision cost him.
+        pl.col("go_boost").filter(pl.col("should_go") & ~pl.col("went")).sum().alias("wp_forgone"),
+    )
+    .filter(pl.col("decisions") >= 150)
+    .with_columns((pl.col("wp_forgone") / pl.col("decisions")).alias("wp_forgone_per_decision"))
+    .join(teams, left_on="team", right_on="team_abbr", how="left")
+    .with_columns(("<img src='" + pl.col("team_logo_espn").fill_null("") + "' height='26'/>").alias("logo"))
+    .sort("go_when_should", descending=True)
+)
+league_go_when_should = float(multi.filter(pl.col("should_go"))["went"].mean())
+```
+
+```{python}
+show = pl.concat([coaches.head(8), coaches.tail(8)])
+gt_show(
+    GT(show.select("logo", "coach", "decisions", "model_go_rate", "actual_go_rate",
+                   "go_when_should", "go_when_kick", "wp_forgone_per_decision").to_pandas())
+    .tab_header(title="Aggressiveness on 4th down by head coach — 2021–2025",
+                subtitle=f"top 8 and bottom 8 of {coaches.height} coaches with >=150 decisions; "
+                         f"league go-rate when the model says go is {league_go_when_should:.1%}")
+    .fmt_markdown(columns="logo")
+    .fmt_percent(columns=["model_go_rate", "actual_go_rate", "go_when_should", "go_when_kick"], decimals=1)
+    .fmt_number(columns="wp_forgone_per_decision", decimals=3)
+    .cols_label(logo="", coach="Coach", decisions="Dec", model_go_rate="Model go%",
+                actual_go_rate="Actual go%", go_when_should="Go when told",
+                go_when_kick="Go when told to kick", wp_forgone_per_decision="WP pts left / dec")
+)
+```
+
+Three things this makes visible that the league-wide number cannot:
+
+- **The spread is large and it is not noise.** Go-rate-when-the-model-says-go
+  runs from 25% to 50% across coaches — the most aggressive coach in the sample
+  goes twice as often as the most conservative *in the same recommended
+  situations*.
+- **Every coach is conservative relative to the model.** Even the top of the
+  table converts only half of the model's go recommendations. The gap is
+  systematic, not a handful of outliers, which is the honest reading: either
+  coaches price in things the model cannot see (personnel, weather, injury,
+  job security) or the model's go branch is optimistic. This document cannot
+  separate those two.
+- **`model_go_rate` differs by coach too**, which is a *situation* effect, not a
+  tendency one — a coach whose team trails often faces more go-recommended 4th
+  downs. Read `go_when_should` (a rate *within* recommended situations), not
+  `actual_go_rate`, when comparing coaches.
+
+The WP column is deliberately the *per-decision* average rather than a season
+total, so a coach with 659 decisions is not penalised against one with 154 for
+merely having coached more games.
 
 ## Decision surface
 
@@ -196,7 +303,17 @@ decision EV is computed downstream.
 
 ## Avenues for improvement & open issues
 
-- **Coach-level tendencies** — decision calibration is league-wide; a
-  coach-indexed layer would localize it.
+- **Resolved (2026-09-01, PR #29):** *Coach-level tendencies* — decision
+  calibration is now indexed by head coach (2021–2025, 42 coaches with >=150
+  decisions). Go-rate within model-recommended situations spans 25%–50% against
+  a 36% league rate, and every coach in the sample sits below the model.
+- **Resolved (2026-09-01, PR #29):** the decision table's `go_wp_diff > 0` test
+  was never satisfiable — the `*_wp_diff` columns are differences against the
+  best option, so they are always `<= 0`. It now reads
+  `fourth_down_recommendation`.
+- **Whether the residual gap is coaches or the model** is not settled here.
+  Every coach being conservative relative to the surface is equally consistent
+  with coaches pricing in unobservables and with the go branch being optimistic;
+  separating them needs a holdout on realized outcomes, not more slicing.
 - **Known issue:** the 76-class yards head shares the xYAC machinery — the
   multiclass pred_contribs 3-D gotcha applies to any explainability pass.

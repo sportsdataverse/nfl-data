@@ -154,7 +154,24 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         wp_brier_threshold=args.wp_threshold,
     )
 
-    return 0 if result["overall_pass"] else 1
+    passed = result["overall_pass"]
+
+    # dakota is opt-in: it is a derived metric with no artifact and no stage, and
+    # it needs a MULTI-season span (>= 100 passer-season pairs from 2006 on),
+    # which the EP/WP sample_seasons deliberately are not. Run it with the annual
+    # retrain: --dakota-seasons 2006 2025.
+    if args.dakota_seasons:
+        from .ingest import load_local_pbp
+        from .validate import validate_dakota
+
+        lo, hi = min(args.dakota_seasons), max(args.dakota_seasons)
+        pbp = load_local_pbp(list(range(lo, hi + 1)), data_dir=Path(args.data_dir))
+        dakota = validate_dakota(pbp)
+        print(f"[validate] dakota: {dakota}")
+        print(f"[validate] dakota gate -> {'PASS' if dakota['gate_pass'] else 'FAIL'}")
+        passed = passed and dakota["gate_pass"]
+
+    return 0 if passed else 1
 
 
 def _cmd_fetch(args: argparse.Namespace) -> int:
@@ -232,6 +249,9 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Minimum Pearson r for EP gate (default 0.98)")
     p_val.add_argument("--wp-threshold", type=float, default=0.20, metavar="BS",
                        help="Maximum Brier score for WP gate (default 0.20)")
+    p_val.add_argument("--dakota-seasons", nargs="+", type=int, default=None, metavar="YEAR",
+                       help="Also run the dakota gate over this season span (e.g. 2006 2025); "
+                            "needs >=100 passer-season pairs from 2006 on, so it is off by default")
 
     # ------------------------------------------------------------------ fetch
     p_fetch = sub.add_parser("fetch", help="Build raw JSON library from NFL API")

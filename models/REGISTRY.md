@@ -60,7 +60,7 @@ Copied into sdv-py's `sportsdataverse/nfl/models/` package data by
 | model | status |
 |---|---|
 | QBR (`qbr_model.ubj`) | card at `docs/models/qbr.md`; artifact ships in sdv-py's bundle. Fitting script: TODO (not in `model_training/`); last retrain: TODO. Add the row's facts when the trainer is located or ported into this repo. |
-| dakota | derived metric (EPA + CPOE composite) — no artifact to register; see `docs/models/dakota.md`. |
+| dakota | derived metric (EPA + CPOE composite) — no artifact to register; see `docs/models/dakota.md`. **Gated** by `play_level.validate.validate_dakota` (opt-in: `python -m model_training.play_level validate … --dakota-seasons 2006 2025`). Measured on model_pbp 2006–2025, 488 passer-season pairs (2026-09-01): CPOE YoY r **0.7031** (floor 0.60) vs EPA/play's 0.4508 — the blend's premise; dakota YoY r **0.6820** (floor 0.58) at a **+0.2313** margin over EPA (floor 0.15); agreement with the published nflfastR GAM r **0.8542** (floor 0.80). **Recalibration cadence: re-run this gate whenever `ep` or `cp` retrains** — dakota consumes both and its coefficients are frozen constants in sdv-py that no retrain touches, so a drifting input silently changes the metric. Reported, not gated: the linear blend does **not** out-forecast raw EPA/play for next-season EPA/play (0.3007 vs 0.4508). |
 
 ## Operability (Track C steps 2–6)
 

@@ -274,3 +274,189 @@ def run_parity_gate(
         "wp": wp_result,
         "overall_pass": overall,
     }
+# ---------------------------------------------------------------------------
+# dakota — the derived EPA/CPOE composite (no artifact; gate its premise)
+# ---------------------------------------------------------------------------
+#: sdv-py ships dakota as a fixed linear blend
+#: (``sportsdataverse/nfl/nfl_stats.py``): 0.816*EPA/dropback + 0.184*CPOE.
+DAKOTA_LINEAR_COEFFICIENTS: "tuple[float, float]" = (0.816, 0.184)
+#: Dropback minimum for a qualifying passer-season. 200 keeps ~26 passers per
+#: season -- roughly the set of full-time starters.
+DAKOTA_MIN_DROPBACKS: int = 200
+#: Floors for the blend's PREMISE, measured on model_pbp 2006-2025 (488 qualifying
+#: passer-season pairs, 2026-09-01): CPOE year-over-year r = 0.7031 vs EPA/play's
+#: 0.4508, and dakota itself carries 0.6820 -- i.e. blending in the stable input
+#: buys +0.2312 of year-to-year stability. Floors sit below the observed values so
+#: they detect a regression in an input model; never lower them to make a build
+#: pass. CPOE is only defined from 2006 (air-yards charting), so pre-2006 pairs
+#: cannot enter this gate at all.
+DAKOTA_CPOE_STABILITY_FLOOR: float = 0.60
+DAKOTA_STABILITY_FLOOR: float = 0.58
+DAKOTA_STABILITY_MARGIN_FLOOR: float = 0.15
+#: Floor for agreement between the shipped linear blend and the published
+#: nflfastR GAM it approximates (observed r = 0.8542 pooled; worst season pair
+#: 0.8348). This is the number that should move when either input model is
+#: retrained -- see the recalibration-cadence row in models/REGISTRY.md.
+DAKOTA_GAM_FIDELITY_FLOOR: float = 0.80
+#: Minimum pairs before the correlations mean anything.
+DAKOTA_MIN_PAIRS: int = 100
+
+_ORACLE_DIR = Path(__file__).resolve().parents[3] / "models" / "oracles"
+
+
+def dakota_gam_predict(cpoe: np.ndarray, epa_per_play: np.ndarray) -> np.ndarray:
+    """Evaluate the published nflfastR dakota GAM from its committed term curves.
+
+    The upstream model is ``mgcv::gam(target ~ s(cpoe) + s(epa_per_play))`` where
+    ``target`` is NEXT season's adjusted EPA/play. Because it is purely additive,
+    ``dakota = intercept + f_cpoe(cpoe) + f_epa(epa_per_play)`` and linear
+    interpolation on the exported partial-effect curves reproduces
+    ``mgcv::predict.gam`` to floating-point noise (pinned by
+    ``models/oracles/dakota_gam_check.csv``; measured max error 8.0e-06).
+
+    Args:
+        cpoe: CPOE per passer-season, percentage-point scale.
+        epa_per_play: EPA per dropback per passer-season.
+
+    Returns:
+        GAM dakota values, same shape as the inputs.
+
+    Raises:
+        FileNotFoundError: If the committed oracle fixtures are missing.
+    """
+    terms = pl.read_csv(_ORACLE_DIR / "dakota_gam_terms.csv")
+    intercept = float((_ORACLE_DIR / "dakota_gam_intercept.txt").read_text().strip())
+    cpoe_curve = terms.filter(pl.col("term") == "cpoe").sort("x")
+    epa_curve = terms.filter(pl.col("term") == "epa_per_play").sort("x")
+    return (
+        intercept
+        + np.interp(np.asarray(cpoe, float), cpoe_curve["x"].to_numpy(), cpoe_curve["f"].to_numpy())
+        + np.interp(np.asarray(epa_per_play, float), epa_curve["x"].to_numpy(), epa_curve["f"].to_numpy())
+    )
+
+
+def dakota_passer_seasons(pbp: pl.DataFrame, *, min_dropbacks: int = DAKOTA_MIN_DROPBACKS) -> pl.DataFrame:
+    """Aggregate PBP to qualifying passer-seasons carrying dakota's two inputs.
+
+    Args:
+        pbp: PBP with ``season``, ``passer_player_id``, ``qb_epa``, ``cpoe``.
+        min_dropbacks: Qualifying threshold.
+
+    Returns:
+        One row per (passer, season) with ``dropbacks`` / ``epa_play`` / ``cpoe``.
+        Passer-seasons with no CPOE (pre-2006) are dropped -- a null CPOE folded
+        to 0 would silently read as league-average accuracy.
+    """
+    return (
+        pbp.filter(pl.col("qb_epa").is_not_null() & pl.col("passer_player_id").is_not_null())
+        .group_by(["passer_player_id", "season"])
+        .agg(
+            pl.col("passer_player_name").first().alias("passer"),
+            pl.len().alias("dropbacks"),
+            pl.col("qb_epa").mean().alias("epa_play"),
+            pl.col("cpoe").drop_nulls().mean().alias("cpoe"),
+        )
+        .filter((pl.col("dropbacks") >= min_dropbacks) & pl.col("cpoe").is_not_null())
+    )
+
+
+def validate_dakota(
+    pbp: pl.DataFrame,
+    *,
+    min_dropbacks: int = DAKOTA_MIN_DROPBACKS,
+    cpoe_stability_floor: float = DAKOTA_CPOE_STABILITY_FLOOR,
+    stability_floor: float = DAKOTA_STABILITY_FLOOR,
+    stability_margin_floor: float = DAKOTA_STABILITY_MARGIN_FLOOR,
+    gam_fidelity_floor: float = DAKOTA_GAM_FIDELITY_FLOOR,
+    min_pairs: int = DAKOTA_MIN_PAIRS,
+) -> "Dict[str, Any]":
+    """Gate dakota, which has no artifact of its own to validate.
+
+    dakota is a derived metric -- a fixed linear blend of EPA/dropback and CPOE --
+    so there is nothing to score against a holdout. What CAN be checked is the
+    thing the blend exists for, and that is what this gates:
+
+    1. **The premise.** Blending is only worth doing because CPOE is the more
+       year-to-year stable input. If ``cpoe_yoy`` stops exceeding ``epa_yoy``,
+       the blend has lost its reason to exist.
+    2. **The payoff.** dakota must actually inherit that stability
+       (``dakota_yoy``, and its margin over ``epa_yoy``).
+    3. **Fidelity to the published model.** The shipped linear coefficients
+       approximate an nflfastR GAM; ``gam_fidelity`` is how well they still track
+       it. This is the number to re-read when ``ep`` or ``cp`` is retrained --
+       dakota consumes both, and neither retrain touches these coefficients.
+
+    Reported but deliberately NOT gated: ``forecast_r`` /
+    ``forecast_r_gam`` / ``epa_forecast_r`` -- how well each predicts NEXT
+    season's EPA/play. Measured on model_pbp, the linear blend does not beat raw
+    EPA/play at that (0.3007 vs 0.4508; the GAM manages 0.4257). That is a real
+    result and it is reported honestly, but it is a different estimand from the
+    one the GAM was fit on (weighted WEEKLY rows, 5-attempt minimum), so it is a
+    caveat on how the metric is described, not evidence the coefficients are
+    wrong. Gating it would be gating a comparison this data cannot settle.
+
+    Args:
+        pbp: Multi-season PBP (``season``, ``passer_player_id``, ``qb_epa``,
+            ``cpoe``). Needs >= 2 consecutive seasons from 2006 on.
+        min_dropbacks: Qualifying dropback threshold per passer-season.
+        cpoe_stability_floor: Floor on CPOE's year-over-year correlation.
+        stability_floor: Floor on dakota's year-over-year correlation.
+        stability_margin_floor: Floor on ``dakota_yoy - epa_yoy``.
+        gam_fidelity_floor: Floor on corr(linear blend, published GAM).
+        min_pairs: Minimum passer-season pairs for the gate to be meaningful.
+
+    Returns:
+        Dict of the measured quantities plus ``gate_pass``. A sample below
+        ``min_pairs`` returns ``gate_pass`` False rather than a vacuous pass.
+    """
+    a, b = DAKOTA_LINEAR_COEFFICIENTS
+    seasons = dakota_passer_seasons(pbp, min_dropbacks=min_dropbacks)
+    nxt = seasons.select(
+        pl.col("passer_player_id"),
+        (pl.col("season") - 1).alias("season"),
+        pl.col("epa_play").alias("epa_play_next"),
+        pl.col("cpoe").alias("cpoe_next"),
+    )
+    pairs = seasons.join(nxt, on=["passer_player_id", "season"], how="inner")
+
+    if pairs.height < min_pairs:
+        return {
+            "n_pairs": pairs.height,
+            "gate_pass": False,
+            "reason": f"only {pairs.height} passer-season pairs (need {min_pairs})",
+        }
+
+    epa = pairs["epa_play"].to_numpy()
+    cpoe = pairs["cpoe"].to_numpy()
+    epa_next = pairs["epa_play_next"].to_numpy()
+    cpoe_next = pairs["cpoe_next"].to_numpy()
+    dakota = a * epa + b * cpoe
+    dakota_next = a * epa_next + b * cpoe_next
+    gam = dakota_gam_predict(cpoe, epa)
+
+    epa_yoy = pearson_correlation(epa, epa_next)
+    cpoe_yoy = pearson_correlation(cpoe, cpoe_next)
+    dakota_yoy = pearson_correlation(dakota, dakota_next)
+    fidelity = pearson_correlation(dakota, gam)
+    margin = dakota_yoy - epa_yoy
+
+    return {
+        "n_pairs": pairs.height,
+        "n_passer_seasons": seasons.height,
+        "epa_yoy": epa_yoy,
+        "cpoe_yoy": cpoe_yoy,
+        "dakota_yoy": dakota_yoy,
+        "stability_margin": margin,
+        "gam_fidelity": fidelity,
+        "gam_mean_abs_diff": float(np.mean(np.abs(dakota - gam))),
+        # Reported, not gated -- see the docstring.
+        "forecast_r": pearson_correlation(dakota, epa_next),
+        "forecast_r_gam": pearson_correlation(gam, epa_next),
+        "epa_forecast_r": pearson_correlation(epa, epa_next),
+        "gate_pass": bool(
+            cpoe_yoy >= cpoe_stability_floor
+            and dakota_yoy >= stability_floor
+            and margin >= stability_margin_floor
+            and fidelity >= gam_fidelity_floor
+        ),
+    }

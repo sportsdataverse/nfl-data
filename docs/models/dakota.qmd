@@ -22,6 +22,17 @@ from plotnine import (
 from great_tables import GT
 from IPython.display import HTML, display
 
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
 ROOT = Path.cwd()
 while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
     ROOT = ROOT.parent
@@ -58,17 +69,6 @@ ps = {s: passer_season(frames[s], s) for s in frames}
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
-
-def _fetch(url, timeout=600):
-    """Fetch bytes, refusing to return a non-200 body.
-
-    Without raise_for_status a 404/500 HTML error page is written under a
-    .parquet/.ubj filename, and every later run treats it as valid because only
-    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
-    """
-    r = requests.get(url, timeout=timeout)
-    r.raise_for_status()
-    return r.content
 
 
 ```

@@ -26,6 +26,17 @@ from IPython.display import HTML, display
 import sportsdataverse.nfl as sdv_nfl
 from importlib.resources import files as _files
 
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page gets written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked. Poisoned cache, silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
 ROOT = Path.cwd()
 while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
     ROOT = ROOT.parent
@@ -41,17 +52,6 @@ pbp = pl.read_parquet(pbp_path)
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
-
-def _fetch(url, timeout=600):
-    """Fetch bytes, refusing to return a non-200 body.
-
-    Without raise_for_status a 404/500 HTML error page gets written under a
-    .parquet/.ubj filename, and every later run treats it as valid because only
-    file EXISTENCE is checked. Poisoned cache, silently wrong document.
-    """
-    r = _fetch(url, timeout=timeout)
-    r.raise_for_status()
-    return r.content
 
 
 ```

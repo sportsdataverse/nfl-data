@@ -65,8 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         written.append(path)
     if args.publish:
         if not written:
-            logging.error("nothing to publish")
-            return 1
+            # Every requested season produced zero vintages -- the pre-kickoff
+            # state (build_season already logged why). A real failure raises
+            # before we get here, so an empty run is a no-op, not an error.
+            logging.warning("nothing to publish yet")
+            return 0
         from nfl_model_publish.artifacts import upload_artifacts
 
         result = upload_artifacts(out, TAG, REPO, pattern="nfl_ratings_weekly_*.parquet")

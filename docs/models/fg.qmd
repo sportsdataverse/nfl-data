@@ -25,6 +25,17 @@ from IPython.display import HTML, display
 from sportsdataverse.nfl import load_nfl_schedule
 from sportsdataverse.nfl.ep_wp import _load_model
 
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
 ROOT = Path.cwd()
 while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
     ROOT = ROOT.parent
@@ -46,17 +57,6 @@ ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset=
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
-
-def _fetch(url, timeout=600):
-    """Fetch bytes, refusing to return a non-200 body.
-
-    Without raise_for_status a 404/500 HTML error page is written under a
-    .parquet/.ubj filename, and every later run treats it as valid because only
-    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
-    """
-    r = requests.get(url, timeout=timeout)
-    r.raise_for_status()
-    return r.content
 
 
 ```
@@ -99,6 +99,14 @@ to the **operating domain** (yardline×roof×era cells with ≥1 real attempt):
 is lower by construction (0.9690) — the booster cannot reproduce the spline's
 extrapolation into never-attempted cells; **max abs FG% diff 0.34**. See
 [Parity](parity.md).
+
+These are **not** the same numbers as the `~0.97` in the oracle audit below, and
+the difference is definitional rather than a regression: this gated figure is
+`validate_fg` over the full history (1999–2025), frequency-weighted, against
+`fg_model_grid.parquet`; the audit below is unweighted, scoped to **2014–2025**
+(the only seasons this oracle covers), and joins on different attempted-cell
+keys against `fg_model_grid_nfl4th.csv`. Both are reported; only the first is
+gated.
 
 ## The make curve, against reality
 
@@ -170,7 +178,7 @@ kick = (
     .filter(pl.col("attempts") >= 15)
     .sort("FGOE", descending=True).head(10)
     .join(ros, left_on="kicker_player_id", right_on="gsis_id", how="left")
-    .with_columns(("<img src='" + pl.col("headshot_url").fill_null("") + "' height='40'/>").alias("headshot"))
+    .with_columns(("<img src='" + pl.col("headshot_url").fill_null("") + "' height='40' alt=''/>").alias("headshot"))
 )
 gt_show(
     GT(kick.select("headshot", "kicker", "team", "attempts", "made", "expected_made", "FGOE").to_pandas())
@@ -328,8 +336,18 @@ which is the reading that matters for a model in production:
 #| output: false
 fga_all = []
 for season in range(1999, 2026):
+    # Fetch on miss: the oracle loop above only caches GAM_ORACLE_SEASONS
+    # (2014-2025), but the reality analysis spans 1999-2025. Without this a
+    # clean render dies on model_pbp_1999.parquet before producing the
+    # historical calibration.
+    p = CACHE / f"model_pbp_{season}.parquet"
+    if not p.exists():
+        p.write_bytes(_fetch(
+            "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/"
+            f"nfl_model_pbp/model_pbp_{season}.parquet",
+            timeout=600))
     fga_all.append(
-        pl.read_parquet(CACHE / f"model_pbp_{season}.parquet")
+        pl.read_parquet(p)
         .filter(pl.col("field_goal_result").is_in(["made", "missed", "blocked"]))
         .select("game_id", "season", "yardline_100", "roof", "field_goal_result")
     )
@@ -470,7 +488,7 @@ for the 2025 attempts it scores, which is exact for 2018+.
 | `label` | sp (FG made) |
 | `training_seasons` | 1999–2025 (23,919 attempts) |
 | `lineage` | nfl4th field-goal model (was mgcv GAM) |
-| `parity` | attempted-cells corr 0.971 · freq-weighted 0.986 (informational, era-aware full-history) |
+| `parity` | gated: operating-domain corr **0.9802** (≥0.98), freq-wt 0.9880 — `validate_fg`, full history 1999–2025, grid `fg_model_grid.parquet`. Informational: attempted-cells corr 0.971 · freq-wt 0.986 — unweighted **2014–2025** audit against `fg_model_grid_nfl4th.csv` (different scope, keys and grid; not a gate) |
 | `distribution` | bundled in sportsdataverse |
 | `rebuild this doc` | `scripts/render_model_docs.sh` (Quarto → GFM; `uv sync --group docs`) |
 

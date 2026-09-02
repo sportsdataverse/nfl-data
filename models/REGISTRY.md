@@ -29,9 +29,8 @@ Trained by `python -m model_training.play_level train` on the nflverse-parity
 ## Known limitations
 
 - **Win probability in overtime is not a model output.** Following nflfastR,
-  `qtr > 4` uses a closed form off the EP class probabilities
-  (`Sudden_Death_WP = fg_prob + td_prob + safety_prob`, or
-  `td_prob + fg_prob * Win_Back` on the first overtime drive from 2012), with
+  `qtr > 4` uses a closed form off the EP class probabilities —
+  `Sudden_Death_WP = fg_prob + td_prob + safety_prob` — with
   `vegas_wp` set equal to `wp` — the spread model is not consulted. It is
   therefore **spread-blind in overtime by construction**, and any downstream
   consumer reading `vegas_wp` in overtime is reading the naive number.
@@ -41,6 +40,22 @@ Trained by `python -m model_training.play_level train` on the nflverse-parity
   1999-2025: 444 overtime games / 8,715 plays over five incompatible rules
   eras (pre-2012 sudden death, 2012 modified, 2017 10-minute, 2022 playoff
   both-possess, 2025 regular-season both-possess).
+- **Overtime WP ignores the post-2012 first-possession rule.** Since 2012 a
+  field goal on the opening overtime drive no longer ends the game, so an
+  unconditional sudden-death form overstates the kicking team's chances there.
+  nflfastR carries a `One_FG_WP = td_prob + fg_prob * Win_Back` branch for it,
+  and we deliberately do **not** implement it — measured, not assumed.
+  Upstream's `First_Drive` is a minimum over every overtime row in the frame
+  `add_wp_variables` was handed, and it is called once on the whole rbound
+  multi-game batch, so the branch is close to dead in the published data (261
+  of 324 published 2025 overtime rows equal the sudden-death form to 1e-9; only
+  4 sit within 0.02 of the One-FG form). Every deterministic reconstruction
+  scores worse — overtime `wp` MAE vs nflverse, 2016 / 2022 / 2025: per
+  overtime game **0.1609 / 0.1102 / 0.1431**, frame-global **0.0394 / 0.0503 /
+  0.0594** (but frame-dependent, and `build_nfl_season` enriches per game, under
+  which it collapses to the first row), sudden death only **0.0513 / 0.0534 /
+  0.0599**. nflverse's published values carry the same overstatement; matching
+  them is this path's contract.
 - **Two nflfastR WP overlays remain unported** on the nflverse path: the PAT /
   two-point fix (`add_wp_variables` L932-1041) and the regulation kickoff
   touchback re-score (L1043-1069). The residual overtime error localises to the

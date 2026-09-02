@@ -529,6 +529,23 @@ overtime drive — and `vegas_wp` equals `wp` bit-for-bit on
 regulation, across `{python} f"{_ot_stats['reg_n']:,}"` plays, `vegas_wp`
 equals `wp` on `{python} f"{_ot_stats['reg_vegas_eq_wp']:.3%}"`.
 
+**We port the sudden-death form only, and that is a measured decision.** The
+One-FG branch is selected upstream by `Drive_Diff`, computed off a
+`First_Drive` that is a minimum over every overtime row in the frame
+`add_wp_variables` was handed — and nflfastR calls it once on the whole rbound
+multi-game batch, so it is close to dead in the published data (only
+`{python} f"{1 - _ot_stats['sudden_death_exact']:.1%}"` of 2025's overtime rows
+are not the sudden-death form, and only 4 sit within 0.02 of the One-FG form).
+Every deterministic reconstruction of it scores *worse* — overtime `wp` MAE vs
+nflverse for 2016 / 2022 / 2025: per overtime game 0.1609 / 0.1102 / 0.1431,
+frame-global 0.0394 / 0.0503 / 0.0594 (best, but frame-dependent, and
+`build_nfl_season` enriches per game, under which it collapses to the first
+row), sudden death only 0.0513 / 0.0534 / 0.0599. The gap this leaves is real
+and named rather than papered over: since 2012 a field goal on the opening
+overtime drive no longer ends the game, so the sudden-death form overstates the
+kicking team's chances there — and nflverse's published values carry the same
+overstatement.
+
 The overlay is ported as `sportsdataverse.nfl.ep_wp._apply_ot_wp_overlay`,
 applied as step 3b of `enrich_nfl_pbp` (sdv-py PR #435). Rather than quote that
 PR's numbers, this card re-scores 2025's overtime games through **whatever

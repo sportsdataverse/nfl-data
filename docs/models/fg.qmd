@@ -25,6 +25,17 @@ from IPython.display import HTML, display
 from sportsdataverse.nfl import load_nfl_schedule
 from sportsdataverse.nfl.ep_wp import _load_model
 
+def _fetch(url, timeout=600):
+    """Fetch bytes, refusing to return a non-200 body.
+
+    Without raise_for_status a 404/500 HTML error page is written under a
+    .parquet/.ubj filename, and every later run treats it as valid because only
+    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
+    """
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return r.content
+
 ROOT = Path.cwd()
 while not (ROOT / "docs" / "models").is_dir() or not (ROOT / "models").is_dir():
     ROOT = ROOT.parent
@@ -46,17 +57,6 @@ ros = pl.read_parquet(ros_path).select("gsis_id", "headshot_url").unique(subset=
 
 def gt_show(g):
     display(HTML(g.as_raw_html()))
-
-def _fetch(url, timeout=600):
-    """Fetch bytes, refusing to return a non-200 body.
-
-    Without raise_for_status a 404/500 HTML error page is written under a
-    .parquet/.ubj filename, and every later run treats it as valid because only
-    file EXISTENCE is checked -- a poisoned cache and a silently wrong document.
-    """
-    r = requests.get(url, timeout=timeout)
-    r.raise_for_status()
-    return r.content
 
 
 ```
@@ -328,8 +328,18 @@ which is the reading that matters for a model in production:
 #| output: false
 fga_all = []
 for season in range(1999, 2026):
+    # Fetch on miss: the oracle loop above only caches GAM_ORACLE_SEASONS
+    # (2014-2025), but the reality analysis spans 1999-2025. Without this a
+    # clean render dies on model_pbp_1999.parquet before producing the
+    # historical calibration.
+    p = CACHE / f"model_pbp_{season}.parquet"
+    if not p.exists():
+        p.write_bytes(_fetch(
+            "https://github.com/sportsdataverse/sportsdataverse-data/releases/download/"
+            f"nfl_model_pbp/model_pbp_{season}.parquet",
+            timeout=600))
     fga_all.append(
-        pl.read_parquet(CACHE / f"model_pbp_{season}.parquet")
+        pl.read_parquet(p)
         .filter(pl.col("field_goal_result").is_in(["made", "missed", "blocked"]))
         .select("game_id", "season", "yardline_100", "roof", "field_goal_result")
     )

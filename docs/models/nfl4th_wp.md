@@ -243,10 +243,12 @@ the EP model’s drift through `home_ep`.
   separate home-perspective model; folding it into the spread family
   would remove a dual-maintenance surface.
 - **Resolved (2026-09-01, PR \#28) — the silent skip:** a missing
-  `cal_data.rds` now fails the stage / `train-all` (rc 1) unless
-  `--allow-skip` / `--allow-missing-cal-data`, which record
-  `status: SKIPPED` with the reason in `models/ledger.jsonl` and
-  report.md.
+  `cal_data.rds` now fails with rc 1 — the stage
+  (`nfl_model_10_wp.py`) unless `--allow-skip`, and
+  `decision_models train-all` unless `--allow-missing-cal-data`. Each
+  opt-in records `status: SKIPPED` with the reason in
+  `models/ledger.jsonl` and report.md; the two flags belong to different
+  commands and are not interchangeable.
 - **Known issue:** the training window (2001-2020) still lags the main
   models; extending it needs the calibration frame rebuilt from current
   `model_pbp` (with `ep` and `Winner`) and the P(win) parity floor

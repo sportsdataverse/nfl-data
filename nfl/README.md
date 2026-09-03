@@ -37,9 +37,11 @@ simply an older run than the code that produces it.**
 
 Consequences a reader should know before using either:
 
-- Code written against this tree will raise `ColumnNotFoundError` against the
-  published release, and `sportsdataverse.nfl.load_nfl_model_pbp` reads the
-  release.
+- The two agree on the 257 columns they share, so most code moves between them
+  unchanged. Only code touching one of the 69 tree-only columns breaks — and
+  since `sportsdataverse.nfl.load_nfl_model_pbp` reads the release, that is the
+  shape of the failure: a `ColumnNotFoundError` on a column that exists here and
+  not there, not a wholesale incompatibility.
 - The validation schema snapshot in sportsdataverse-py is pinned at the
   **120-column** vintage — the oldest of the three — which is why its cron was
   reporting 277 `unexpected column` findings
@@ -57,11 +59,27 @@ one number.
 
 ## Rebuilding
 
+Both stages are numbered, so the driver is the shortest path -- it resolves the
+venv, runs from the repo root, and sets `PYTHONPATH` for you:
+
 ```sh
-python -m nfl_data_02_model_pbp build --seasons 2024 \
-    --raw-dir ../nfl-raw/nfl/raw --out nfl/model_pbp --enrich
-python -m nfl_data_05_ratings_weekly            # writes ratings_weekly
+NFL_DATA_ARGS="build --seasons 2024 --raw-dir ../nfl-raw/nfl/raw --out nfl/model_pbp --enrich" \
+    scripts/nfl_data.sh 02
+NFL_DATA_ARGS="--seasons 1999:2025 --out nfl/ratings_weekly" scripts/nfl_data.sh 05
 ```
+
+The equivalent module form, run **from the repo root**. `PYTHONPATH=python` is
+what makes `-m` resolve, and omitting it is the usual reason these fail:
+
+```sh
+PYTHONPATH=python python -m nfl_data_02_model_pbp build --seasons 2024 \
+    --raw-dir ../nfl-raw/nfl/raw --out nfl/model_pbp --enrich
+PYTHONPATH=python python -m nfl_data_05_ratings_weekly \
+    --seasons 1999:2025 --out nfl/ratings_weekly
+```
+
+`--seasons` is REQUIRED on stage 05, and both stages default `--out` to `out/`
+-- which is how these datasets ended up staged rather than committed.
 
 A season takes a couple of minutes: the enrichment scores EP/WP/CP/xYAC per
 play. `--raw-dir` points at the sibling `nfl-raw` checkout; on a runner, fetch

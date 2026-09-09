@@ -139,13 +139,22 @@ jobs:
             echo "seasons=$SEASON" >> "$GITHUB_OUTPUT"
           fi
 
-      # SDV_DATA_TOKEN must be a PAT with Contents: write on
-      # sportsdataverse/sportsdataverse-data (the GITHUB_TOKEN fallback fails
-      # for cross-repo uploads). See the model_pbp cron for the same note.
+      # SDV_GH_TOKEN is a PAT with Contents: write on
+      # sportsdataverse/sportsdataverse-data, and is the name the rest of the
+      # fleet uses (60 references across the org's workflows; the model_pbp
+      # cron beside this one included). This workflow asked for SDV_DATA_TOKEN,
+      # a name that was never provisioned anywhere -- so on its first-ever run
+      # (2026-09-07, the Sep-Feb cron waking up) the `|| secrets.GITHUB_TOKEN`
+      # fallback quietly supplied a credential the comment ITSELF said cannot
+      # do a cross-repo upload, and the job died on
+      # `403 Resource not accessible by integration` after building rosters,
+      # players, player-stats, team-stats and QBR. The pbp cron published fine
+      # the same morning on the same runner: the only difference was the name.
+      # No fallback now -- an absent secret must fail as an absent secret.
       - name: Publish nfl_rosters
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_data_04_rosters_players rosters \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
@@ -157,7 +166,7 @@ jobs:
         if: ${{ github.event.inputs.skip_players != 'true' }}
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_data_04_rosters_players players \
             --out out/players \
@@ -190,7 +199,7 @@ jobs:
         if: ${{ github.event.inputs.skip_player_stats != 'true' }}
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_data_04_rosters_players player-stats \
             --seasons "${{ steps.ps_seasons.outputs.seasons }}" \
@@ -225,7 +234,7 @@ jobs:
         if: ${{ github.event.inputs.skip_team_stats != 'true' }}
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_data_04_rosters_players team-stats \
             --seasons "${{ steps.ts_seasons.outputs.seasons }}" \
@@ -259,7 +268,7 @@ jobs:
         if: ${{ github.event.inputs.skip_qbr != 'true' }}
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_DATA_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_data_04_rosters_players qbr \
             --seasons "${{ steps.qbr_seasons.outputs.seasons }}" \

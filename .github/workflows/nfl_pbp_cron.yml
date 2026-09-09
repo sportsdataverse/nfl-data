@@ -153,7 +153,7 @@ jobs:
       - name: Publish model_pbp to sportsdataverse-data
         working-directory: nfl-data/python
         env:
-          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
         run: |
           uv run --no-sync python -m nfl_data_03_pbp_publish \
             --parquet-dir out/model_pbp \

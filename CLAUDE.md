@@ -100,8 +100,14 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   rule). `rank` is recomputed as R-style average-tie `rank(desc(qbr_total))`, not ESPN's integer rank.
 - **`--clobber`/idempotent uploads:** republishing the same bytes is safe. Off-season cron runs
   (Mar–Aug) are effectively no-ops for `model_pbp` when nfl-raw is unchanged.
-- **`SDV_DATA_TOKEN` is required** for cross-repo publish (a PAT with `Contents: write` on
-  sportsdataverse-data); the `GITHUB_TOKEN` fallback fails for cross-repo uploads.
+- **`SDV_GH_TOKEN` is required** for cross-repo publish (a PAT with `Contents: write` on
+  sportsdataverse-data); `GITHUB_TOKEN` cannot do a cross-repo upload at all — it answers
+  `403 Resource not accessible by integration`. This file used to name the secret
+  `SDV_DATA_TOKEN`, which is provisioned nowhere in the org, and the rosters cron was written
+  from that line: its first-ever run (2026-09-07) fell through a `|| secrets.GITHUB_TOKEN`
+  fallback and 403'd after the whole build, while the pbp cron published fine the same morning
+  on the standard name. Neither workflow carries a fallback now — an absent secret must fail
+  as an absent secret, before the build rather than after it.
 - **`--enrich` downloads ~34 MB of model artifacts** on first use (cached under
   `~/.cache/sportsdataverse`); the cron caches that path.
 - `R/` is a small dataset-parity publish toolchain (`write_dataset`/`publish_dataset` via piggyback);
@@ -112,7 +118,7 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
 - Workflows: `.github/workflows/nfl_pbp_cron.yml` (model_pbp), `nfl_rosters_players_cron.yml`
   (rosters/players/player-stats/team-stats/qbr). Both: `workflow_dispatch` + cron
   `0 9 * 9-12,1,2 1` (Mondays 09:00 UTC, Sep–Feb); checkout nfl-data + nfl-raw, install uv,
-  install sdv-py from git@main, publish with `SDV_DATA_TOKEN`.
+  install sdv-py from git@main, publish with `SDV_GH_TOKEN`.
 - `python/native_pbp/__init__.py` documents the build-module order (stat_ids → parse → players →
   description → features → labels → parity).
 - `model_training/play_level/` (EP/WP/CP) + `decision_models/` (xpass + nfl4th 4th-down)

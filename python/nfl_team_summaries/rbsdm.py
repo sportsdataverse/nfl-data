@@ -158,6 +158,9 @@ _RANKED = {
     "neutral_pass_rate_off": True,
     "neutral_xpass_rate_off": True,
     "neutral_pass_oe_off": True,
+    # the decision count ranks by volume: the site asks for a _rank beside every
+    # column of a category (it had no rank -> "unknown select column" -> 400)
+    "fourth_decisions_off": True,
     "fourth_go_rate_off": True,
     "fourth_go_expected_off": True,
     "fourth_go_over_expected_off": True,

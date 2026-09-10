@@ -420,6 +420,7 @@ def test_rbsdm_extras_present_and_ranked(tables):
         "xpass_rate_off",
         "pass_oe_off",
         "neutral_pass_rate_off",
+        "fourth_decisions_off",
         "fourth_go_rate_off",
         "fourth_go_expected_off",
         "fourth_go_over_expected_off",

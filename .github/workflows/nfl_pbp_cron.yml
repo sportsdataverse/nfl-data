@@ -159,3 +159,19 @@ jobs:
             --parquet-dir out/model_pbp \
             --tag nfl_model_pbp \
             --repo sportsdataverse/sportsdataverse-data
+
+      # ── 12. Season summaries (team grid, leaderboards, percentiles) ───────
+      # Reads the model_pbp parquets just built (no re-download) and publishes
+      # the five nfl_* summary tags gameonpaper.com's NFL pages read via sdv-db.
+      - name: Build + publish season summaries
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+          # via env, not inline expansion: a step output is data, not shell text
+          SEASONS: ${{ steps.seasons.outputs.seasons }}
+        run: |
+          uv run --no-sync python -m nfl_data_06_team_summaries \
+            --seasons "$SEASONS" \
+            --pbp-dir out/model_pbp \
+            --out out/nfl_team_summaries \
+            --publish

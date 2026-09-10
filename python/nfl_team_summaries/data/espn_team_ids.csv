@@ -1,0 +1,33 @@
+nflverse_abbr,espn_team_id,espn_abbr,team_name,conference,division
+ARI,22,ARI,Arizona Cardinals,NFC,NFC West
+ATL,1,ATL,Atlanta Falcons,NFC,NFC South
+BAL,33,BAL,Baltimore Ravens,AFC,AFC North
+BUF,2,BUF,Buffalo Bills,AFC,AFC East
+CAR,29,CAR,Carolina Panthers,NFC,NFC South
+CHI,3,CHI,Chicago Bears,NFC,NFC North
+CIN,4,CIN,Cincinnati Bengals,AFC,AFC North
+CLE,5,CLE,Cleveland Browns,AFC,AFC North
+DAL,6,DAL,Dallas Cowboys,NFC,NFC East
+DEN,7,DEN,Denver Broncos,AFC,AFC West
+DET,8,DET,Detroit Lions,NFC,NFC North
+GB,9,GB,Green Bay Packers,NFC,NFC North
+HOU,34,HOU,Houston Texans,AFC,AFC South
+IND,11,IND,Indianapolis Colts,AFC,AFC South
+JAX,30,JAX,Jacksonville Jaguars,AFC,AFC South
+KC,12,KC,Kansas City Chiefs,AFC,AFC West
+LV,13,LV,Las Vegas Raiders,AFC,AFC West
+LAC,24,LAC,Los Angeles Chargers,AFC,AFC West
+LA,14,LAR,Los Angeles Rams,NFC,NFC West
+MIA,15,MIA,Miami Dolphins,AFC,AFC East
+MIN,16,MIN,Minnesota Vikings,NFC,NFC North
+NE,17,NE,New England Patriots,AFC,AFC East
+NO,18,NO,New Orleans Saints,NFC,NFC South
+NYG,19,NYG,New York Giants,NFC,NFC East
+NYJ,20,NYJ,New York Jets,AFC,AFC East
+PHI,21,PHI,Philadelphia Eagles,NFC,NFC East
+PIT,23,PIT,Pittsburgh Steelers,AFC,AFC North
+SF,25,SF,San Francisco 49ers,NFC,NFC West
+SEA,26,SEA,Seattle Seahawks,NFC,NFC West
+TB,27,TB,Tampa Bay Buccaneers,NFC,NFC South
+TEN,10,TEN,Tennessee Titans,AFC,AFC South
+WAS,28,WSH,Washington Commanders,NFC,NFC East

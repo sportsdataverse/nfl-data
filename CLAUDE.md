@@ -59,6 +59,7 @@ Output: parquet uploaded to releases on `sportsdataverse/sportsdataverse-data` (
 | `nfl_model_publish team-stats` | `nfl_team_stats` | 1999– | aggregates SDV-native PBP (offense+defense+kicking+returns) |
 | `nfl_model_publish qbr` | `nfl_espn_qbr` | 2006– | ESPN `fitt/v3` QBR endpoint, nflverse-shape |
 | `nfl_ratings_weekly` | `nfl_ratings_weekly` | 1999– | sdv-py `nfl_ratings(as_of_date=)` per week; `as_of_week` is STRICTLY EXCLUSIVE (fit on games before week W's first kickoff). Weekly in-season cron + dispatch (`nfl_ratings_weekly.yml`) |
+| `nfl_team_summaries` (stage 06) | `nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles` | 1999– | season grid off `nfl_model_pbp` (REG only): the college `team_summaries` column contract (`{metric}_{off\|def\|margin}[_pass\|_rush][_rank]`, drive efficiency, opponent-adjusted EPA via sdv-py `cfb_adjusted_epa`) + rbsdm.com extras (pass rate over expected, neutral pass rate, fourth-down decisions vs the model, luck) + QB CPOE/composite. `team_id` is the **ESPN** id (vendored crosswalk `nfl_team_summaries/data/espn_team_ids.csv`); `pos_team` the nflverse abbr. Runs after stage 03 in `nfl_pbp_cron.yml`. |
 | `nfl_model_publish artifacts` / `decision_models-artifacts` | `nfl_model_artifacts` | n/a | `.ubj` models + cards from `models/` (play_level/decision_models trainers) |
 
 Consumed downstream by sdv-py `load_nfl_pbp(source="sdv")`, `load_nfl_espn_qbr(source="sdv")`, etc.

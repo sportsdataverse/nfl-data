@@ -96,6 +96,7 @@ nfl-data/
 │   ├── nfl_data_ingest/
 │   ├── nfl_model_publish/
 │   ├── nfl_ratings_weekly/
+│   ├── nfl_team_summaries/
 │   ├── out/
 │   ├── conftest.py
 │   ├── nfl_data_01_ingest.py
@@ -103,6 +104,7 @@ nfl-data/
 │   ├── nfl_data_03_pbp_publish.py
 │   ├── nfl_data_04_rosters_players.py
 │   ├── nfl_data_05_ratings_weekly.py
+│   ├── nfl_data_06_team_summaries.py
 │   ├── nfl_model_01_ep.py
 │   ├── nfl_model_02_wp_spread.py
 │   └── … 9 more
@@ -204,6 +206,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_03_pbp_publish.py`
 - `python/nfl_data_04_rosters_players.py`
 - `python/nfl_data_05_ratings_weekly.py`
+- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

@@ -12,14 +12,19 @@ site's leaderboard machinery renders it unchanged. Directions:
   recovered rank high-first; opponents' field-goal percentage ranks LOW-first
   (opponents missing is the lucky outcome).
 
-Series success is NOT here: ``nfl_model_pbp`` does not carry ``series`` yet
-(see the spec's open items). When it does, add ``series_conv_off/def`` beside
-these rather than deriving a series from first-down flags.
+* series conversion rate (rbsdm "Series Conv %"): the offense's share of
+  series ending in a first down or touchdown ranks high-first; the defense's
+  (series allowed) ranks LOW-first. Computed by sdv-py's port of nflfastR's
+  ``calculate_series_conversion_rates`` from the ``series`` / ``series_success``
+  / ``series_result`` columns ``nfl_model_pbp`` carries since the native_pbp
+  parity build; an older asset without them gets the columns as nulls so the
+  table schema never depends on the asset vintage.
 """
 
 from __future__ import annotations
 
 import polars as pl
+from sportsdataverse.nfl import calculate_nfl_series_conversion_rates
 
 from .crosswalk import attach_team_ids
 
@@ -38,8 +43,11 @@ def _rank(col: str, *, descending: bool) -> pl.Expr:
     c = pl.col(col)
     base = c.rank(method="average", descending=descending)
     n_nonnull = c.is_not_null().sum()
+    # a column with no values at all (an older asset without the source
+    # columns) ranks nobody: sequential ranks over nulls would look like data
     null_trail = (n_nonnull + c.is_null().cum_sum()).cast(pl.Float64)
-    return pl.when(c.is_null()).then(null_trail).otherwise(base)
+    ranked = pl.when(c.is_null()).then(null_trail).otherwise(base)
+    return pl.when(n_nonnull == 0).then(pl.lit(None, dtype=pl.Float64)).otherwise(ranked)
 
 
 def _pass_tendencies(plays: pl.DataFrame) -> pl.DataFrame:
@@ -126,6 +134,25 @@ def _luck(raw: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+_SERIES_INPUT = ("season", "week", "posteam", "defteam", "down", "series", "series_success", "series_result")
+
+
+def _series(raw: pl.DataFrame) -> pl.DataFrame:
+    """Offense / defense series conversion rate (nflfastR ``off_scr`` / ``def_scr``)."""
+    if any(c not in raw.columns for c in _SERIES_INPUT):
+        return pl.DataFrame(
+            schema={"pos_team_id": pl.Utf8, "series_conv_off": pl.Float64, "series_conv_def": pl.Float64}
+        )
+    rates = calculate_nfl_series_conversion_rates(
+        raw.filter(pl.col("posteam").is_not_null()).select(_SERIES_INPUT)
+    )
+    return attach_team_ids(rates, "team", "pos_team").select(
+        pl.col("pos_team_id"),
+        pl.col("off_scr").alias("series_conv_off"),
+        pl.col("def_scr").alias("series_conv_def"),
+    )
+
+
 #: column -> ranked high-first?
 _RANKED = {
     "pass_rate_off": True,
@@ -134,6 +161,9 @@ _RANKED = {
     "neutral_pass_rate_off": True,
     "neutral_xpass_rate_off": True,
     "neutral_pass_oe_off": True,
+    # the decision count ranks by volume: the site asks for a _rank beside every
+    # column of a category (it had no rank -> "unknown select column" -> 400)
+    "fourth_decisions_off": True,
     "fourth_go_rate_off": True,
     "fourth_go_expected_off": True,
     "fourth_go_over_expected_off": True,
@@ -142,6 +172,8 @@ _RANKED = {
     "luck_fumble_rec_pct_off": True,
     "luck_fumble_rec_pct_def": True,
     "luck_opp_fg_pct_def": False,
+    "series_conv_off": True,
+    "series_conv_def": False,
 }
 
 
@@ -151,6 +183,7 @@ def team_extras(raw: pl.DataFrame, plays: pl.DataFrame) -> pl.DataFrame:
         _pass_tendencies(plays)
         .join(_fourth_downs(raw), on="pos_team_id", how="full", coalesce=True)
         .join(_luck(raw), on="pos_team_id", how="full", coalesce=True)
+        .join(_series(raw), on="pos_team_id", how="full", coalesce=True)
         .sort("pos_team_id")
     )
     out = out.with_columns(

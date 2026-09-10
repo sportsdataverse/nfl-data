@@ -19,6 +19,7 @@ from nfl_team_summaries import checks
 from nfl_team_summaries.build import _attach_leader_ranks, build_team_summaries
 from nfl_team_summaries.crosswalk import attach_team_ids, load_crosswalk
 from nfl_team_summaries.input import filter_season_types, prepare_plays
+from nfl_team_summaries.rbsdm import _RANKED as RBSDM_RANKED
 
 FIX = Path(__file__).parent / "fixtures"
 TEAMS = ["KC", "BUF", "PHI", "DAL"]
@@ -202,9 +203,14 @@ def _play(
     play_type = {"pass": "pass", "sack": "pass", "scramble": "run", "run": "run"}.get(kind, kind)
     return {
         "season_type": "REG",
+        "season": 2025,
         "game_id": gid,
         "play_id": play_id,
         "fixed_drive": drive,
+        # one series per drive; every third drive fails to convert
+        "series": drive,
+        "series_success": 0 if drive % 3 == 0 else 1,
+        "series_result": "Punt" if drive % 3 == 0 else "First down",
         "play_type": play_type,
         "down": down,
         "ydstogo": 10 if down in (1, None) else rng.randint(1, 9),
@@ -390,7 +396,15 @@ def test_every_rank_has_its_metric_and_every_player_rank_its_percentile(tables):
 def test_ranks_have_no_nulls_and_percentiles_stay_off_the_ends(tables):
     _, out = tables
     ts = out["team_summaries"]
-    assert sum(ts[c].null_count() for c in ts.columns if c.endswith("_rank")) == 0
+    # the grid ranks everything (the cfb port's contract); an rbsdm extra is the
+    # exception: its rank is null exactly where the metric is null for EVERY team
+    # (an extra the synthetic season never produces), never anywhere else
+    for c in (c for c in ts.columns if c.endswith("_rank")):
+        metric = c[: -len("_rank")]
+        if metric in RBSDM_RANKED and ts[metric].null_count() == ts.height:
+            assert ts[c].null_count() == ts.height, c
+        else:
+            assert ts[c].null_count() == 0, c
     qb = out["passing"].filter(pl.col("TEPA_pct").is_not_null())
     assert qb.height > 0
     assert (qb["TEPA_pct"] > 0).all() and (qb["TEPA_pct"] < 100).all()
@@ -415,20 +429,43 @@ def test_rbsdm_extras_present_and_ranked(tables):
         "xpass_rate_off",
         "pass_oe_off",
         "neutral_pass_rate_off",
+        "fourth_decisions_off",
         "fourth_go_rate_off",
         "fourth_go_expected_off",
         "fourth_go_over_expected_off",
         "fourth_go_boost_off",
         "luck_fumble_rec_pct_off",
         "luck_opp_fg_pct_def",
+        "series_conv_off",
+        "series_conv_def",
     ):
         assert c in ts.columns and f"{c}_rank" in ts.columns, c
     assert ts["fourth_decisions_off"].sum() > 0
+    # every third drive is a failed series: rates are real shares, and not all 1.0
+    assert ts["series_conv_off"].is_between(0.0, 1.0).all()
+    assert (ts["series_conv_off"] < 1.0).any()
+    # a defense allowing FEWER conversions is better: the LOWEST allowed rate ranks 1
+    d = ts.filter(pl.col("series_conv_def").is_not_null()).sort("series_conv_def")
+    if d.height > 1:
+        ranks = d["series_conv_def_rank"]
+        assert ranks[0] == ranks.min() and ranks[0] <= ranks[-1]
     # opponents missing kicks is the lucky outcome: the LOWEST opp FG% ranks 1
     r = ts.filter(pl.col("luck_opp_fg_pct_def").is_not_null()).sort("luck_opp_fg_pct_def")
     if r.height > 1:
         ranks = r["luck_opp_fg_pct_def_rank"]
         assert ranks[0] == ranks.min() and ranks[0] <= ranks[-1]
+
+
+def test_series_columns_survive_an_asset_without_series():
+    # a model_pbp built before native_pbp's series port: the columns exist (null),
+    # so the published table schema does not depend on the asset vintage
+    pbp = _fake_pbp().drop("series", "series_success", "series_result")
+    plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
+    ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
+    assert "series_conv_off" in ts.columns and "series_conv_def_rank" in ts.columns
+    assert ts["series_conv_off"].is_null().all()
+    # and nobody is ranked on a metric nobody has (sequential ranks over nulls would look like data)
+    assert ts["series_conv_off_rank"].is_null().all() and ts["series_conv_def_rank"].is_null().all()
 
 
 def test_percentiles_shape(tables):

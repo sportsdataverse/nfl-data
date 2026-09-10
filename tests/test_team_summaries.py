@@ -19,6 +19,7 @@ from nfl_team_summaries import checks
 from nfl_team_summaries.build import _attach_leader_ranks, build_team_summaries
 from nfl_team_summaries.crosswalk import attach_team_ids, load_crosswalk
 from nfl_team_summaries.input import filter_season_types, prepare_plays
+from nfl_team_summaries.rbsdm import _RANKED as RBSDM_RANKED
 
 FIX = Path(__file__).parent / "fixtures"
 TEAMS = ["KC", "BUF", "PHI", "DAL"]
@@ -395,7 +396,15 @@ def test_every_rank_has_its_metric_and_every_player_rank_its_percentile(tables):
 def test_ranks_have_no_nulls_and_percentiles_stay_off_the_ends(tables):
     _, out = tables
     ts = out["team_summaries"]
-    assert sum(ts[c].null_count() for c in ts.columns if c.endswith("_rank")) == 0
+    # the grid ranks everything (the cfb port's contract); an rbsdm extra is the
+    # exception: its rank is null exactly where the metric is null for EVERY team
+    # (an extra the synthetic season never produces), never anywhere else
+    for c in (c for c in ts.columns if c.endswith("_rank")):
+        metric = c[: -len("_rank")]
+        if metric in RBSDM_RANKED and ts[metric].null_count() == ts.height:
+            assert ts[c].null_count() == ts.height, c
+        else:
+            assert ts[c].null_count() == 0, c
     qb = out["passing"].filter(pl.col("TEPA_pct").is_not_null())
     assert qb.height > 0
     assert (qb["TEPA_pct"] > 0).all() and (qb["TEPA_pct"] < 100).all()

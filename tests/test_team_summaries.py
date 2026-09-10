@@ -455,6 +455,8 @@ def test_series_columns_survive_an_asset_without_series():
     ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
     assert "series_conv_off" in ts.columns and "series_conv_def_rank" in ts.columns
     assert ts["series_conv_off"].is_null().all()
+    # and nobody is ranked on a metric nobody has (sequential ranks over nulls would look like data)
+    assert ts["series_conv_off_rank"].is_null().all() and ts["series_conv_def_rank"].is_null().all()
 
 
 def test_percentiles_shape(tables):

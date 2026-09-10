@@ -43,8 +43,11 @@ def _rank(col: str, *, descending: bool) -> pl.Expr:
     c = pl.col(col)
     base = c.rank(method="average", descending=descending)
     n_nonnull = c.is_not_null().sum()
+    # a column with no values at all (an older asset without the source
+    # columns) ranks nobody: sequential ranks over nulls would look like data
     null_trail = (n_nonnull + c.is_null().cum_sum()).cast(pl.Float64)
-    return pl.when(c.is_null()).then(null_trail).otherwise(base)
+    ranked = pl.when(c.is_null()).then(null_trail).otherwise(base)
+    return pl.when(n_nonnull == 0).then(pl.lit(None, dtype=pl.Float64)).otherwise(ranked)
 
 
 def _pass_tendencies(plays: pl.DataFrame) -> pl.DataFrame:

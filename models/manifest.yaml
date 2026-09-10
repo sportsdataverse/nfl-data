@@ -118,3 +118,8 @@ data_pipelines:
     stage: python/nfl_data_05_ratings_weekly.py
     wraps: nfl_ratings_weekly
     workflow: nfl_ratings_weekly.yml
+  team_summaries:
+    stage: python/nfl_data_06_team_summaries.py
+    wraps: nfl_team_summaries
+    workflow: nfl_pbp_cron.yml
+    release_tag: nfl_team_summaries (+ nfl_passing, nfl_rushing, nfl_receiving, nfl_percentiles)

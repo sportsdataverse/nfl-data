@@ -133,7 +133,8 @@ def _summarize_team(
     g = df.group_by(group).agg(
         plays=pl.len(),
         n_games=pl.col("game_id").n_unique(),
-        n_drives=pl.col("drive_id").n_unique(),
+        # n_unique counts null as a value; a scrimmage play with no fixed_drive must not add a drive
+        n_drives=pl.col("drive_id").drop_nulls().n_unique(),
         passrate=pl.col("pass").mean(),
         rushrate=pl.col("rush").mean(),
         havoc=pl.col("havoc").mean(),

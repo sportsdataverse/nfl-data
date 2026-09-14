@@ -92,13 +92,18 @@ def test_pbp_carries_the_processor_columns(built):
         assert col in df.columns, col
     assert df.filter(pl.col("scrimmage_play") == True).height > 100  # noqa: E712
     assert df["season_type"].unique().to_list() == [2]
+    # ids surface as <col>_id and the name-shaped column carries the name (cfb convention)
+    assert set(df["pos_team_id"].drop_nulls().to_list()) == {21, 6}
+    assert set(df["pos_team"].drop_nulls().to_list()) == {"Philadelphia Eagles", "Dallas Cowboys"}
+    assert df.columns.index("pos_team_id") + 1 == df.columns.index("pos_team")
     assert df.select(pl.col("EPA").is_null().mean()).item() < 0.2
 
 
 def test_adv_and_box_shapes(built):
     _, out = built
     team = pl.read_parquet(build.output_path(REGISTRY["adv_team"], 2025, out))
-    assert team.height == 2 and "pos_team" in team.columns
+    assert team.height == 2 and {"pos_team", "pos_team_id"} <= set(team.columns)
+    assert sorted(team["pos_team_id"].to_list()) == [6, 21]
     box = pl.read_parquet(build.output_path(REGISTRY["team_box"], 2025, out))
     assert set(box["home_away"].to_list()) == {"home", "away"}
     players = pl.read_parquet(build.output_path(REGISTRY["player_box"], 2025, out))

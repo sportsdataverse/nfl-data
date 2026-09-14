@@ -31,6 +31,53 @@ def _resolve_block(game: dict[str, Any], path: tuple[str, ...]) -> Any:
     return node
 
 
+# The processor puts a team ID in `pos_team` / `def_pos_team` -- a name-shaped
+# column. As in the cfb family, the id moves to `<col>_id` and `<col>` becomes
+# the display name, so the column means what it is named (and the espn_cfb_*
+# consumers -- game-on-paper's Paper Index fit reads `pos_team_id` -- work
+# unchanged).
+_TEAM_ID_COLS = ("pos_team", "def_pos_team")
+
+
+def team_names(finals: list[dict[str, Any]]) -> pl.DataFrame:
+    """``(team_id, team_name)`` over every final's header competitors."""
+    rows: dict[int, str] = {}
+    for game in finals:
+        try:
+            comps = game["header"]["competitions"][0]["competitors"]
+        except (KeyError, IndexError, TypeError):
+            continue
+        for c in comps or []:
+            team = c.get("team") or {}
+            tid, name = team.get("id"), team.get("displayName")
+            if tid is not None and name:
+                rows.setdefault(int(tid), str(name))
+    return pl.DataFrame(
+        {"team_id": list(rows.keys()), "team_name": list(rows.values())},
+        schema={"team_id": pl.Int64, "team_name": pl.Utf8},
+    )
+
+
+def resolve_team_names(df: pl.DataFrame, names: pl.DataFrame) -> pl.DataFrame:
+    """Split ``pos_team`` / ``def_pos_team`` into ``<col>_id`` + readable ``<col>``.
+
+    No-op when the frame carries neither column. The id column sits adjacent
+    to the name in the original position, so the column order stays readable.
+    """
+    present = [c for c in _TEAM_ID_COLS if c in df.columns]
+    if not present or df.height == 0 or names.height == 0:
+        return df
+    order: list[str] = []
+    for col in df.columns:
+        order.extend([f"{col}_id", col] if col in present else [col])
+    for col in present:
+        df = df.with_columns(pl.col(col).cast(pl.Int64, strict=False).alias(f"{col}_id")).drop(col)
+        df = df.join(
+            names.rename({"team_id": f"{col}_id", "team_name": col}), on=f"{col}_id", how="left"
+        )
+    return df.select(order)
+
+
 def dataset_frame(spec: DatasetSpec, finals: list[dict[str, Any]]) -> pl.DataFrame:
     """Build one dataset over a list of finals (one season, typically)."""
     frames: list[pl.DataFrame] = []
@@ -43,7 +90,7 @@ def dataset_frame(spec: DatasetSpec, finals: list[dict[str, Any]]) -> pl.DataFra
     if df.height and "game_id" in df.columns:
         sort_keys = [c for c in ("season", "week", "game_id") if c in df.columns]
         df = df.sort(sort_keys, maintain_order=True)
-    return df
+    return resolve_team_names(df, team_names(finals))
 
 
 def output_path(spec: DatasetSpec, season: int, out: str | Path) -> Path:

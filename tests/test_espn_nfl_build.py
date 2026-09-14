@@ -131,6 +131,25 @@ def test_cache_is_reused_and_stamped(built):
     assert not process.final_is_current(path)
 
 
+def test_build_reads_the_current_crosswalk_not_the_cached_id(built, tmp_path):
+    cache, _ = built
+    fake = tmp_path / "raw"
+    (fake / "crosswalk").mkdir(parents=True)
+    rows = json.loads((FIX / "crosswalk" / "games.json").read_text())
+    rows[0]["game_id"] = "2025_01_XXX_YYY"
+    (fake / "crosswalk" / "games.json").write_text(json.dumps(rows))
+    written = build.build_season(
+        ["drives"], 2025, cache_dir=cache, out=tmp_path / "out", store=EspnStore(str(fake))
+    )
+    df = pl.read_parquet(written["drives"])
+    assert df["nflverse_game_id"].unique().to_list() == ["2025_01_XXX_YYY"]
+    # the cached final itself is untouched
+    assert (
+        process.read_final(process.final_path(cache, 2025, EVENT))["nflverse_game_id"]
+        == "2025_01_DAL_PHI"
+    )
+
+
 def test_pregame_summary_is_not_cached():
     summary = json.load(gzip.open(FIX / "raw" / "2025" / f"{EVENT}.json.gz", "rt"))
     summary["header"]["competitions"][0]["status"]["type"]["state"] = "pre"

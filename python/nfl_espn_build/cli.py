@@ -77,7 +77,9 @@ def main(argv: list[str] | None = None) -> int:
                 store, season, args.cache_dir, workers=args.workers, reprocess=args.reprocess
             )
             failed += tally.get("failed", 0)
-        written = build_season(datasets, season, cache_dir=args.cache_dir, out=args.out)
+        written = build_season(
+            datasets, season, cache_dir=args.cache_dir, out=args.out, store=store
+        )
         if args.publish:
             for name, path in written.items():
                 if path is None:

@@ -15,6 +15,7 @@ from typing import Any
 import polars as pl
 
 from nfl_espn_build.config import REGISTRY, DatasetSpec
+from nfl_espn_build.ingest import EspnStore
 from nfl_espn_build.process import load_season_finals
 from nfl_espn_build.reshape import bind_games, flat_block_frame
 from nfl_espn_build.reshapers import RESHAPERS
@@ -109,11 +110,35 @@ def write_dataset(df: pl.DataFrame, spec: DatasetSpec, season: int, out: str | P
     return path
 
 
+def attach_crosswalk(finals: list[dict[str, Any]], store: EspnStore | None, season: int) -> None:
+    """Overwrite each final's nflverse / Shield ids from the CURRENT crosswalk.
+
+    The ids are stamped into the final at process time, but the crosswalk can
+    improve (a matcher fix, a flex game getting its kickoff) without the game
+    itself changing, so the build re-reads it rather than trusting the cache.
+    """
+    if store is None:
+        return
+    xw = {int(g["espn_event_id"]): g for g in store.season_events(season)}
+    for final in finals:
+        g = xw.get(int(final["id"]))
+        if g is None:
+            continue
+        final["nflverse_game_id"] = g.get("game_id") or final.get("nflverse_game_id")
+        final["shield_game_id"] = g.get("shield_game_id") or final.get("shield_game_id")
+
+
 def build_season(
-    datasets: list[str], season: int, *, cache_dir: str | Path, out: str | Path
+    datasets: list[str],
+    season: int,
+    *,
+    cache_dir: str | Path,
+    out: str | Path,
+    store: EspnStore | None = None,
 ) -> dict[str, Path | None]:
     """Cut every requested dataset for one season from its cached finals."""
     finals = load_season_finals(cache_dir, season)
+    attach_crosswalk(finals, store, season)
     log.info("season %s: %d cached finals", season, len(finals))
     written: dict[str, Path | None] = {}
     for name in datasets:

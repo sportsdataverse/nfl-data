@@ -26,7 +26,11 @@ GROUPS = {"all": ALL_ORDER, "adv_box": ADV_ORDER}
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="nfl_espn_build", description=__doc__.split("\n\n")[0])
+    # allow_abbrev=False: the numbered shims inject --dataset and refuse a caller's
+    # own; an abbreviated --dat would slip past that check and win
+    ap = argparse.ArgumentParser(
+        prog="nfl_espn_build", description=__doc__.split("\n\n")[0], allow_abbrev=False
+    )
     ap.add_argument("--dataset", required=True, choices=sorted(REGISTRY) + sorted(GROUPS))
     ap.add_argument("-s", "--start-year", type=int, required=True)
     ap.add_argument("-e", "--end-year", type=int, default=None)
@@ -64,6 +68,8 @@ def main(argv: list[str] | None = None) -> int:
     log = logging.getLogger("nfl_espn_build")
     datasets = GROUPS.get(args.dataset, [args.dataset])
     end = args.end_year if args.end_year is not None else args.start_year
+    if end < args.start_year:
+        build_parser().error("--end-year must be >= --start-year")
     seasons = list(range(args.start_year, end + 1))
     store = EspnStore(resolve_raw_root(args.raw_dir))
     log.info(
@@ -76,7 +82,17 @@ def main(argv: list[str] | None = None) -> int:
             tally = process_season(
                 store, season, args.cache_dir, workers=args.workers, reprocess=args.reprocess
             )
-            failed += tally.get("failed", 0)
+            if tally.get("failed"):
+                # a failed game has no current final; a dataset cut now would
+                # silently miss it (or carry a stale one), so neither build nor
+                # publish this season -- rerun after the failure is fixed
+                failed += tally["failed"]
+                log.error(
+                    "season %s: %d game(s) failed to process; build and publish skipped",
+                    season,
+                    tally["failed"],
+                )
+                continue
         written = build_season(
             datasets, season, cache_dir=args.cache_dir, out=args.out, store=store
         )

@@ -124,11 +124,15 @@ def test_cache_is_reused_and_stamped(built):
     store = EspnStore(str(FIX))
     tally = process.process_season(store, 2025, cache, workers=1)
     assert tally == {"listed": 1, "cached": 1}
-    # a stale stamp is reprocessed on the next run
+    # a stale stamp is reprocessed on the next run (restored after: the cache is module-shared)
+    current = final["processing_version"]
     final["processing_version"] = "0.0.0+0"
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         json.dump(final, fh)
     assert not process.final_is_current(path)
+    final["processing_version"] = current
+    process.write_final(path, final)
+    assert process.final_is_current(path)
 
 
 def test_build_reads_the_current_crosswalk_not_the_cached_id(built, tmp_path):
@@ -174,6 +178,26 @@ def test_publish_creates_release_once_and_uploads_per_file(tmp_path):
     assert all("--clobber" in c for c in calls[1:])
     assert publish.publish_files("t", [a], runner=calls.append, dry_run=True) == [a]
     assert len(calls) == 3
+
+
+def test_stale_finals_are_skipped_and_empty_cuts_remove_old_output(tmp_path):
+    cache = tmp_path / "cache"
+    (cache / "2025").mkdir(parents=True)
+    process.write_final(cache / "2025" / "1.json.gz", {"id": 1, "processing_version": "0.0.0+0"})
+    assert process.load_season_finals(cache, 2025) == []
+    out = tmp_path / "out"
+    stale = build.output_path(REGISTRY["drives"], 2025, out)
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"old")
+    assert build.build_season(["drives"], 2025, cache_dir=cache, out=out) == {"drives": None}
+    assert not stale.exists()
+
+
+def test_cli_rejects_a_bad_season_range_and_abbreviations():
+    with pytest.raises(SystemExit):
+        main(["--dataset", "drives", "-s", "2025", "-e", "2024"])
+    with pytest.raises(SystemExit):
+        main(["--dat", "drives", "-s", "2025"])
 
 
 def test_shim_rejects_a_dataset_override():

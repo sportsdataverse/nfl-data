@@ -86,14 +86,14 @@ def build_final(
     shield_game_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Process one stored game; ``None`` when the game has not completed."""
+    if status_state(summary) != "post":
+        return None
     from sportsdataverse.football.play_participants import (
         athlete_lookup_from_summary,
         play_participants_from_items,
     )
     from sportsdataverse.nfl import NFLPlayProcess
 
-    if status_state(summary) != "post":
-        return None
     parts = play_participants_from_items(
         plays_items or [], event_id, athlete_lookup=athlete_lookup_from_summary(summary)
     )
@@ -230,11 +230,21 @@ def process_season(
 
 
 def load_season_finals(cache_dir: str | Path, season: int) -> list[dict[str, Any]]:
-    """Every cached final of ``season`` (any version), oldest event id first."""
+    """Every CURRENT-version cached final of ``season``, oldest event id first.
+
+    A final left behind by an older sdv-py (a game whose reprocess failed) is
+    skipped and counted, never mixed into a dataset cut.
+    """
     d = Path(cache_dir) / str(season)
-    out = []
+    out, stale = [], 0
     for p in sorted(d.glob("*.json.gz")):
         final = read_final(p)
-        if final:
-            out.append(final)
+        if not final:
+            continue
+        if final.get("processing_version") != processing_version():
+            stale += 1
+            continue
+        out.append(final)
+    if stale:
+        log.warning("season %s: %d stale cached final(s) skipped (reprocess them)", season, stale)
     return out

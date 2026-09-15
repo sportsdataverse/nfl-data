@@ -100,9 +100,11 @@ def output_path(spec: DatasetSpec, season: int, out: str | Path) -> Path:
 
 def write_dataset(df: pl.DataFrame, spec: DatasetSpec, season: int, out: str | Path) -> Path | None:
     """Write the season parquet; ``None`` (and no file) for an empty frame."""
-    if df is None or df.height == 0:
-        return None
     path = output_path(spec, season, out)
+    if df is None or df.height == 0:
+        # never leave a previous cut behind for a season that now has no rows
+        path.unlink(missing_ok=True)
+        return None
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".parquet.tmp")
     df.write_parquet(tmp)

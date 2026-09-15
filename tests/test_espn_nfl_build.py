@@ -276,9 +276,10 @@ def test_pro_bowl_is_excluded_from_usage_leaderboards(built):
         c["team"]["id"] = "31" if c.get("homeAway") == "home" else "32"
     assert build.is_exhibition(pro_bowl) and not build.is_exhibition(finals[0])
     assert not build.is_exhibition({})
+    alone = build.dataset_frame(REGISTRY["adv_team_usage"], finals)
     per_game = build.dataset_frame(REGISTRY["adv_team_usage"], finals + [pro_bowl])
     leaderboard = build.dataset_frame(REGISTRY["usage_teams"], finals + [pro_bowl])
-    assert per_game["game_id"].n_unique() == 1  # same event id twice: per-game rows keep both
+    assert alone.height == 2 and per_game.height == 4  # per-game rows keep the Pro Bowl's two teams
     assert leaderboard.height == 2 and (leaderboard["games"] == 1).all()
 
 

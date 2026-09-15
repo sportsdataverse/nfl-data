@@ -1,0 +1,22 @@
+[
+ {
+  "espn_event_id": 401772510,
+  "season": 2025,
+  "season_type": 2,
+  "week": 1,
+  "kickoff_utc": "2025-09-05T00:20Z",
+  "neutral_site": false,
+  "status": "STATUS_FINAL",
+  "home_espn_team_id": "21",
+  "home_espn_abbr": "PHI",
+  "home_name": "Philadelphia Eagles",
+  "away_espn_team_id": "6",
+  "away_espn_abbr": "DAL",
+  "away_name": "Dallas Cowboys",
+  "game_id": "2025_01_DAL_PHI",
+  "shield_game_id": "f5908b6d-311e-11f0-b670-ae1250fadad1",
+  "home_nflverse": "PHI",
+  "away_nflverse": "DAL",
+  "match": "time"
+ }
+]

@@ -1,0 +1,95 @@
+name: espn_nfl processed-game datasets
+
+# Builds the espn_nfl_* family (pbp, team/player box, the ten advanced-box
+# sections, play participants, drives) from the ESPN game library committed in
+# sportsdataverse/nfl-raw (nfl/espn/, read over raw.githubusercontent.com --
+# the raw repo is never checked out) and uploads one parquet per season to each
+# dataset's release tag on sportsdataverse-data.
+#
+# The processor (sportsdataverse-py NFLPlayProcess) runs once per game into a
+# final cache keyed on the sdv-py version. That cache lives only for the run,
+# so a scheduled run processes the whole current season (~285 games, ~40 min
+# at 2 workers) every time; the backfill (2002 onward) is a one-off from a
+# checkout with a persistent cache (`scripts/espn_nfl_data.sh -s 2002 -e 2026`).
+#
+# Serialized with the repo's other publishing workflows: two runs in flight
+# put one behind the other's upload and a cancelled upload leaves a tag
+# half-updated, so queue, never cancel.
+concurrency:
+  group: ${{ github.repository }}-commit
+  cancel-in-progress: false
+
+on:
+  schedule:
+    - cron: '30 10 * 9-12,1,2 2'   # Tuesdays 10:30 UTC, Sep-Feb (after Monday night)
+  workflow_dispatch:
+    inputs:
+      start_year:
+        description: 'Start season (default: current)'
+        required: false
+        type: string
+      end_year:
+        description: 'End season (default: same as start)'
+        required: false
+        type: string
+      dataset:
+        description: 'Dataset key, all, or adv_box'
+        required: false
+        type: string
+        default: 'all'
+      publish:
+        description: 'Upload to the espn_nfl_* release tags'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Require the publish token
+        if: ${{ github.event_name == 'schedule' || inputs.publish }}
+        env:
+          SDV_GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+        run: |
+          if [ -z "$SDV_GH_TOKEN" ]; then
+            echo "::error ::SDV_GH_TOKEN is not set; cross-repo upload needs a PAT with Contents: write on sportsdataverse-data"
+            exit 1
+          fi
+
+      - name: Build (and publish)
+        env:
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+          NFL_RAW_DIR: https://raw.githubusercontent.com/sportsdataverse/nfl-raw/main/nfl/espn
+          ESPN_NFL_WORKERS: '2'
+          PUBLISH: ${{ (github.event_name == 'schedule' || inputs.publish) && '1' || '0' }}
+          START_YEAR: ${{ inputs.start_year }}
+          END_YEAR: ${{ inputs.end_year }}
+          DATASET: ${{ inputs.dataset || 'all' }}
+        run: |
+          ARGS=(-d "$DATASET")
+          [ -n "$START_YEAR" ] && ARGS+=(-s "$START_YEAR")
+          [ -n "$END_YEAR" ] && ARGS+=(-e "$END_YEAR")
+          bash scripts/espn_nfl_data.sh "${ARGS[@]}"
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: espn_nfl_data-log
+          path: logs/espn_nfl_data_*.log
+          if-no-files-found: ignore

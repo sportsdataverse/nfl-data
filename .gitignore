@@ -26,3 +26,6 @@ models/*.ubj
 models/*.json
 .fingerprints.json
 docs/models/.cache/
+
+# nfl_espn_build per-game final cache (rebuilt from nfl-raw; never an input)
+.cache/

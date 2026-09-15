@@ -30,6 +30,11 @@ uv run python -m nfl_model_publish player-stats --seasons 1999:2024 --out out/pl
 uv run python -m nfl_model_publish team-stats   --seasons 1999:2024 --out out/team_stats
 uv run python -m nfl_model_publish qbr          --seasons 2006:2024 --out out/qbr
 uv run python -m nfl_model_publish artifacts    --models models/ --tag nfl_model_artifacts
+
+# 4. espn_nfl_* processed-game family (ESPN library in nfl-raw -> NFLPlayProcess -> 15 datasets)
+uv run python -m nfl_espn_build --dataset all -s 2025 --workers 2            # cache finals + cut every dataset
+uv run python python/espn_nfl_01_pbp_creation.py -s 2025 --publish           # one dataset, upload to its tag
+bash scripts/espn_nfl_data.sh -s 2002 -e 2026                                # backfill; tail -f logs/espn_nfl_data_*.log
 ```
 
 `--repo` defaults to `sportsdataverse/sportsdataverse-data` on every publish subcommand. The
@@ -60,6 +65,7 @@ Output: parquet uploaded to releases on `sportsdataverse/sportsdataverse-data` (
 | `nfl_model_publish qbr` | `nfl_espn_qbr` | 2006– | ESPN `fitt/v3` QBR endpoint, nflverse-shape |
 | `nfl_ratings_weekly` | `nfl_ratings_weekly` | 1999– | sdv-py `nfl_ratings(as_of_date=)` per week; `as_of_week` is STRICTLY EXCLUSIVE (fit on games before week W's first kickoff). Weekly in-season cron + dispatch (`nfl_ratings_weekly.yml`) |
 | `nfl_team_summaries` (stage 06) | `nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles` | 1999– | season grid off `nfl_model_pbp` (REG only): the college `team_summaries` column contract (`{metric}_{off\|def\|margin}[_pass\|_rush][_rank]`, drive efficiency, opponent-adjusted EPA via sdv-py `cfb_adjusted_epa`) + rbsdm.com extras (pass rate over expected, neutral pass rate, fourth-down decisions vs the model, luck) + QB CPOE/composite. `team_id` is the **ESPN** id (vendored crosswalk `nfl_team_summaries/data/espn_team_ids.csv`); `pos_team` the nflverse abbr. Runs after stage 03 in `nfl_pbp_cron.yml`. |
+| `nfl_espn_build` (`espn_nfl_01..29_*_creation.py`) | `espn_nfl_pbp`, `espn_nfl_team_box`, `espn_nfl_player_box`, `espn_nfl_drives`, `espn_nfl_play_participants`, `espn_nfl_adv_{team,passing,rushing,receiving,defensive,turnover,drives,situational,defensive_players,specialists}` | 2002– | nfl-raw's **ESPN** library (`nfl/espn/raw\|plays`, read locally or over raw.githubusercontent.com) processed here with sdv-py `NFLPlayProcess` (offline: `espn_nfl_pbp(summary=)` + `play_participants_from_items`), one cached final per game (`.cache/nfl_espn_final`, stamped `<sdv-py version>+SCHEMA_REV`), then the same flatten/reshape rules as `cfbfastR-cfb-data`'s `espn_cfb_*`. `game_id` is the ESPN event id; `nflverse_game_id` / `season_type` ride along from the crosswalk. Tuesdays in season (`espn_nfl_cron.yml`). |
 | `nfl_model_publish artifacts` / `decision_models-artifacts` | `nfl_model_artifacts` | n/a | `.ubj` models + cards from `models/` (play_level/decision_models trainers) |
 
 Consumed downstream by sdv-py `load_nfl_pbp(source="sdv")`, `load_nfl_espn_qbr(source="sdv")`, etc.
@@ -116,6 +122,14 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
 
 ## Reference
 
+- `espn_nfl_*` family: `python/nfl_espn_build/` (`config.REGISTRY` is the dataset list; `process`
+  runs the processor + cache, `build` cuts datasets, `publish` uploads per file). The numbered
+  `python/espn_nfl_NN_*_creation.py` shims mirror `cfbfastR-cfb-data` (01 pbp, 02 team_box,
+  03 player_box, 04 = all ten adv_* (20-29), 05 play_participants, 06 drives). Driver
+  `scripts/espn_nfl_data.sh` (env: `NFL_RAW_DIR`, `ESPN_NFL_WORKERS`, `PUBLISH=1`); workflow
+  `espn_nfl_cron.yml`. Processing is ~8 s a game: only a completed game (`state == "post"`) is
+  cached, and a cached final is rebuilt when its stamp differs from the installed sdv-py.
+  Fixture: `tests/fixtures/espn_nfl` (one real game, laid out like the raw library).
 - Workflows: `.github/workflows/nfl_pbp_cron.yml` (model_pbp), `nfl_rosters_players_cron.yml`
   (rosters/players/player-stats/team-stats/qbr). Both: `workflow_dispatch` + cron
   `0 9 * 9-12,1,2 1` (Mondays 09:00 UTC, Sep–Feb); checkout nfl-data + nfl-raw, install uv,

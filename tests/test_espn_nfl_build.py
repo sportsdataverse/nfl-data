@@ -273,9 +273,12 @@ def test_pro_bowl_is_excluded_from_usage_leaderboards(built):
     finals = process.load_season_finals(cache, 2025)
     pro_bowl = json.loads(json.dumps(finals[0]))
     for c in pro_bowl["header"]["competitions"][0]["competitors"]:
-        c["team"]["id"] = "31" if c.get("homeAway") == "home" else "32"
+        c["team"]["id"] = "35" if c.get("homeAway") == "home" else "36"  # Team Carter vs Team Irvin
     assert build.is_exhibition(pro_bowl) and not build.is_exhibition(finals[0])
     assert not build.is_exhibition({})
+    assert not build.is_exhibition(
+        {"header": {"competitions": [{"competitors": [{"team": {}}, {"team": {"id": "10"}}]}]}}
+    )
     alone = build.dataset_frame(REGISTRY["adv_team_usage"], finals)
     per_game = build.dataset_frame(REGISTRY["adv_team_usage"], finals + [pro_bowl])
     leaderboard = build.dataset_frame(REGISTRY["usage_teams"], finals + [pro_bowl])
@@ -286,16 +289,22 @@ def test_pro_bowl_is_excluded_from_usage_leaderboards(built):
 def test_pro_bowl_is_excluded_from_tendencies():
     df = pl.DataFrame(
         {
-            "game_id": [1, 1, 2, 2],
-            "homeTeamId": [10, 10, 31, 31],
-            "awayTeamId": [20, 20, 32, 32],
-            "pos_team": [10, 20, 31, 32],
+            "game_id": [1, 1, 2, 2, 3, 3, 4],
+            "homeTeamId": [10, 10, 31, 31, 35, 35, 33],
+            "awayTeamId": [20, 20, 32, 32, 36, 36, 34],
+            "pos_team": [10, 20, 31, 32, 35, 36, 33],
         }
     )
     kept = tendencies_mod.exclude_exhibitions(df)
-    assert kept["game_id"].to_list() == [1, 1]
+    assert kept["game_id"].to_list() == [
+        1,
+        1,
+        4,
+    ]  # AFC/NFC and Team Rice/Irvin drop; Ravens/Texans stay
     assert tendencies_mod.exclude_exhibitions(df.head(0)).height == 0
-    assert tendencies_mod.exclude_exhibitions(df.drop("homeTeamId", "awayTeamId")).height == 4
+    assert (
+        tendencies_mod.exclude_exhibitions(df.drop("homeTeamId", "awayTeamId")).height == df.height
+    )
 
 
 def test_attach_coaches_drops_unattributed_games():

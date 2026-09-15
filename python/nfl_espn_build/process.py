@@ -212,8 +212,37 @@ def final_is_current(path: Path) -> bool:
     return bool(final) and final.get("processing_version") == processing_version()
 
 
+def summary_has_play_text(summary: dict[str, Any]) -> bool:
+    """Whether any drive play carries ``text``: ESPN's oldest games ship stub plays without it.
+
+    ``drives`` is a mapping with ``previous`` (and sometimes ``current``, a
+    drive or a list of drives) or, in some captures, a bare list of drives.
+    """
+    drives = summary.get("drives") or {}
+    if isinstance(drives, dict):
+        groups: list[Any] = list(drives.get("previous") or [])
+        current = drives.get("current")
+        groups += current if isinstance(current, list) else ([current] if current else [])
+    else:
+        groups = list(drives)
+    for drive in groups:
+        if not isinstance(drive, dict):
+            continue
+        for play in drive.get("plays") or []:
+            if isinstance(play, dict) and play.get("text"):
+                return True
+    return False
+
+
 def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
-    """Worker: read, process, cache one event. Returns ``(event_id, status)``."""
+    """Worker: read, process, cache one event. Returns ``(event_id, status)``.
+
+    ``"stub"`` is a completed game whose plays carry no text (all of 2005, the
+    2004 Pro Bowl, the 2008 AFC Championship): the processor cannot parse it and
+    never will, so it is a warning, not a failure that would hold back the
+    season's other games. Any final an older sdv-py left for it is removed so
+    the game cannot ride into a cut.
+    """
     root, season, ev, cache_dir = args
     store = EspnStore(root)
     event_id = int(ev["espn_event_id"])
@@ -221,6 +250,10 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
         summary = store.summary(season, event_id)
         if summary is None:
             return event_id, "missing"
+        if status_state(summary) == "post" and not summary_has_play_text(summary):
+            log.warning("season %s event %s: stub plays (no text); skipped", season, event_id)
+            final_path(cache_dir, season, event_id).unlink(missing_ok=True)
+            return event_id, "stub"
         final = build_final(
             summary,
             store.plays(season, event_id),

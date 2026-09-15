@@ -225,6 +225,14 @@ def test_stale_finals_are_skipped_and_empty_cuts_remove_old_output(tmp_path):
     assert not stale.exists()
 
 
+def test_resolve_team_names_keeps_the_shape_with_an_empty_lookup():
+    df = pl.DataFrame({"x": [1], "pos_team": [21], "def_pos_team": [6]})
+    empty = pl.DataFrame(schema={"team_id": pl.Int64, "team_name": pl.Utf8})
+    out = build.resolve_team_names(df, empty)
+    assert out.columns == ["x", "pos_team_id", "pos_team", "def_pos_team_id", "def_pos_team"]
+    assert out.row(0) == (1, 21, None, 6, None)
+
+
 def test_cli_rejects_a_bad_season_range_and_abbreviations():
     with pytest.raises(SystemExit):
         main(["--dataset", "drives", "-s", "2025", "-e", "2024"])

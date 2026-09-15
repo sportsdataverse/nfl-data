@@ -66,8 +66,9 @@ def resolve_team_names(df: pl.DataFrame, names: pl.DataFrame) -> pl.DataFrame:
     to the name in the original position, so the column order stays readable.
     """
     present = [c for c in _TEAM_ID_COLS if c in df.columns]
-    if not present or df.height == 0 or names.height == 0:
+    if not present or df.height == 0:
         return df
+    # an empty lookup still yields the normalized shape: ids in <col>_id, null names
     order: list[str] = []
     for col in df.columns:
         order.extend([f"{col}_id", col] if col in present else [col])

@@ -268,6 +268,21 @@ def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
     assert rc == 1 and cuts == []
 
 
+def test_pro_bowl_is_excluded_from_usage_leaderboards(built):
+    cache, _ = built
+    finals = process.load_season_finals(cache, 2025)
+    pro_bowl = json.loads(json.dumps(finals[0]))
+    for c in pro_bowl["header"]["competitions"][0]["competitors"]:
+        c["team"]["id"] = "31" if c.get("homeAway") == "home" else "32"
+    assert build.is_exhibition(pro_bowl) and not build.is_exhibition(finals[0])
+    assert not build.is_exhibition({})
+    alone = build.dataset_frame(REGISTRY["adv_team_usage"], finals)
+    per_game = build.dataset_frame(REGISTRY["adv_team_usage"], finals + [pro_bowl])
+    leaderboard = build.dataset_frame(REGISTRY["usage_teams"], finals + [pro_bowl])
+    assert alone.height == 2 and per_game.height == 4  # per-game rows keep the Pro Bowl's two teams
+    assert leaderboard.height == 2 and (leaderboard["games"] == 1).all()
+
+
 def test_pro_bowl_is_excluded_from_tendencies():
     df = pl.DataFrame(
         {

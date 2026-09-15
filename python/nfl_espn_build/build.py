@@ -20,7 +20,13 @@ from nfl_espn_build.ingest import EspnStore
 from nfl_espn_build.process import load_season_finals
 from nfl_espn_build.reshape import bind_games, flat_block_frame
 from nfl_espn_build.reshapers import RESHAPERS
-from nfl_espn_build.tendencies import coach_careers, coach_tendencies, season_plays, team_tendencies
+from nfl_espn_build.tendencies import (
+    EXHIBITION_TEAM_IDS,
+    coach_careers,
+    coach_tendencies,
+    season_plays,
+    team_tendencies,
+)
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +46,16 @@ def _resolve_block(game: dict[str, Any], path: tuple[str, ...]) -> Any:
 # consumers -- game-on-paper's Paper Index fit reads `pos_team_id` -- work
 # unchanged).
 _TEAM_ID_COLS = ("pos_team", "def_pos_team")
+
+
+def is_exhibition(game: dict[str, Any]) -> bool:
+    """Whether a final is the Pro Bowl: ESPN files it as postseason with the AFC/NFC as teams."""
+    try:
+        comps = game["header"]["competitions"][0]["competitors"]
+    except (KeyError, IndexError, TypeError):
+        return False
+    ids = {int((c.get("team") or {}).get("id") or 0) for c in comps or []}
+    return bool(ids & set(EXHIBITION_TEAM_IDS))
 
 
 def team_names(finals: list[dict[str, Any]]) -> pl.DataFrame:
@@ -139,6 +155,8 @@ def dataset_frame(
     if spec.tendencies == "careers":
         raise ValueError("coach_careers is cut from the written coach seasons; use build_season")
     for game in finals:
+        if spec.aggregate and is_exhibition(game):
+            continue  # the Pro Bowl never enters a season leaderboard
         if spec.usage_section is not None:
             frames.append(flat_block_frame(usage.box(game).get(spec.usage_section), game))
         elif spec.block is not None:

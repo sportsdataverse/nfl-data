@@ -80,6 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     log = logging.getLogger("nfl_espn_build")
     datasets = GROUPS.get(args.dataset, [args.dataset])
+    # coach_careers sums EVERY written coach season into one season-less file:
+    # cut and publish it once after the loop, never per season (a per-season
+    # cut would publish a partial career table mid-run)
+    careers = "coach_careers" in datasets
+    datasets = [d for d in datasets if d != "coach_careers"]
     end = args.end_year if args.end_year is not None else args.start_year
     if end < args.start_year:
         build_parser().error("--end-year must be >= --start-year")
@@ -114,6 +119,18 @@ def main(argv: list[str] | None = None) -> int:
                 if path is None:
                     continue
                 publish_files(REGISTRY[name].tag, [path], repo=args.repo, dry_run=args.dry_run)
+    if careers and failed:
+        log.error(
+            "coach_careers skipped: %d game(s) failed, so the career table would be partial", failed
+        )
+    elif careers:
+        written = build_season(
+            ["coach_careers"], seasons[-1], cache_dir=args.cache_dir, out=args.out, store=store
+        )
+        if args.publish:
+            for name, path in written.items():
+                if path is not None:
+                    publish_files(REGISTRY[name].tag, [path], repo=args.repo, dry_run=args.dry_run)
     if failed:
         log.error("%d game(s) failed to process; see the log", failed)
     return 1 if failed else 0

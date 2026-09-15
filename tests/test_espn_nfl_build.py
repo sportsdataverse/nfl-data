@@ -203,6 +203,65 @@ def test_build_uses_the_stubbed_coach_lookup(built, monkeypatch):
     assert calls == [2025]
 
 
+def test_careers_are_cut_once_after_the_season_loop(built, monkeypatch):
+    cache, out = built
+    cuts: list[tuple[list[str], int]] = []
+    real = build.build_season
+
+    def spy(datasets, season, **kw):
+        cuts.append((list(datasets), season))
+        return real(datasets, season, **kw)
+
+    monkeypatch.setattr("nfl_espn_build.cli.build_season", spy)
+    rc = main(
+        [
+            "--dataset",
+            "tendencies",
+            "-s",
+            "2024",
+            "-e",
+            "2025",
+            "--no-process",
+            "--raw-dir",
+            str(FIX),
+            "--cache-dir",
+            str(cache),
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 0
+    assert [c for c in cuts if "coach_careers" in c[0]] == [(["coach_careers"], 2025)]
+    assert all("coach_careers" not in c[0] for c in cuts[:-1]) and len(cuts) == 3
+
+
+def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
+    cache, out = built
+    cuts: list[list[str]] = []
+    monkeypatch.setattr(
+        "nfl_espn_build.cli.process_season", lambda *a, **k: {"listed": 1, "failed": 1}
+    )
+    monkeypatch.setattr(
+        "nfl_espn_build.cli.build_season",
+        lambda datasets, season, **kw: cuts.append(list(datasets)) or {},
+    )
+    rc = main(
+        [
+            "--dataset",
+            "tendencies",
+            "-s",
+            "2025",
+            "--raw-dir",
+            str(FIX),
+            "--cache-dir",
+            str(cache),
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 1 and cuts == []
+
+
 def test_attach_coaches_drops_unattributed_games():
     plays = pl.DataFrame(
         {
@@ -221,6 +280,10 @@ def test_attach_coaches_drops_unattributed_games():
     empty = tendencies_mod.attach_coaches(plays, pl.DataFrame(schema=tendencies_mod.COACH_SCHEMA))
     assert empty.height == 0 and {"coach", "def_coach"} <= set(empty.columns)
     assert tendencies_mod.coach_tendencies(plays.head(0), coaches).height == 0
+    # a season with no finals reshapes to a frame with NO columns; still no rows
+    bare = tendencies_mod.attach_coaches(pl.DataFrame(), coaches)
+    assert bare.height == 0 and {"coach", "def_coach"} <= set(bare.columns)
+    assert tendencies_mod.coach_tendencies(pl.DataFrame(), coaches).height == 0
     assert tendencies_mod.coach_careers([]).height == 0
 
 

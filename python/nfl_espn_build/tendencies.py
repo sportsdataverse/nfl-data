@@ -47,10 +47,11 @@ COACH_SCHEMA = {"game_id": pl.Int64, "home_coach": pl.Utf8, "away_coach": pl.Utf
 def season_plays(finals: list[dict[str, Any]]) -> pl.DataFrame:
     """The season's reshaped plays (the ``pbp`` cut, ids unresolved), regular + postseason only."""
     df = bind_games([RESHAPERS["pbp"](game) for game in finals])
-    if df.height and "seasonType" in df.columns:
-        df = df.filter(
-            pl.col("seasonType").cast(pl.Int64, strict=False).is_in(COUNTED_SEASON_TYPES)
-        )
+    # the processor stamps `seasonType` on every play and reshape_pbp adds the
+    # crosswalk's `season_type`; either one excludes preseason
+    col = next((c for c in ("season_type", "seasonType") if c in df.columns), None)
+    if df.height and col is not None:
+        df = df.filter(pl.col(col).cast(pl.Int64, strict=False).is_in(COUNTED_SEASON_TYPES))
     return df
 
 

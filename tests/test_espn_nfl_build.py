@@ -177,6 +177,19 @@ def test_tendencies_per_team_coach_and_career(built):
     assert "pos_team_id" not in careers.columns
 
 
+def test_season_plays_carry_home_team_and_exclude_preseason(built):
+    cache, _ = built
+    finals = process.load_season_finals(cache, 2025)
+    plays = tendencies_mod.season_plays(finals)
+    assert plays.height > 100 and {"homeTeamId", "seasonType", "season_type", "pos_team"} <= set(
+        plays.columns
+    )
+    for f in finals:
+        f["plays"] = [{**p, "seasonType": 1} for p in f["plays"]]
+        f["season_type"] = 1
+    assert tendencies_mod.season_plays(finals).height == 0
+
+
 def test_attach_coaches_drops_unattributed_games():
     plays = pl.DataFrame(
         {

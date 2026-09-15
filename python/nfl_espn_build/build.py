@@ -80,15 +80,46 @@ def resolve_team_names(df: pl.DataFrame, names: pl.DataFrame) -> pl.DataFrame:
     return df.select(order)
 
 
-def dataset_frame(spec: DatasetSpec, finals: list[dict[str, Any]]) -> pl.DataFrame:
+class UsageCache:
+    """Per-build memo of ``create_usage_box`` per final: six datasets, one computation."""
+
+    def __init__(self, league: str = "nfl") -> None:
+        self.league = league
+        self._box: dict[int, dict[str, list[dict[str, Any]]]] = {}
+
+    def box(self, game: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        key = int(game["id"])
+        if key not in self._box:
+            from sportsdataverse.football.usage_box import create_usage_box
+
+            plays = game.get("plays") or []
+            parts = game.get("play_participants") or []
+            self._box[key] = create_usage_box(
+                pl.from_dicts(plays, infer_schema_length=None) if plays else pl.DataFrame(),
+                pl.from_dicts(parts, infer_schema_length=None) if parts else None,
+                league=self.league,
+            )
+        return self._box[key]
+
+
+def dataset_frame(
+    spec: DatasetSpec, finals: list[dict[str, Any]], usage: UsageCache | None = None
+) -> pl.DataFrame:
     """Build one dataset over a list of finals (one season, typically)."""
     frames: list[pl.DataFrame] = []
+    usage = usage or UsageCache()
     for game in finals:
-        if spec.block is not None:
+        if spec.usage_section is not None:
+            frames.append(flat_block_frame(usage.box(game).get(spec.usage_section), game))
+        elif spec.block is not None:
             frames.append(flat_block_frame(_resolve_block(game, spec.block), game))
         else:
             frames.append(RESHAPERS[spec.reshaper](game))  # type: ignore[index]
     df = bind_games(frames)
+    if df.height and spec.aggregate:
+        from sportsdataverse.football.usage_box import aggregate_usage_box
+
+        df = aggregate_usage_box(spec.usage_section, [df])  # type: ignore[arg-type]
     if df.height and "game_id" in df.columns:
         sort_keys = [c for c in ("season", "week", "game_id") if c in df.columns]
         df = df.sort(sort_keys, maintain_order=True)
@@ -144,9 +175,10 @@ def build_season(
     attach_crosswalk(finals, store, season)
     log.info("season %s: %d cached finals", season, len(finals))
     written: dict[str, Path | None] = {}
+    usage = UsageCache("nfl")
     for name in datasets:
         spec = REGISTRY[name]
-        df = dataset_frame(spec, finals)
+        df = dataset_frame(spec, finals, usage)
         path = write_dataset(df, spec, season, out)
         written[name] = path
         log.info(

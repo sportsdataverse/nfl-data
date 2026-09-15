@@ -71,12 +71,42 @@ def test_every_registry_dataset_is_written(built):
         path = build.output_path(spec, 2025, out)
         assert path.exists(), name
         df = pl.read_parquet(path)
-        assert df.height > 0 and {"game_id", "season", "week", "nflverse_game_id"} <= set(
-            df.columns
-        ), name
+        assert df.height > 0, name
+        if spec.aggregate:  # a season leaderboard has no game identity
+            assert "game_id" not in df.columns and df["season"].unique().to_list() == [2025]
+            continue
+        assert {"game_id", "season", "week", "nflverse_game_id"} <= set(df.columns), name
         assert df["game_id"].unique().to_list() == [EVENT]
         assert df["nflverse_game_id"].unique().to_list() == ["2025_01_DAL_PHI"]
     assert set(REGISTRY) == set(ALL_ORDER)
+
+
+def test_usage_datasets_and_leaderboards(built):
+    _, out = built
+    for name in ("adv_player_usage", "adv_tackles", "adv_team_usage", "adv_drive_scripting"):
+        df = pl.read_parquet(build.output_path(REGISTRY[name], 2025, out))
+        assert df.height > 0 and {"game_id", "season", "nflverse_game_id"} <= set(df.columns), name
+    pu = pl.read_parquet(build.output_path(REGISTRY["adv_player_usage"], 2025, out))
+    assert {
+        "pos_team_id",
+        "pos_team",
+        "target_share",
+        "fd_td_rate",
+        "third_down_over_expected",
+    } <= set(pu.columns)
+    assert set(pu["pos_team"].drop_nulls().to_list()) == {"Philadelphia Eagles", "Dallas Cowboys"}
+    tk = pl.read_parquet(build.output_path(REGISTRY["adv_tackles"], 2025, out))
+    assert {"def_pos_team_id", "def_pos_team", "tackle_share", "position_group"} <= set(tk.columns)
+    ds = pl.read_parquet(build.output_path(REGISTRY["adv_drive_scripting"], 2025, out))
+    assert set(ds["script"].to_list()) == {"scripted", "non_scripted"}
+    # season leaderboards: one row per identity, rates recomputed, no game_id
+    lb = pl.read_parquet(build.output_path(REGISTRY["usage_players"], 2025, out))
+    assert "game_id" not in lb.columns and (lb["games"] == 1).all() and lb.height == pu.height
+    teams = pl.read_parquet(build.output_path(REGISTRY["usage_teams"], 2025, out))
+    assert teams.height == 2 and "rz_points_per_trip" in teams.columns
+    tk_lb = pl.read_parquet(build.output_path(REGISTRY["usage_tackles"], 2025, out))
+    for team, g in tk_lb.group_by("def_pos_team_id"):
+        assert abs(g["tackle_share"].sum() - 1.0) < 1e-9, team
 
 
 def test_pbp_carries_the_processor_columns(built):

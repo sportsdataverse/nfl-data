@@ -28,7 +28,9 @@ from importlib import metadata
 #: ``processing_version`` differs are reprocessed.
 #: 2: NFLPlayProcess scoring_opp read the home-oriented start.yardLine
 #:    instead of start.yardsToEndzone (sportsdataverse-py, 2026-09-15).
-SCHEMA_REV = 2
+#: 3: play_participants rows carry {type}_position_id (sportsdataverse-py
+#:    usage box, 2026-09-15) -- the position-group splits need them.
+SCHEMA_REV = 3
 
 
 def processing_version() -> str:
@@ -59,6 +61,12 @@ class DatasetSpec:
     tag: str
     block: tuple[str, ...] | None = None
     reshaper: str | None = None
+    #: a ``sportsdataverse.football.usage_box`` section computed at BUILD time
+    #: from the final's plays + participants (never read from the cache, so
+    #: the installed sdv-py's definitions always win without a reprocess)
+    usage_section: str | None = None
+    #: sum the per-game usage rows into one season leaderboard
+    aggregate: bool = False
 
 
 def _adv(section: str, key: str | None = None) -> DatasetSpec:
@@ -96,6 +104,28 @@ REGISTRY: dict[str, DatasetSpec] = {
     "adv_specialists": _adv("specialists"),
 }
 
+#: usage / situational sections (sportsdataverse.football.usage_box), per game
+#: and as season leaderboards
+_USAGE_SECTIONS = (
+    ("player_usage", "player_usage", "players"),
+    ("position_group_usage", "position_group_usage", "position_groups"),
+    ("tackles", "tackles", "tackles"),
+    ("position_group_tackles", "position_group_tackles", "position_group_tackles"),
+    ("team_usage", "team_usage", "teams"),
+    ("drive_scripting", "drive_scripting", "drive_scripting"),
+)
+for _section, _adv_key, _lb_key in _USAGE_SECTIONS:
+    REGISTRY[f"adv_{_adv_key}"] = DatasetSpec(
+        f"adv_{_adv_key}", f"adv_{_adv_key}", f"espn_nfl_adv_{_adv_key}", usage_section=_section
+    )
+    REGISTRY[f"usage_{_lb_key}"] = DatasetSpec(
+        f"usage_{_lb_key}",
+        f"usage_{_lb_key}",
+        f"espn_nfl_usage_{_lb_key}",
+        usage_section=_section,
+        aggregate=True,
+    )
+
 #: The ten advanced-box datasets, in the cfb stage-04 order.
 ADV_ORDER: list[str] = [
     "adv_team",
@@ -110,6 +140,10 @@ ADV_ORDER: list[str] = [
     "adv_specialists",
 ]
 
+#: The six per-game usage datasets (shims 30-35) and their season leaderboards (40-45).
+USAGE_ADV_ORDER: list[str] = [f"adv_{k}" for _, k, _ in _USAGE_SECTIONS]
+USAGE_LEADERBOARD_ORDER: list[str] = [f"usage_{k}" for _, _, k in _USAGE_SECTIONS]
+
 #: Build order for a full run (the numbered shims in ``python/`` follow it).
 ALL_ORDER: list[str] = [
     "pbp",
@@ -118,4 +152,6 @@ ALL_ORDER: list[str] = [
     *ADV_ORDER,
     "play_participants",
     "drives",
+    *USAGE_ADV_ORDER,
+    *USAGE_LEADERBOARD_ORDER,
 ]

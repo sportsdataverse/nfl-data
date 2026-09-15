@@ -19,6 +19,13 @@ from nfl_espn_build.ingest import EspnStore
 from nfl_espn_build.process import load_season_finals
 from nfl_espn_build.reshape import bind_games, flat_block_frame
 from nfl_espn_build.reshapers import RESHAPERS
+from nfl_espn_build.tendencies import (
+    coach_careers,
+    coach_games,
+    coach_tendencies,
+    season_plays,
+    team_tendencies,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,11 +88,28 @@ def resolve_team_names(df: pl.DataFrame, names: pl.DataFrame) -> pl.DataFrame:
 
 
 class UsageCache:
-    """Per-build memo of ``create_usage_box`` per final: six datasets, one computation."""
+    """Per-build memo of the build-time computations shared between datasets.
+
+    ``create_usage_box`` per final (eleven usage datasets, one computation),
+    the season's reshaped plays (both tendencies datasets) and the season's
+    coach-per-game lookup.
+    """
 
     def __init__(self, league: str = "nfl") -> None:
         self.league = league
         self._box: dict[int, dict[str, list[dict[str, Any]]]] = {}
+        self._plays: pl.DataFrame | None = None
+        self._coaches: dict[int, pl.DataFrame] = {}
+
+    def plays(self, finals: list[dict[str, Any]]) -> pl.DataFrame:
+        if self._plays is None:
+            self._plays = season_plays(finals)
+        return self._plays
+
+    def coaches(self, season: int) -> pl.DataFrame:
+        if season not in self._coaches:
+            self._coaches[season] = coach_games(season)
+        return self._coaches[season]
 
     def box(self, game: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         key = int(game["id"])
@@ -108,6 +132,16 @@ def dataset_frame(
     """Build one dataset over a list of finals (one season, typically)."""
     frames: list[pl.DataFrame] = []
     usage = usage or UsageCache()
+    if spec.tendencies in ("team", "coach"):
+        plays = usage.plays(finals)
+        if spec.tendencies == "team":
+            df = team_tendencies(plays)
+        else:
+            season = int(plays["season"][0]) if plays.height else 0
+            df = coach_tendencies(plays, usage.coaches(season))
+        return resolve_team_names(df, team_names(finals))
+    if spec.tendencies == "careers":
+        raise ValueError("coach_careers is cut from the written coach seasons; use build_season")
     for game in finals:
         if spec.usage_section is not None:
             frames.append(flat_block_frame(usage.box(game).get(spec.usage_section), game))
@@ -127,7 +161,18 @@ def dataset_frame(
 
 
 def output_path(spec: DatasetSpec, season: int, out: str | Path) -> Path:
+    if spec.tendencies == "careers":  # one file across seasons
+        return Path(out) / spec.dataset / f"{spec.stem}.parquet"
     return Path(out) / spec.dataset / f"{spec.stem}_{season}.parquet"
+
+
+def careers_frame(out: str | Path) -> pl.DataFrame:
+    """``coach_careers`` from every ``coach_tendencies`` season parquet under ``out``."""
+    spec = REGISTRY["coach_tendencies"]
+    files = sorted((Path(out) / spec.dataset).glob(f"{spec.stem}_*.parquet"))
+    seasons = [f.stem.rsplit("_", 1)[-1] for f in files]
+    log.info("coach_careers: summing %d coach season(s) %s", len(files), seasons)
+    return coach_careers(files)
 
 
 def write_dataset(df: pl.DataFrame, spec: DatasetSpec, season: int, out: str | Path) -> Path | None:
@@ -178,7 +223,11 @@ def build_season(
     usage = UsageCache("nfl")
     for name in datasets:
         spec = REGISTRY[name]
-        df = dataset_frame(spec, finals, usage)
+        df = (
+            careers_frame(out)
+            if spec.tendencies == "careers"
+            else dataset_frame(spec, finals, usage)
+        )
         path = write_dataset(df, spec, season, out)
         written[name] = path
         log.info(

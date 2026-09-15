@@ -54,7 +54,12 @@ def is_exhibition(game: dict[str, Any]) -> bool:
         comps = game["header"]["competitions"][0]["competitors"]
     except (KeyError, IndexError, TypeError):
         return False
-    ids = {int((c.get("team") or {}).get("id") or 0) for c in comps or []}
+    ids: set[int] = set()
+    for c in comps or []:
+        raw = (c.get("team") or {}).get("id")
+        if raw not in (None, ""):
+            ids.add(int(raw))
+    # a competitor without an id says nothing; only a known non-franchise side does
     return bool(ids) and not ids <= FRANCHISE_TEAM_IDS
 
 

@@ -276,6 +276,9 @@ def test_pro_bowl_is_excluded_from_usage_leaderboards(built):
         c["team"]["id"] = "35" if c.get("homeAway") == "home" else "36"  # Team Carter vs Team Irvin
     assert build.is_exhibition(pro_bowl) and not build.is_exhibition(finals[0])
     assert not build.is_exhibition({})
+    assert not build.is_exhibition(
+        {"header": {"competitions": [{"competitors": [{"team": {}}, {"team": {"id": "10"}}]}]}}
+    )
     alone = build.dataset_frame(REGISTRY["adv_team_usage"], finals)
     per_game = build.dataset_frame(REGISTRY["adv_team_usage"], finals + [pro_bowl])
     leaderboard = build.dataset_frame(REGISTRY["usage_teams"], finals + [pro_bowl])
@@ -299,7 +302,9 @@ def test_pro_bowl_is_excluded_from_tendencies():
         4,
     ]  # AFC/NFC and Team Rice/Irvin drop; Ravens/Texans stay
     assert tendencies_mod.exclude_exhibitions(df.head(0)).height == 0
-    assert tendencies_mod.exclude_exhibitions(df.drop("homeTeamId", "awayTeamId")).height == df.height
+    assert (
+        tendencies_mod.exclude_exhibitions(df.drop("homeTeamId", "awayTeamId")).height == df.height
+    )
 
 
 def test_attach_coaches_drops_unattributed_games():

@@ -93,9 +93,9 @@ def attach_coaches(plays: pl.DataFrame, coaches: pl.DataFrame) -> pl.DataFrame:
     unattributed snap would otherwise land on a null coach row.
     """
     if plays.height == 0 or coaches.height == 0:
-        return plays.head(0).with_columns(
-            coach=pl.lit(None, dtype=pl.Utf8), def_coach=pl.lit(None, dtype=pl.Utf8)
-        )
+        # built from a schema, not with_columns(lit): a literal on a frame with
+        # no columns broadcasts to ONE row, which would then be a "play"
+        return pl.DataFrame(schema={**plays.schema, "coach": pl.Utf8, "def_coach": pl.Utf8})
     coaches = coaches.select(
         pl.col("game_id").cast(pl.Int64),
         pl.col("home_coach").cast(pl.Utf8),

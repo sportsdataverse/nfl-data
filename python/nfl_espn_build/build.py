@@ -21,7 +21,7 @@ from nfl_espn_build.process import load_season_finals
 from nfl_espn_build.reshape import bind_games, flat_block_frame
 from nfl_espn_build.reshapers import RESHAPERS
 from nfl_espn_build.tendencies import (
-    EXHIBITION_TEAM_IDS,
+    FRANCHISE_TEAM_IDS,
     coach_careers,
     coach_tendencies,
     season_plays,
@@ -49,13 +49,13 @@ _TEAM_ID_COLS = ("pos_team", "def_pos_team")
 
 
 def is_exhibition(game: dict[str, Any]) -> bool:
-    """Whether a final is the Pro Bowl: ESPN files it as postseason with the AFC/NFC as teams."""
+    """Whether a final is the Pro Bowl: a side that is not one of the 32 franchises."""
     try:
         comps = game["header"]["competitions"][0]["competitors"]
     except (KeyError, IndexError, TypeError):
         return False
     ids = {int((c.get("team") or {}).get("id") or 0) for c in comps or []}
-    return bool(ids & set(EXHIBITION_TEAM_IDS))
+    return bool(ids) and not ids <= FRANCHISE_TEAM_IDS
 
 
 def team_names(finals: list[dict[str, Any]]) -> pl.DataFrame:

@@ -38,8 +38,10 @@ log = logging.getLogger(__name__)
 LEAGUE = "nfl"
 #: ESPN season types that count: regular season (2) and postseason (3)
 COUNTED_SEASON_TYPES = (2, 3)
-#: the Pro Bowl is filed under the postseason with the AFC (31) / NFC (32) as teams
-EXHIBITION_TEAM_IDS = (31, 32)
+#: ESPN ids of the 32 franchises (1-30, 33 Ravens, 34 Texans). The Pro Bowl is filed
+#: under the postseason with non-franchise teams: AFC/NFC (31/32) most years, draft
+#: squads such as Team Rice / Team Irvin (35/36) in 2013-2015.
+FRANCHISE_TEAM_IDS = frozenset(range(1, 31)) | {33, 34}
 TEAM_GROUP = ("season", "pos_team")
 COACH_GROUP = ("season", "pos_team", "coach")
 COACH_DEF_GROUP = ("season", "def_pos_team", "def_coach")
@@ -58,12 +60,12 @@ def season_plays(finals: list[dict[str, Any]]) -> pl.DataFrame:
 
 
 def exclude_exhibitions(df: pl.DataFrame) -> pl.DataFrame:
-    """Drop the Pro Bowl: ESPN files it as postseason between the AFC and NFC."""
+    """Drop the Pro Bowl: any game with a side that is not one of the 32 franchises."""
     sides = [c for c in ("homeTeamId", "awayTeamId") if c in df.columns]
     if df.height == 0 or not sides:
         return df
     exhibition = pl.any_horizontal(
-        [pl.col(c).cast(pl.Int64, strict=False).is_in(EXHIBITION_TEAM_IDS) for c in sides]
+        [~pl.col(c).cast(pl.Int64, strict=False).is_in(list(FRANCHISE_TEAM_IDS)) for c in sides]
     )
     return df.filter(~exhibition.fill_null(False))
 

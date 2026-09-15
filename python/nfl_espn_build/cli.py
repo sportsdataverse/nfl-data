@@ -21,6 +21,7 @@ from nfl_espn_build.config import (
     ADV_ORDER,
     ALL_ORDER,
     REGISTRY,
+    TENDENCIES_ORDER,
     USAGE_ADV_ORDER,
     USAGE_LEADERBOARD_ORDER,
 )
@@ -33,6 +34,7 @@ GROUPS = {
     "adv_box": ADV_ORDER,
     "usage_box": USAGE_ADV_ORDER,
     "usage_leaderboards": USAGE_LEADERBOARD_ORDER,
+    "tendencies": TENDENCIES_ORDER,
 }
 
 

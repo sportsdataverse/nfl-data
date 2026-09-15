@@ -14,6 +14,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 from nfl_espn_build import build, process, publish
+from nfl_espn_build import tendencies as tendencies_mod
 from nfl_espn_build.cli import main
 from nfl_espn_build.config import ALL_ORDER, REGISTRY, processing_version
 from nfl_espn_build.ingest import EspnStore, resolve_raw_root
@@ -24,6 +25,11 @@ EVENT = 401772510
 
 #: what the nflverse schedule says for the fixture game (PHI favored by 8.5, total 47.5)
 FIXTURE_LINES = {"401772510": (8.5, 47.5), "2025_01_DAL_PHI": (8.5, 47.5)}
+#: and its sidelines (nflverse home_coach / away_coach)
+FIXTURE_COACHES = pl.DataFrame(
+    {"game_id": [EVENT], "home_coach": ["Nick Sirianni"], "away_coach": ["Brian Schottenheimer"]},
+    schema={"game_id": pl.Int64, "home_coach": pl.Utf8, "away_coach": pl.Utf8},
+)
 
 
 @pytest.fixture(scope="module")
@@ -31,6 +37,13 @@ def built(tmp_path_factory):
     # offline: the schedule lookup is stubbed so the build never hits a release URL
     mp = pytest.MonkeyPatch()
     mp.setattr(process, "schedule_lines", lambda season: FIXTURE_LINES if season == 2025 else {})
+    mp.setattr(
+        tendencies_mod,
+        "coach_games",
+        lambda season: (
+            FIXTURE_COACHES if season == 2025 else pl.DataFrame(schema=tendencies_mod.COACH_SCHEMA)
+        ),
+    )
     root = tmp_path_factory.mktemp("espn_nfl")
     cache, out = root / "cache", root / "out"
     rc = main(
@@ -74,7 +87,10 @@ def test_every_registry_dataset_is_written(built):
         assert path.exists(), name
         df = pl.read_parquet(path)
         assert df.height > 0, name
-        if spec.aggregate:  # a season leaderboard has no game identity
+        if spec.tendencies == "careers":  # one season-less file across every coach season
+            assert "season" not in df.columns and df["seasons"].unique().to_list() == [1]
+            continue
+        if spec.aggregate or spec.tendencies:  # a season leaderboard has no game identity
             assert "game_id" not in df.columns and df["season"].unique().to_list() == [2025]
             continue
         assert {"game_id", "season", "week", "nflverse_game_id"} <= set(df.columns), name
@@ -109,6 +125,103 @@ def test_usage_datasets_and_leaderboards(built):
     tk_lb = pl.read_parquet(build.output_path(REGISTRY["usage_tackles"], 2025, out))
     for team, g in tk_lb.group_by("def_pos_team_id"):
         assert abs(g["tackle_share"].sum() - 1.0) < 1e-9, team
+
+
+def test_tendencies_per_team_coach_and_career(built):
+    _, out = built
+    team = pl.read_parquet(build.output_path(REGISTRY["team_tendencies"], 2025, out))
+    assert team.height == 2 and "game_id" not in team.columns
+    assert {
+        "pos_team_id",
+        "pos_team",
+        "games",
+        "plays",
+        "sec_per_play_neutral",
+        "pass_rate_neutral",
+    } <= set(team.columns)
+    assert {
+        "go_rate",
+        "fourth_agreement_rate",
+        "rz_td_rate",
+        "so_pts_per_trip",
+        "def_epa_per_play",
+    } <= set(team.columns)
+    assert set(team["pos_team"].to_list()) == {"Philadelphia Eagles", "Dallas Cowboys"}
+    assert (team["games"] == 1).all() and (team["plays"] > 40).all()
+    coach = pl.read_parquet(build.output_path(REGISTRY["coach_tendencies"], 2025, out))
+    assert coach.columns[:5] == ["season", "pos_team_id", "pos_team", "coach", "role"]
+    assert set(coach["coach"].to_list()) == {"Nick Sirianni", "Brian Schottenheimer"}
+    assert (coach["role"] == "HC").all()
+    phi_team = team.filter(pl.col("pos_team") == "Philadelphia Eagles").row(0, named=True)
+    phi_coach = coach.filter(pl.col("coach") == "Nick Sirianni").row(0, named=True)
+    assert (
+        phi_coach["plays"] == phi_team["plays"] and phi_coach["def_plays"] == phi_team["def_plays"]
+    )
+    assert abs(phi_coach["pass_rate"] - phi_team["pass_rate"]) < 1e-12
+    careers = pl.read_parquet(build.output_path(REGISTRY["coach_careers"], 2025, out))
+    assert build.output_path(REGISTRY["coach_careers"], 2025, out).name == "coach_careers.parquet"
+    assert careers.columns[:6] == [
+        "coach",
+        "role",
+        "teams",
+        "seasons",
+        "first_season",
+        "last_season",
+    ]
+    row = careers.filter(pl.col("coach") == "Nick Sirianni").row(0, named=True)
+    assert (
+        row["teams"] == "Philadelphia Eagles"
+        and row["seasons"] == 1
+        and row["plays"] == phi_coach["plays"]
+    )
+    assert "pos_team_id" not in careers.columns
+
+
+def test_season_plays_carry_home_team_and_exclude_preseason(built):
+    cache, _ = built
+    finals = process.load_season_finals(cache, 2025)
+    plays = tendencies_mod.season_plays(finals)
+    assert plays.height > 100 and {"homeTeamId", "seasonType", "season_type", "pos_team"} <= set(
+        plays.columns
+    )
+    for f in finals:
+        f["plays"] = [{**p, "seasonType": 1} for p in f["plays"]]
+        f["season_type"] = 1
+    assert tendencies_mod.season_plays(finals).height == 0
+
+
+def test_build_uses_the_stubbed_coach_lookup(built, monkeypatch):
+    calls: list[int] = []
+
+    def boom(season):
+        calls.append(season)
+        raise AssertionError("the build must resolve coach_games through the tendencies module")
+
+    monkeypatch.setattr(tendencies_mod, "coach_games", boom)
+    with pytest.raises(AssertionError):
+        build.UsageCache("nfl").coaches(2025)
+    assert calls == [2025]
+
+
+def test_attach_coaches_drops_unattributed_games():
+    plays = pl.DataFrame(
+        {
+            "game_id": [1, 1, 2],
+            "pos_team": [10, 20, 10],
+            "homeTeamId": [10, 10, 30],
+        }
+    )
+    coaches = pl.DataFrame(
+        {"game_id": [1], "home_coach": ["Home HC"], "away_coach": ["Away HC"]},
+        schema={"game_id": pl.Int64, "home_coach": pl.Utf8, "away_coach": pl.Utf8},
+    )
+    out = tendencies_mod.attach_coaches(plays, coaches)
+    assert out["coach"].to_list() == ["Home HC", "Away HC"]
+    assert out["def_coach"].to_list() == ["Away HC", "Home HC"]
+    empty = tendencies_mod.attach_coaches(plays, pl.DataFrame(schema=tendencies_mod.COACH_SCHEMA))
+    assert empty.height == 0 and {"coach", "def_coach"} <= set(empty.columns)
+    assert tendencies_mod.coach_tendencies(plays.head(0), coaches).height == 0
+    assert tendencies_mod.coach_careers([]).height == 0
 
 
 def test_pbp_carries_the_processor_columns(built):

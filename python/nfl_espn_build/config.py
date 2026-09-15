@@ -67,6 +67,10 @@ class DatasetSpec:
     usage_section: str | None = None
     #: sum the per-game usage rows into one season leaderboard
     aggregate: bool = False
+    #: a ``sportsdataverse.football.tendencies`` cut over the season's plays:
+    #: ``"team"`` (season x team), ``"coach"`` (season x team x head coach) or
+    #: ``"careers"`` (every written coach season summed per coach, one file)
+    tendencies: str | None = None
 
 
 def _adv(section: str, key: str | None = None) -> DatasetSpec:
@@ -131,6 +135,17 @@ for _section, _adv_key, _lb_key in _USAGE_SECTIONS:
         aggregate=True,
     )
 
+#: team / coach tendencies (sportsdataverse.football.tendencies), shims 61-63
+REGISTRY["team_tendencies"] = DatasetSpec(
+    "team_tendencies", "team_tendencies", "espn_nfl_team_tendencies", tendencies="team"
+)
+REGISTRY["coach_tendencies"] = DatasetSpec(
+    "coach_tendencies", "coach_tendencies", "espn_nfl_coach_tendencies", tendencies="coach"
+)
+REGISTRY["coach_careers"] = DatasetSpec(
+    "coach_careers", "coach_careers", "espn_nfl_coach_careers", tendencies="careers"
+)
+
 #: The ten advanced-box datasets, in the cfb stage-04 order.
 ADV_ORDER: list[str] = [
     "adv_team",
@@ -149,6 +164,9 @@ ADV_ORDER: list[str] = [
 USAGE_ADV_ORDER: list[str] = [f"adv_{k}" for _, k, _ in _USAGE_SECTIONS]
 USAGE_LEADERBOARD_ORDER: list[str] = [f"usage_{k}" for _, _, k in _USAGE_SECTIONS]
 
+#: Team then coach seasons, then careers (which reads the written coach seasons).
+TENDENCIES_ORDER: list[str] = ["team_tendencies", "coach_tendencies", "coach_careers"]
+
 #: Build order for a full run (the numbered shims in ``python/`` follow it).
 ALL_ORDER: list[str] = [
     "pbp",
@@ -159,4 +177,5 @@ ALL_ORDER: list[str] = [
     "drives",
     *USAGE_ADV_ORDER,
     *USAGE_LEADERBOARD_ORDER,
+    *TENDENCIES_ORDER,
 ]

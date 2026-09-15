@@ -190,6 +190,19 @@ def test_season_plays_carry_home_team_and_exclude_preseason(built):
     assert tendencies_mod.season_plays(finals).height == 0
 
 
+def test_build_uses_the_stubbed_coach_lookup(built, monkeypatch):
+    calls: list[int] = []
+
+    def boom(season):
+        calls.append(season)
+        raise AssertionError("the build must resolve coach_games through the tendencies module")
+
+    monkeypatch.setattr(tendencies_mod, "coach_games", boom)
+    with pytest.raises(AssertionError):
+        build.UsageCache("nfl").coaches(2025)
+    assert calls == [2025]
+
+
 def test_attach_coaches_drops_unattributed_games():
     plays = pl.DataFrame(
         {

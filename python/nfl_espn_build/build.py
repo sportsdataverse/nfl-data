@@ -14,18 +14,13 @@ from typing import Any
 
 import polars as pl
 
+from nfl_espn_build import tendencies as _tendencies
 from nfl_espn_build.config import REGISTRY, DatasetSpec
 from nfl_espn_build.ingest import EspnStore
 from nfl_espn_build.process import load_season_finals
 from nfl_espn_build.reshape import bind_games, flat_block_frame
 from nfl_espn_build.reshapers import RESHAPERS
-from nfl_espn_build.tendencies import (
-    coach_careers,
-    coach_games,
-    coach_tendencies,
-    season_plays,
-    team_tendencies,
-)
+from nfl_espn_build.tendencies import coach_careers, coach_tendencies, season_plays, team_tendencies
 
 log = logging.getLogger(__name__)
 
@@ -108,7 +103,8 @@ class UsageCache:
 
     def coaches(self, season: int) -> pl.DataFrame:
         if season not in self._coaches:
-            self._coaches[season] = coach_games(season)
+            # resolved through the module so a test can stub the schedule lookup
+            self._coaches[season] = _tendencies.coach_games(season)
         return self._coaches[season]
 
     def box(self, game: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:

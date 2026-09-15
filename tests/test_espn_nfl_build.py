@@ -184,6 +184,12 @@ def test_season_plays_carry_home_team_and_exclude_preseason(built):
     assert plays.height > 100 and {"homeTeamId", "seasonType", "season_type", "pos_team"} <= set(
         plays.columns
     )
+    # a Pro Bowl (postseason, AFC/NFC as teams) never reaches the cached plays
+    pro_bowl = [
+        {**f, "plays": [{**p, "homeTeamId": 31, "awayTeamId": 32} for p in f["plays"]]}
+        for f in finals
+    ]
+    assert tendencies_mod.season_plays(pro_bowl).height == 0
     for f in finals:
         f["plays"] = [{**p, "seasonType": 1} for p in f["plays"]]
         f["season_type"] = 1

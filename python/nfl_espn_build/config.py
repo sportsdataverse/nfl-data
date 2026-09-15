@@ -22,10 +22,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib import metadata
 
-#: Bumped when the final payload's shape changes for reasons other than a
-#: sdv-py release (a new embedded block, a changed key). Cached finals whose
+#: Bumped when the final payload's shape or semantics change for reasons a
+#: sdv-py release number does not capture (a new embedded block, a changed
+#: key, a processor fix landed on git main). Cached finals whose
 #: ``processing_version`` differs are reprocessed.
-SCHEMA_REV = 1
+#: 2: NFLPlayProcess scoring_opp read the home-oriented start.yardLine
+#:    instead of start.yardsToEndzone (sportsdataverse-py, 2026-09-15).
+SCHEMA_REV = 2
 
 
 def processing_version() -> str:

@@ -432,14 +432,19 @@ def test_stub_plays_are_skipped_not_failed(tmp_path):
     (root / "crosswalk").mkdir()
     (root / "crosswalk" / "games.json").write_text((FIX / "crosswalk" / "games.json").read_text())
     assert not process.summary_has_play_text(summary)
+    assert not process.summary_has_play_text({"drives": [{"plays": [{"id": 1}]}]})
+    assert process.summary_has_play_text(
+        {"drives": {"current": [{"plays": [{"text": "Kickoff"}]}]}}
+    )
+    # a final an older sdv-py left behind for the stub game is removed, not re-cut
+    stale = process.final_path(tmp_path / "cache", 2025, EVENT)
+    stale.parent.mkdir(parents=True)
+    stale.write_text("{}")
     event_id, status = process._process_one(
         (str(root), 2025, {"espn_event_id": EVENT}, str(tmp_path / "cache"))
     )
     assert (event_id, status) == (EVENT, "stub")
-    assert (
-        not (tmp_path / "cache").exists()
-        or process.load_season_finals(tmp_path / "cache", 2025) == []
-    )
+    assert not stale.exists() and process.load_season_finals(tmp_path / "cache", 2025) == []
     tally = process.process_season(EspnStore(str(root)), 2025, tmp_path / "cache", workers=1)
     assert tally.get("stub") == 1 and not tally.get("failed")
 

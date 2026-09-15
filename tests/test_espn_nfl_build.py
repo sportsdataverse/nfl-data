@@ -69,6 +69,8 @@ def test_every_registry_dataset_is_written(built):
     for name in ALL_ORDER:
         spec = REGISTRY[name]
         path = build.output_path(spec, 2025, out)
+        if name in ("adv_st_blocks", "usage_st_blocks") and not path.exists():
+            continue  # no blocked kick in the fixture game: an empty cut is not written
         assert path.exists(), name
         df = pl.read_parquet(path)
         assert df.height > 0, name

@@ -113,6 +113,11 @@ _USAGE_SECTIONS = (
     ("position_group_tackles", "position_group_tackles", "position_group_tackles"),
     ("team_usage", "team_usage", "teams"),
     ("drive_scripting", "drive_scripting", "drive_scripting"),
+    ("st_kickers", "st_kickers", "st_kickers"),
+    ("st_punters", "st_punters", "st_punters"),
+    ("st_returners", "st_returners", "st_returners"),
+    ("st_blocks", "st_blocks", "st_blocks"),
+    ("st_team", "st_team", "st_team"),
 )
 for _section, _adv_key, _lb_key in _USAGE_SECTIONS:
     REGISTRY[f"adv_{_adv_key}"] = DatasetSpec(
@@ -140,7 +145,7 @@ ADV_ORDER: list[str] = [
     "adv_specialists",
 ]
 
-#: The six per-game usage datasets (shims 30-35) and their season leaderboards (40-45).
+#: The eleven per-game usage / special-teams datasets (shims 30-40) and their season leaderboards (50-60).
 USAGE_ADV_ORDER: list[str] = [f"adv_{k}" for _, k, _ in _USAGE_SECTIONS]
 USAGE_LEADERBOARD_ORDER: list[str] = [f"usage_{k}" for _, _, k in _USAGE_SECTIONS]
 

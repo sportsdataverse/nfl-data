@@ -262,6 +262,21 @@ def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
     assert rc == 1 and cuts == []
 
 
+def test_pro_bowl_is_excluded_from_tendencies():
+    df = pl.DataFrame(
+        {
+            "game_id": [1, 1, 2, 2],
+            "homeTeamId": [10, 10, 31, 31],
+            "awayTeamId": [20, 20, 32, 32],
+            "pos_team": [10, 20, 31, 32],
+        }
+    )
+    kept = tendencies_mod.exclude_exhibitions(df)
+    assert kept["game_id"].to_list() == [1, 1]
+    assert tendencies_mod.exclude_exhibitions(df.head(0)).height == 0
+    assert tendencies_mod.exclude_exhibitions(df.drop("homeTeamId", "awayTeamId")).height == 4
+
+
 def test_attach_coaches_drops_unattributed_games():
     plays = pl.DataFrame(
         {

@@ -17,12 +17,23 @@ import logging
 import sys
 
 from nfl_espn_build.build import build_season
-from nfl_espn_build.config import ADV_ORDER, ALL_ORDER, REGISTRY
+from nfl_espn_build.config import (
+    ADV_ORDER,
+    ALL_ORDER,
+    REGISTRY,
+    USAGE_ADV_ORDER,
+    USAGE_LEADERBOARD_ORDER,
+)
 from nfl_espn_build.ingest import EspnStore, resolve_raw_root
 from nfl_espn_build.process import process_season
 from nfl_espn_build.publish import DEFAULT_REPO, publish_files
 
-GROUPS = {"all": ALL_ORDER, "adv_box": ADV_ORDER}
+GROUPS = {
+    "all": ALL_ORDER,
+    "adv_box": ADV_ORDER,
+    "usage_box": USAGE_ADV_ORDER,
+    "usage_leaderboards": USAGE_LEADERBOARD_ORDER,
+}
 
 
 def build_parser() -> argparse.ArgumentParser:

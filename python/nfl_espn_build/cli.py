@@ -119,7 +119,11 @@ def main(argv: list[str] | None = None) -> int:
                 if path is None:
                     continue
                 publish_files(REGISTRY[name].tag, [path], repo=args.repo, dry_run=args.dry_run)
-    if careers:
+    if careers and failed:
+        log.error(
+            "coach_careers skipped: %d game(s) failed, so the career table would be partial", failed
+        )
+    elif careers:
         written = build_season(
             ["coach_careers"], seasons[-1], cache_dir=args.cache_dir, out=args.out, store=store
         )

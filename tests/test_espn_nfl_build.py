@@ -235,6 +235,33 @@ def test_careers_are_cut_once_after_the_season_loop(built, monkeypatch):
     assert all("coach_careers" not in c[0] for c in cuts[:-1]) and len(cuts) == 3
 
 
+def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
+    cache, out = built
+    cuts: list[list[str]] = []
+    monkeypatch.setattr(
+        "nfl_espn_build.cli.process_season", lambda *a, **k: {"listed": 1, "failed": 1}
+    )
+    monkeypatch.setattr(
+        "nfl_espn_build.cli.build_season",
+        lambda datasets, season, **kw: cuts.append(list(datasets)) or {},
+    )
+    rc = main(
+        [
+            "--dataset",
+            "tendencies",
+            "-s",
+            "2025",
+            "--raw-dir",
+            str(FIX),
+            "--cache-dir",
+            str(cache),
+            "--out",
+            str(out),
+        ]
+    )
+    assert rc == 1 and cuts == []
+
+
 def test_attach_coaches_drops_unattributed_games():
     plays = pl.DataFrame(
         {

@@ -18,6 +18,7 @@ an in-progress capture would freeze the season's dataset at that state.
 
 from __future__ import annotations
 
+import functools
 import gzip
 import json
 import logging
@@ -77,6 +78,59 @@ def _home_away_ids(summary: dict[str, Any]) -> tuple[int | None, int | None]:
     return home, away
 
 
+@functools.lru_cache(maxsize=4)
+def schedule_lines(season: int) -> dict[str, tuple[float | None, float | None]]:
+    """``{espn_event_id | nflverse game_id: (spread_line, total_line)}`` from the nflverse schedule.
+
+    ESPN's summary ``pickcenter`` is empty before ~2013 and again for most
+    2023-2025 games, and the core odds feed has nothing before the mid-2010s;
+    the nflverse schedule carries the closing line back to 1999 (and the ESPN
+    event id since 2001). Cached per process (workers are spawned processes).
+    ``{}`` when the schedule cannot be read, so a game falls back to its
+    summary's pickcenter and then the processor defaults.
+    """
+    try:
+        from sportsdataverse.nfl import load_nfl_schedule
+
+        sched = load_nfl_schedule(seasons=[int(season)])
+    except Exception as exc:  # noqa: BLE001 -- network / release availability
+        log.warning("season %s: nflverse schedule unavailable (%r); no odds override", season, exc)
+        return {}
+    out: dict[str, tuple[float | None, float | None]] = {}
+    cols = [c for c in ("game_id", "espn", "spread_line", "total_line") if c in sched.columns]
+    if {"spread_line", "total_line"} - set(cols):
+        return {}
+    for row in sched.select(cols).iter_rows(named=True):
+        val = (row.get("spread_line"), row.get("total_line"))
+        for key in (row.get("game_id"), row.get("espn")):
+            if key not in (None, ""):
+                out[str(key)] = val
+    return out
+
+
+def odds_override_for(
+    season: int, event_id: int, nflverse_game_id: str | None = None
+) -> dict[str, Any] | None:
+    """The processor's ``odds_override`` for a game, or ``None`` when no line is known.
+
+    nflverse ``spread_line`` is positive when the home team is favored;
+    the processor takes the magnitude plus a ``homeFavorite`` flag.
+    """
+    lines = schedule_lines(int(season))
+    hit = lines.get(str(event_id))
+    if hit is None and nflverse_game_id:
+        hit = lines.get(str(nflverse_game_id))
+    if hit is None or hit[0] is None:
+        return None
+    spread, total = hit
+    return {
+        "gameSpread": abs(float(spread)),
+        "overUnder": float(total) if total is not None else 55.5,
+        "homeFavorite": float(spread) > 0,
+        "gameSpreadAvailable": True,
+    }
+
+
 def build_final(
     summary: dict[str, Any],
     plays_items: list[dict[str, Any]] | None,
@@ -84,6 +138,7 @@ def build_final(
     *,
     nflverse_game_id: str | None = None,
     shield_game_id: str | None = None,
+    odds_override: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Process one stored game; ``None`` when the game has not completed."""
     if status_state(summary) != "post":
@@ -101,6 +156,7 @@ def build_final(
         gameId=event_id,
         participants=parts if parts.height else None,
         join_participants=False,
+        odds_override=odds_override,
     )
     proc.espn_nfl_pbp(summary=summary)
     result = proc.run_processing_pipeline()
@@ -121,6 +177,7 @@ def build_final(
         nflverse_game_id=nflverse_game_id,
         shield_game_id=shield_game_id,
         processing_version=processing_version(),
+        odds_source=getattr(proc, "odds_source", None),
         count=len(result.get("plays") or []),
         play_participants=parts.to_dicts() if parts.height else [],
     )
@@ -170,6 +227,7 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
             event_id,
             nflverse_game_id=ev.get("game_id"),
             shield_game_id=ev.get("shield_game_id"),
+            odds_override=odds_override_for(season, event_id, ev.get("game_id")),
         )
         if final is None:
             return event_id, "not_final"

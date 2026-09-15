@@ -22,8 +22,15 @@ FIX = Path(__file__).parent / "fixtures" / "espn_nfl"
 EVENT = 401772510
 
 
+#: what the nflverse schedule says for the fixture game (PHI favored by 8.5, total 47.5)
+FIXTURE_LINES = {"401772510": (8.5, 47.5), "2025_01_DAL_PHI": (8.5, 47.5)}
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
+    # offline: the schedule lookup is stubbed so the build never hits a release URL
+    mp = pytest.MonkeyPatch()
+    mp.setattr(process, "schedule_lines", lambda season: FIXTURE_LINES if season == 2025 else {})
     root = tmp_path_factory.mktemp("espn_nfl")
     cache, out = root / "cache", root / "out"
     rc = main(
@@ -43,7 +50,8 @@ def built(tmp_path_factory):
         ]
     )
     assert rc == 0
-    return cache, out
+    yield cache, out
+    mp.undo()
 
 
 def test_store_reads_fixture_like_the_raw_library():
@@ -120,6 +128,13 @@ def test_cache_is_reused_and_stamped(built):
     final = process.read_final(path)
     assert final["processing_version"] == processing_version()
     assert final["nflverse_game_id"] == "2025_01_DAL_PHI" and final["homeTeamId"] == 21
+    assert final["odds_source"] == "injected"
+    plays = final["plays"]
+    assert (plays[0]["homeFavorite"], plays[0]["gameSpread"], plays[0]["overUnder"]) == (
+        True,
+        8.5,
+        47.5,
+    )
     assert process.final_is_current(path)
     store = EspnStore(str(FIX))
     tally = process.process_season(store, 2025, cache, workers=1)
@@ -152,6 +167,23 @@ def test_build_reads_the_current_crosswalk_not_the_cached_id(built, tmp_path):
         process.read_final(process.final_path(cache, 2025, EVENT))["nflverse_game_id"]
         == "2025_01_DAL_PHI"
     )
+
+
+def test_odds_override_from_schedule_lines(monkeypatch):
+    monkeypatch.setattr(
+        process,
+        "schedule_lines",
+        lambda season: {"1": (-3.0, 41.0), "2": (None, 44.0), "g3": (6.5, None)},
+    )
+    assert process.odds_override_for(2025, 1) == {
+        "gameSpread": 3.0,
+        "overUnder": 41.0,
+        "homeFavorite": False,
+        "gameSpreadAvailable": True,
+    }
+    assert process.odds_override_for(2025, 2) is None  # no line known
+    assert process.odds_override_for(2025, 9, "g3")["overUnder"] == 55.5  # nflverse id fallback
+    assert process.odds_override_for(2025, 9) is None
 
 
 def test_pregame_summary_is_not_cached():

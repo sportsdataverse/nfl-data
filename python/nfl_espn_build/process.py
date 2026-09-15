@@ -212,8 +212,26 @@ def final_is_current(path: Path) -> bool:
     return bool(final) and final.get("processing_version") == processing_version()
 
 
+def summary_has_play_text(summary: dict[str, Any]) -> bool:
+    """Whether any drive play carries ``text``: ESPN's oldest games ship stub plays without it."""
+    drives = summary.get("drives") or {}
+    for drive in (drives.get("previous") or []) + (
+        [drives["current"]] if drives.get("current") else []
+    ):
+        for play in drive.get("plays") or []:
+            if play.get("text"):
+                return True
+    return False
+
+
 def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
-    """Worker: read, process, cache one event. Returns ``(event_id, status)``."""
+    """Worker: read, process, cache one event. Returns ``(event_id, status)``.
+
+    ``"stub"`` is a completed game whose plays carry no text (all of 2005, the
+    2004 Pro Bowl, the 2008 AFC Championship): the processor cannot parse it and
+    never will, so it is a warning, not a failure that would hold back the
+    season's other 267 games.
+    """
     root, season, ev, cache_dir = args
     store = EspnStore(root)
     event_id = int(ev["espn_event_id"])
@@ -221,6 +239,9 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
         summary = store.summary(season, event_id)
         if summary is None:
             return event_id, "missing"
+        if status_state(summary) == "post" and not summary_has_play_text(summary):
+            log.warning("season %s event %s: stub plays (no text); skipped", season, event_id)
+            return event_id, "stub"
         final = build_final(
             summary,
             store.plays(season, event_id),

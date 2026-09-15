@@ -98,6 +98,10 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
 
 ## Gotchas
 
+- **ESPN stub plays (2005, the 2004 Pro Bowl, the 2008 AFC Championship).** Those games' plays
+  carry no `text`, in the summary and in the core items alike, so `NFLPlayProcess` cannot parse
+  them and never will. `process_season` tallies them as `stub` (a warning) rather than `failed`,
+  so the season's other games still build and publish; the stub games simply have no final.
 - **No NGS scraper here.** NextGen Stats lives in sdv-py (`load_nfl_nextgen_stats`); references to
   "ngs" in this repo are PBP feature columns, not a producer.
 - **Public-tier endpoints only.** Auth-walled Shield endpoints are excluded; rosters/players use the

@@ -415,6 +415,35 @@ def test_odds_override_from_schedule_lines(monkeypatch):
     assert process.odds_override_for(2025, 9) is None
 
 
+def test_stub_plays_are_skipped_not_failed(tmp_path):
+    """A completed game whose plays carry no text is a warning, never a season failure."""
+    root = tmp_path / "raw"
+    for sub in ("raw", "plays"):
+        (root / sub / "2025").mkdir(parents=True)
+    with gzip.open(FIX / "raw" / "2025" / f"{EVENT}.json.gz", "rt", encoding="utf-8") as fh:
+        summary = json.load(fh)
+    for drive in summary["drives"]["previous"]:
+        for play in drive["plays"]:
+            play.pop("text", None)
+    with gzip.open(root / "raw" / "2025" / f"{EVENT}.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump(summary, fh)
+    with gzip.open(root / "plays" / "2025" / f"{EVENT}.json.gz", "wt", encoding="utf-8") as fh:
+        json.dump({"items": []}, fh)
+    (root / "crosswalk").mkdir()
+    (root / "crosswalk" / "games.json").write_text((FIX / "crosswalk" / "games.json").read_text())
+    assert not process.summary_has_play_text(summary)
+    event_id, status = process._process_one(
+        (str(root), 2025, {"espn_event_id": EVENT}, str(tmp_path / "cache"))
+    )
+    assert (event_id, status) == (EVENT, "stub")
+    assert (
+        not (tmp_path / "cache").exists()
+        or process.load_season_finals(tmp_path / "cache", 2025) == []
+    )
+    tally = process.process_season(EspnStore(str(root)), 2025, tmp_path / "cache", workers=1)
+    assert tally.get("stub") == 1 and not tally.get("failed")
+
+
 def test_pregame_summary_is_not_cached():
     summary = json.load(gzip.open(FIX / "raw" / "2025" / f"{EVENT}.json.gz", "rt"))
     summary["header"]["competitions"][0]["status"]["type"]["state"] = "pre"

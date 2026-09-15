@@ -184,6 +184,12 @@ def test_season_plays_carry_home_team_and_exclude_preseason(built):
     assert plays.height > 100 and {"homeTeamId", "seasonType", "season_type", "pos_team"} <= set(
         plays.columns
     )
+    # a Pro Bowl (postseason, AFC/NFC as teams) never reaches the cached plays
+    pro_bowl = [
+        {**f, "plays": [{**p, "homeTeamId": 31, "awayTeamId": 32} for p in f["plays"]]}
+        for f in finals
+    ]
+    assert tendencies_mod.season_plays(pro_bowl).height == 0
     for f in finals:
         f["plays"] = [{**p, "seasonType": 1} for p in f["plays"]]
         f["season_type"] = 1
@@ -260,6 +266,21 @@ def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
         ]
     )
     assert rc == 1 and cuts == []
+
+
+def test_pro_bowl_is_excluded_from_tendencies():
+    df = pl.DataFrame(
+        {
+            "game_id": [1, 1, 2, 2],
+            "homeTeamId": [10, 10, 31, 31],
+            "awayTeamId": [20, 20, 32, 32],
+            "pos_team": [10, 20, 31, 32],
+        }
+    )
+    kept = tendencies_mod.exclude_exhibitions(df)
+    assert kept["game_id"].to_list() == [1, 1]
+    assert tendencies_mod.exclude_exhibitions(df.head(0)).height == 0
+    assert tendencies_mod.exclude_exhibitions(df.drop("homeTeamId", "awayTeamId")).height == 4
 
 
 def test_attach_coaches_drops_unattributed_games():

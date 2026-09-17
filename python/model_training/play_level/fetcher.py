@@ -332,6 +332,8 @@ def nflverse_game_id(game: dict, reg_weeks: int = 18) -> str:
     the numbering past the regular season, matching nflverse: with ``reg_weeks=18``
     (the 2021+ schedule), Wild Card -> 19, Divisional -> 20, Conference -> 21,
     Super Bowl -> 22; with ``reg_weeks=17`` (1999-2020) those become 18-21.
+    nflverse has no preseason ids, so preseason games get an explicit ``PRE{week}``
+    token (Hall of Fame game = ``PRE0``) that can never collide with a REG/POST id.
     Team abbreviations are normalized to nflverse via :func:`_nflverse_abbr`,
     including season-aware relocation fixups (``LA`` -> ``STL`` for the pre-2016
     Rams, etc.).
@@ -344,15 +346,19 @@ def nflverse_game_id(game: dict, reg_weeks: int = 18) -> str:
 
     Returns:
         The nflverse game_id string, e.g. ``"2025_01_DAL_PHI"``,
-        ``"2025_19_LA_CAR"`` (Wild Card), or ``"2010_01_ARI_STL"`` (pre-relocation).
+        ``"2025_19_LA_CAR"`` (Wild Card), ``"2010_01_ARI_STL"`` (pre-relocation),
+        or ``"2026_PRE1_DEN_ATL"`` (preseason).
     """
     season = int(game["season"])
     api_week = int(game["week"])
     season_type = game.get("seasonType", "REG")
-    week = api_week if season_type == "REG" else reg_weeks + api_week
+    if season_type == "PRE":
+        week = f"PRE{api_week}"
+    else:
+        week = f"{api_week if season_type == 'REG' else reg_weeks + api_week:02d}"
     away = _nflverse_abbr(_team_abbr(game["awayTeam"]), season)
     home = _nflverse_abbr(_team_abbr(game["homeTeam"]), season)
-    return f"{season}_{week:02d}_{away}_{home}"
+    return f"{season}_{week}_{away}_{home}"
 
 
 def _detect_reg_weeks(season: int, data_dir: Path, season_types: List[str]) -> int:

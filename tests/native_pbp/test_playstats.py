@@ -353,3 +353,15 @@ class TestRealGamePlaystats:
         df = self._frame()
         comp = df.filter((pl.col("stat_id") == 15) & (pl.col("gsis_player_id") == "00-0034796"))
         assert comp.height >= 1
+
+
+def test_build_playstats_season_skips_preseason_games(tmp_path):
+    season_dir = tmp_path / "raw" / "2024"
+    season_dir.mkdir(parents=True)
+    (season_dir / "2024_01_KC_BAL.json").write_text(json.dumps(_make_game()), encoding="utf-8")
+    pre = {**_make_game(), "seasonType": "PRE"}
+    (season_dir / "2024_PRE1_KC_BAL.json").write_text(json.dumps(pre), encoding="utf-8")
+
+    df = build_playstats_season(2024, raw_dir=tmp_path / "raw")
+
+    assert df["game_id"].unique().to_list() == ["2024_01_KC_BAL"]

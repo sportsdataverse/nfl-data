@@ -103,6 +103,8 @@ def build_season(
 ) -> pl.DataFrame:
     """Build every game in a season into one concatenated PBP frame.
 
+    Preseason games are skipped: nflverse play-by-play covers REG and POST only.
+
     Args:
         season: NFL season year.
         raw_dir: Root of the committed per-game library.
@@ -121,12 +123,16 @@ def build_season(
     for path in sorted(season_dir.glob(f"{season}_*.json")):
         if wanted is not None and path.stem not in wanted:
             continue
+        game = json.loads(path.read_text(encoding="utf-8"))
+        if game.get("seasonType") == "PRE":
+            continue
         meta = (schedule_lookup or {}).get(path.stem, {})
-        df = build_pbp_from_file(
-            path,
+        df = build_pbp(
+            game,
             roof=meta.get("roof"),
             spread_line=meta.get("spread_line"),
             total_line=meta.get("total_line"),
+            game_id=path.stem,
         )
         if df.height:
             frames.append(df)

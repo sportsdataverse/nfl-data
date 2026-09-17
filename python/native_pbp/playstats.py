@@ -177,7 +177,8 @@ def build_playstats_season(
 
     Mirrors :func:`native_pbp.build.build_season`'s directory-iteration
     pattern: one row per ``(game_id, play_id, stat_id)`` across every
-    ``{raw_dir}/{season}/*.json`` game file.
+    ``{raw_dir}/{season}/*.json`` game file. Preseason games are skipped, as
+    in ``build_season``.
 
     Args:
         season: NFL season year.
@@ -197,6 +198,8 @@ def build_playstats_season(
         if wanted is not None and path.stem not in wanted:
             continue
         game = json.loads(path.read_text(encoding="utf-8"))
+        if game.get("seasonType") == "PRE":
+            continue
         df = build_playstats_frame(game, game_id=path.stem, stat_ids=stat_ids)
         if df.height:
             frames.append(df)

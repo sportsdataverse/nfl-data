@@ -11,6 +11,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+from native_pbp.build import build_season as build_season_frame
 from native_pbp.cli import _build_schedule_lookup, _parse_season_range, build_season, main
 
 # ---------------------------------------------------------------------------
@@ -212,3 +213,16 @@ def test_parse_season_range_single():
 
 def test_parse_season_range_inclusive():
     assert _parse_season_range("2022:2024") == [2022, 2023, 2024]
+
+
+def test_build_season_skips_preseason_games(tmp_path):
+    # nflverse pbp is REG + POST only; preseason once shipped in model_pbp_2026.
+    season_dir = tmp_path / "raw" / "2024"
+    season_dir.mkdir(parents=True)
+    (season_dir / "2024_01_KC_BAL.json").write_text(json.dumps(_make_game()), encoding="utf-8")
+    pre = {**_make_game(game_id="2024_PRE1_KC_BAL"), "seasonType": "PRE"}
+    (season_dir / "2024_PRE1_KC_BAL.json").write_text(json.dumps(pre), encoding="utf-8")
+
+    df = build_season_frame(2024, raw_dir=tmp_path / "raw")
+
+    assert df["game_id"].unique().to_list() == ["2024_01_KC_BAL"]

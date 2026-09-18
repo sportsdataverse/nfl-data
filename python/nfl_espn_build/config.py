@@ -19,6 +19,8 @@ final per game.
 
 from __future__ import annotations
 
+import functools
+import json
 from dataclasses import dataclass
 from importlib import metadata
 
@@ -30,16 +32,46 @@ from importlib import metadata
 #:    instead of start.yardsToEndzone (sportsdataverse-py, 2026-09-15).
 #: 3: play_participants rows carry {type}_position_id (sportsdataverse-py
 #:    usage box, 2026-09-15) -- the position-group splits need them.
-SCHEMA_REV = 3
+#: 4: the football-sources NFL game-state sweep (sportsdataverse-py #504 and
+#:    #519, merged to main via #531). Replayed over 13 real nfl-raw summaries
+#:    2002-2026: EP_start changes on 1,828/1,857 rows, EPA on 1,685,
+#:    end.TimeSecsRem on 1,760 (N8 end clock), wp_before on 1,124 and
+#:    wp_after on 1,700; the frame gains a ``roof`` column; the N5 dedupe fix
+#:    recovers real plays the old filter dropped (163 -> 177 in one game).
+#:    Every 0.1.4+8dbbfa2e.3 final must rebuild.
+SCHEMA_REV = 4
+
+
+@functools.lru_cache(maxsize=1)
+def _sdv_git_sha() -> str:
+    """Short commit of a git-installed sportsdataverse; ``""`` for a PyPI install.
+
+    Both cron workflows install sdv-py from git ``main`` (the producer surface
+    lands there before a release), so the version string alone cannot tell two
+    library states apart -- ``0.1.4`` covers every commit between releases, and
+    a lock bump alone would leave every final's stamp unchanged and reprocess
+    would skip all of them. Same local-segment convention as
+    ``cfbfastR-cfb-raw``'s ``PROCESSING_VERSION``.
+    """
+    try:
+        raw = metadata.distribution("sportsdataverse").read_text("direct_url.json") or "{}"
+        return str(json.loads(raw).get("vcs_info", {}).get("commit_id", ""))[:8]
+    except Exception:  # noqa: BLE001 -- absent file / PyPI install / editable oddities
+        return ""
 
 
 def processing_version() -> str:
-    """``<sdv-py version>+<SCHEMA_REV>`` stamped on every cached final."""
+    """``<sdv-py version>+[<sdv-py git sha>.]<SCHEMA_REV>``.
+
+    Stamped on every cached final, in every written parquet's file-level
+    metadata, and in each dataset's manifest row, so a release tag always says
+    which library state cut each season.
+    """
     try:
         sdv = metadata.version("sportsdataverse")
     except metadata.PackageNotFoundError:  # pragma: no cover - editable oddities
         sdv = "unknown"
-    return f"{sdv}+{SCHEMA_REV}"
+    return f"{sdv}+" + ".".join(p for p in (_sdv_git_sha(), str(SCHEMA_REV)) if p)
 
 
 @dataclass(frozen=True)

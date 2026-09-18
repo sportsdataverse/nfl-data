@@ -16,9 +16,11 @@ from __future__ import annotations
 
 from sportsdataverse.nfl.shield_pbp.parse import *  # noqa: F401,F403
 from sportsdataverse.nfl.shield_pbp.parse import (  # noqa: F401
+    _apply_clock_typo_fix,
     _clock_to_seconds,
     _game_half,
     _impute_clock,
     _resolve_teams_and_game_id,
+    _seconds_remaining,
     _yardline_100,
 )

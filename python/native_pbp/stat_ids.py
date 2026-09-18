@@ -15,3 +15,4 @@ Same pattern as ``ncaa-mfb-football-raw``'s
 from __future__ import annotations
 
 from sportsdataverse.nfl.shield_pbp.stat_ids import *  # noqa: F401,F403
+from sportsdataverse.nfl.shield_pbp.stat_ids import _FILL_ID_SLOTS  # noqa: F401

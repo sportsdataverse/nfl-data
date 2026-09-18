@@ -1,10 +1,11 @@
 """Native NFL play-by-play reconstruction from the api.nfl.com Shield driveChart feed.
 
-Ports nflfastR's play parser (R -> Python/polars) so Track 6 EP/WP/CP model training
-can run off the committed ``nfl/raw/{season}/{game_id}.json`` library instead of
-depending on nflverse pre-computed PBP.
+**The parser moved to** :mod:`sportsdataverse.nfl.shield_pbp` (sportsdataverse-py
+#528). Every module listed below is now a re-export shim over its graduated twin;
+nfl-data keeps the pipeline around it -- ``cli`` (the ``--enrich`` + parquet-writing
+build) and ``parity`` (the nflverse diff). Fix a parser bug in sdv-py, not here.
 
-Modules (build order):
+Modules (build order, each a shim except ``cli`` / ``parity``):
     stat_ids    -- GSIS statType decode + per-play stats summation (sum_play_stats)
     parse       -- driveChart -> base play frame (down/dist/yardline/clock/posteam/...)
     players     -- passer/rusher/receiver resolution
@@ -15,6 +16,7 @@ Modules (build order):
     series      -- series / series_result / series_success
     parity      -- diff vs sportsdataverse.load_nfl_pbp for sample games
 """
+
 from __future__ import annotations
 
 __version__ = "0.1.0"

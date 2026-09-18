@@ -3,11 +3,12 @@
 NFL **data/publish** sibling of `sportsdataverse/nfl-raw` (the scraper). Consumes raw Shield JSON
 committed in `nfl-raw`, reshapes it to nflfastR parity, trains EP/WP/CP/decision_models models, and publishes
 datasets + model artifacts to GitHub Releases on `sportsdataverse/sportsdataverse-data`. Mirrors the
-`cfbfastR-cfb-data` role for NFL. The uv project lives under `python/` (not the repo root).
+`cfbfastR-cfb-data` role for NFL. The uv project lives at the repo root (`pyproject.toml` + `uv.lock`);
+the build code lives under `python/`.
 
 ## Commands
 
-All commands run from `python/` (that is where `pyproject.toml` + `uv.lock` live).
+All commands run from the repo root (that is where `pyproject.toml` + `uv.lock` live); scripts are under `python/`.
 
 ```sh
 cd python

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from nfl_espn_build import build, process, publish
+from nfl_espn_build import build, config, process, publish
 from nfl_espn_build import tendencies as tendencies_mod
 from nfl_espn_build.cli import main
 from nfl_espn_build.config import ALL_ORDER, REGISTRY, processing_version
@@ -401,6 +401,86 @@ def test_cache_is_reused_and_stamped(built):
     final["processing_version"] = current
     process.write_final(path, final)
     assert process.final_is_current(path)
+
+
+def test_processing_version_carries_the_schema_rev_and_the_sdv_git_sha(monkeypatch):
+    monkeypatch.setattr(config, "_sdv_git_sha", lambda: "abcd1234")
+    stamp = config.processing_version()
+    assert stamp.endswith(f"+abcd1234.{config.SCHEMA_REV}")
+    # a PyPI install has no sha; the rev is still there
+    monkeypatch.setattr(config, "_sdv_git_sha", lambda: "")
+    assert config.processing_version().endswith(f"+{config.SCHEMA_REV}")
+    # a lock bump alone (same release, new commit) must move the stamp, or a
+    # reprocess would skip every already-cached final
+    monkeypatch.setattr(config, "_sdv_git_sha", lambda: "deadbeef")
+    assert config.processing_version() != stamp
+
+
+def test_every_written_parquet_and_manifest_carries_the_stamp(built):
+    _, out = built
+    for name in ALL_ORDER:
+        spec = REGISTRY[name]
+        path = build.output_path(spec, 2025, out)
+        if not path.exists():
+            continue  # an empty cut is not written (no blocked kick in the fixture)
+        meta = pl.read_parquet_metadata(path)
+        assert meta["processing_version"] == processing_version(), name
+        assert meta["dataset"] == spec.dataset, name
+        assert meta["season"] == ("" if spec.tendencies == "careers" else "2025"), name
+        man = build.manifest_path(spec, out)
+        if spec.tendencies == "careers":  # season-less file, no per-season row
+            assert not man.exists()
+            continue
+        rows = pl.read_csv(man)
+        assert rows["season"].to_list() == [2025], name
+        assert rows["row_count"].to_list() == [pl.read_parquet(path).height], name
+        assert rows["processing_version"].to_list() == [processing_version()], name
+
+
+def test_manifest_row_is_upserted_and_dropped_with_the_cut(built, tmp_path):
+    cache, _ = built
+    spec = REGISTRY["drives"]
+    out = tmp_path / "out"
+    for _ in range(2):  # a rerun replaces the season's row, never appends one
+        build.build_season(["drives"], 2025, cache_dir=cache, out=out)
+    man = build.manifest_path(spec, out)
+    assert pl.read_csv(man)["season"].to_list() == [2025]
+    # a hand-written older season stays; only the rebuilt one is replaced
+    build._upsert_manifest(spec, 2024, 7, out)
+    build.build_season(["drives"], 2025, cache_dir=cache, out=out)
+    assert pl.read_csv(man)["season"].to_list() == [2024, 2025]
+    # a season whose cut goes empty loses its row, and the last row takes the file
+    build.write_dataset(pl.DataFrame(), spec, 2025, out)
+    assert pl.read_csv(man)["season"].to_list() == [2024]
+    build.write_dataset(pl.DataFrame(), spec, 2024, out)
+    assert not man.exists()
+
+
+def test_publish_sends_the_manifest_with_the_season_parquet(built, tmp_path, monkeypatch):
+    cache, _ = built
+    out = tmp_path / "out"
+    calls: list[list] = []
+    monkeypatch.setattr(publish, "_gh_release_exists", lambda tag, repo: True)
+    monkeypatch.setattr(publish, "_gh_runner", calls.append)
+    rc = main(
+        [
+            "--dataset",
+            "drives",
+            "-s",
+            "2025",
+            "--raw-dir",
+            str(FIX),
+            "--cache-dir",
+            str(cache),
+            "--out",
+            str(out),
+            "--no-process",
+            "--publish",
+        ]
+    )
+    assert rc == 0
+    sent = [Path(c[3]).name for c in calls if c[:2] == ["release", "upload"]]
+    assert sent == ["drives_2025.parquet", "espn_nfl_drives_in_data_repo.csv"]
 
 
 def test_build_reads_the_current_crosswalk_not_the_cached_id(built, tmp_path):

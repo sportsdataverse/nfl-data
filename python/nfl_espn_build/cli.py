@@ -16,7 +16,7 @@ import argparse
 import logging
 import sys
 
-from nfl_espn_build.build import build_season
+from nfl_espn_build.build import build_season, manifest_path
 from nfl_espn_build.config import (
     ADV_ORDER,
     ALL_ORDER,
@@ -118,7 +118,11 @@ def main(argv: list[str] | None = None) -> int:
             for name, path in written.items():
                 if path is None:
                     continue
-                publish_files(REGISTRY[name].tag, [path], repo=args.repo, dry_run=args.dry_run)
+                spec = REGISTRY[name]
+                # the manifest rides with the season parquet so the tag itself
+                # records which processing_version cut each season
+                files = [path, manifest_path(spec, args.out)]
+                publish_files(spec.tag, files, repo=args.repo, dry_run=args.dry_run)
     if careers and failed:
         log.error(
             "coach_careers skipped: %d game(s) failed, so the career table would be partial", failed

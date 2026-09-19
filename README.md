@@ -190,6 +190,39 @@ uv run pytest          # hermetic suite (integration tests deselected by default
 
 <!-- END GENERATED: status -->
 
+## Player percentiles
+
+Every ranked metric on `nfl_passing` / `nfl_rushing` / `nfl_receiving` ships a
+`{metric}_pct` column next to its `{metric}_rank`, and `nfl_player_percentiles`
+carries the thresholds behind them. Five things a reader will otherwise get wrong:
+
+1. **Percentile is among QUALIFIERS, not among all players.** The gate is
+   Pro-Football-Reference's per-category minimum — **14 dropbacks**, **6.25
+   carries** or **1.875 targets per team-game** — the same one gameonpaper.com's
+   leaderboards advertise and the same one `_rank` uses. A receiver at the 50th
+   percentile sits well above the median receiver; a UI that calls it "median"
+   is lying.
+2. **The position group is the table.** Percentiles are computed within
+   (season, table), so a QB is placed against QBs.
+3. **Weibull position `100 · (n + 1 − rank) / (n + 1)`** — nobody is pinned to
+   exactly 0 or 100, which leaves room at both ends.
+4. **A null metric yields a null percentile**, and null rows leave the
+   denominator, so "unknown" never renders as "worst" or depresses everyone
+   else's placing. (`_rank` still hands it a trailing rank — that is R's
+   `na.last = TRUE`, kept for the leaderboard.)
+5. **In-season percentiles move weekly** as the qualifier population grows.
+   Expected, not a bug.
+
+`nfl_player_percentiles` (release tag of the same name, one file per season) is
+the player twin of `nfl_percentiles`: 297 rows × 27 columns — `position_group`
+(`passing` / `rushing` / `receiving`) × `pctile` (0.01 … 0.99), one Float64
+column per ranked metric (the union of the three tables' metrics; a metric a
+group does not rank is null there), plus `season`. Direction is handled in the
+table: for a **low-is-good** metric (`pass_int`, `sacked`, `fumbles`) the row at
+`pctile = 0.90` holds the value a player with `{metric}_pct = 90` actually has —
+a LOW count — so a bar drawn from these thresholds agrees with the player's own
+`_pct` instead of contradicting it.
+
 ## Consumers
 
 The packages that read what this repo produces:
@@ -206,7 +239,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_03_pbp_publish.py`
 - `python/nfl_data_04_rosters_players.py`
 - `python/nfl_data_05_ratings_weekly.py`
-- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
+- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

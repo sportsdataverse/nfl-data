@@ -34,6 +34,10 @@ TABLES = {
     "rushing": ("nfl_rushing", "rushing"),
     "receiving": ("nfl_receiving", "receiving"),
     "percentiles": ("nfl_percentiles", "percentiles"),
+    # player-side twin of `percentiles`: its own tag, because the grain differs
+    # (percentile x position group, not percentile x team-game) and the team
+    # table is already a published contract the site reads.
+    "player_percentiles": ("nfl_player_percentiles", "player_percentiles"),
 }
 
 

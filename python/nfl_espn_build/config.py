@@ -39,7 +39,10 @@ from importlib import metadata
 #:    wp_after on 1,700; the frame gains a ``roof`` column; the N5 dedupe fix
 #:    recovers real plays the old filter dropped (163 -> 177 in one game).
 #:    Every 0.1.4+8dbbfa2e.3 final must rebuild.
-SCHEMA_REV = 4
+#: 5: the final carries a ``qa`` block -- the per-game
+#:    ``sportsdataverse.validation.validate_game`` report, flattened by
+#:    :func:`nfl_espn_build.qa.qa_row` and cut into ``espn_nfl_qa`` (V2).
+SCHEMA_REV = 5
 
 
 @functools.lru_cache(maxsize=1)
@@ -115,6 +118,8 @@ def _adv(section: str, key: str | None = None) -> DatasetSpec:
 REGISTRY: dict[str, DatasetSpec] = {
     # --- bespoke per-game reshapers -------------------------------------
     "pbp": DatasetSpec("pbp", "play_by_play", "espn_nfl_pbp", reshaper="pbp"),
+    # report-only data-integrity gate (V2); one row per validated game
+    "qa": DatasetSpec("qa", "espn_nfl_qa", "espn_nfl_qa", reshaper="qa"),
     "team_box": DatasetSpec("team_box", "team_box", "espn_nfl_team_box", reshaper="team_box"),
     "player_box": DatasetSpec(
         "player_box", "player_box", "espn_nfl_player_box", reshaper="player_box"
@@ -202,6 +207,7 @@ TENDENCIES_ORDER: list[str] = ["team_tendencies", "coach_tendencies", "coach_car
 #: Build order for a full run (the numbered shims in ``python/`` follow it).
 ALL_ORDER: list[str] = [
     "pbp",
+    "qa",
     "team_box",
     "player_box",
     *ADV_ORDER,

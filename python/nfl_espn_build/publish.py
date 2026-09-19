@@ -19,6 +19,12 @@ log = logging.getLogger(__name__)
 
 DEFAULT_REPO = "sportsdataverse/sportsdataverse-data"
 
+#: Datasets that BUILD but do not upload yet. ``espn_nfl_qa`` is new in V2 and
+#: its first publish (a full `espn_nfl_qa_2026`, then the backfill) is its own
+#: deliberate step after this lands -- a release tag created by a cron run is a
+#: tag nobody decided to create. Delete the entry to turn publishing on.
+PUBLISH_HELD: frozenset[str] = frozenset({"qa"})
+
 RELEASE_NOTES = (
     "ESPN NFL processed-game datasets built by sportsdataverse/nfl-data from the "
     "ESPN game library committed in sportsdataverse/nfl-raw (nfl/espn/), processed "

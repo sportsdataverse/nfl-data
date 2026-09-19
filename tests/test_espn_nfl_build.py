@@ -13,7 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from nfl_espn_build import build, config, process, publish
+from nfl_espn_build import build, config, process, publish, qa
 from nfl_espn_build import tendencies as tendencies_mod
 from nfl_espn_build.cli import main
 from nfl_espn_build.config import ALL_ORDER, REGISTRY, processing_version
@@ -37,6 +37,8 @@ def built(tmp_path_factory):
     # offline: the schedule lookup is stubbed so the build never hits a release URL
     mp = pytest.MonkeyPatch()
     mp.setattr(process, "schedule_lines", lambda season: FIXTURE_LINES if season == 2025 else {})
+    # the drift gate reads the PUBLISHED season asset; offline it has none
+    mp.setattr(qa, "published_frame", lambda *a, **k: None)
     mp.setattr(
         tendencies_mod,
         "coach_games",

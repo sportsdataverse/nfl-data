@@ -309,6 +309,30 @@ def attach_crosswalk(finals: list[dict[str, Any]], store: EspnStore | None, seas
         final["shield_game_id"] = g.get("shield_game_id") or final.get("shield_game_id")
 
 
+def qa_sidecar(qa_df: pl.DataFrame, season: int, out: str | Path) -> Path:
+    """Write the season's QA ``_summary.json``: the aggregate + the drift gate.
+
+    Report-only, and best-effort about its inputs: with no season pbp parquet
+    on disk (``--dataset qa`` on its own) or no previous release to compare
+    against, the drift list is simply empty. Nothing here can fail a build.
+    """
+    from nfl_espn_build import qa as _qa
+
+    pbp = REGISTRY["pbp"]
+    pbp_path = output_path(pbp, season, out)
+    drift: list[dict[str, Any]] = []
+    if pbp_path.exists():
+        drift = _qa.drift_findings(
+            pl.read_parquet(pbp_path),
+            _qa.published_frame(_qa.published_url(pbp.tag, pbp.stem, season)),
+        )
+    summary = _qa.season_summary(
+        qa_df, season, processing_version=processing_version(), drift=drift
+    )
+    _qa.log_summary(summary)
+    return _qa.write_summary(summary, _qa.summary_path(output_path(REGISTRY["qa"], season, out)))
+
+
 def build_season(
     datasets: list[str],
     season: int,
@@ -332,6 +356,8 @@ def build_season(
         )
         path = write_dataset(df, spec, season, out)
         written[name] = path
+        if name == "qa":
+            qa_sidecar(df, season, out)
         log.info(
             "season %s %s: %d rows x %d cols -> %s",
             season,

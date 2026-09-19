@@ -49,6 +49,24 @@ def reshape_pbp(game: dict[str, Any]) -> pl.DataFrame:
     return stamp_identity(pl.from_dicts(rows, infer_schema_length=None), game, week=True)
 
 
+# --- qa -------------------------------------------------------------------
+def reshape_qa(game: dict[str, Any]) -> pl.DataFrame:
+    """One row: the game's report-only validation verdict (see :mod:`nfl_espn_build.qa`).
+
+    The row is computed at process time and cached in the final, so this is a
+    lookup for every current final; a final that predates the stage is
+    validated here instead.
+    """
+    from nfl_espn_build.config import processing_version
+    from nfl_espn_build.qa import QA_SCHEMA, game_qa_row
+
+    row = game_qa_row(game, processing_version=processing_version())
+    df = pl.DataFrame([{k: row.get(k) for k in QA_SCHEMA}], schema=QA_SCHEMA)
+    # the same identity stamp every other espn_nfl_* dataset carries, so the
+    # QA rows join to them (week / season_type / nflverse_game_id)
+    return stamp_identity(df, game, week=True)
+
+
 # --- team_box -------------------------------------------------------------
 def reshape_team_box(game: dict[str, Any]) -> pl.DataFrame:
     """Pivot ``boxscore.teams[].statistics`` (name -> displayValue) per team."""
@@ -151,6 +169,7 @@ def reshape_drives(game: dict[str, Any]) -> pl.DataFrame:
 
 RESHAPERS: dict[str, Callable[[dict[str, Any]], pl.DataFrame]] = {
     "pbp": reshape_pbp,
+    "qa": reshape_qa,
     "team_box": reshape_team_box,
     "player_box": reshape_player_box,
     "drives": reshape_drives,

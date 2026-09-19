@@ -215,7 +215,8 @@ def _play(
         "down": down,
         "ydstogo": 10 if down in (1, None) else rng.randint(1, 9),
         "yardline_100": y100,
-        "yards_gained": gain,
+        # nflfastR carries NULL, not 0, on an incompletion or a pick
+        "yards_gained": None if (kind == "pass" and not complete) else gain,
         "posteam": posteam,
         "defteam": defteam,
         "home_team": home,
@@ -334,6 +335,28 @@ def test_prepare_plays_drive_context_from_the_whole_frame(tables):
     # the kickoff (yardline 65) is NOT the drive start; the first snap is
     assert d["drive_start_yards_to_goal"][0] == 75
     assert d["drive_yards"][0] == d["yards_gained"].sum()
+
+
+def test_yardsplay_shares_its_denominator_with_plays(tables):
+    """Yards/Play is yards_*/plays_*, as it is in the CFB producer.
+
+    An incompletion is a play that gained nothing, not a play that did not
+    happen: if ``yards_gained`` reached the grid as NULL, ``mean()`` would
+    quietly drop it and Yards/Play would not reconcile with Plays on the
+    same row. Same denominator for the rates that read yards_gained.
+    """
+    plays, grid = tables
+    assert plays["yards_gained"].null_count() == 0
+    for row in grid["team_summaries"].iter_rows(named=True):
+        for side in ("off", "def"):
+            for split in ("", "_pass", "_rush"):
+                n = row[f"plays_{side}{split}"]
+                if not n:
+                    continue
+                assert row[f"yardsplay_{side}{split}"] == pytest.approx(
+                    row[f"yards_{side}{split}"] / n
+                ), f"yardsplay_{side}{split}"
+        assert row["yardsplay_margin"] == pytest.approx(row["yardsplay_off"] - row["yardsplay_def"])
 
 
 def test_prepare_plays_respects_season_types():

@@ -285,7 +285,8 @@ def prepare_wp_data(df: pl.DataFrame) -> pl.DataFrame:
         .alias("home_timeouts_remaining"),
     )
     out = out.with_columns(
-        # spread_line is already home-perspective in nflfastR (negative = home favored)
+        # spread_line is already home-perspective in nflverse (POSITIVE = home favored,
+        # i.e. the home team is laying that many points)
         (
             pl.col("spread_line") * (pl.col("elapsed_share") * SPREAD_TIME_DECAY_EXPONENT).exp()
         ).alias("spread_time"),

@@ -118,7 +118,12 @@ def prepare_plays(
         wpa=pl.col("wpa"),
         wp_before=pl.col("wp"),
         **{"pass": dropback.cast(pl.Float64), "rush": rush.cast(pl.Float64)},
-        yards_gained=pl.col("yards_gained").cast(pl.Float64),
+        # nflfastR leaves yards_gained NULL on incompletions and interceptions
+        # (~18% of scrimmage plays); cfbfastR carries 0. A null is skipped by
+        # mean(), so yardsplay would divide the same yards by a fifth fewer
+        # plays than plays_*, and play_stuffed/havoc would drop those plays
+        # from their denominators too. Both gain the offence 0 yards: say so.
+        yards_gained=pl.col("yards_gained").fill_null(0.0).cast(pl.Float64),
         distance=pl.col("ydstogo"),
         yards_to_goal=pl.col("yardline_100"),
         epa_success=(pl.col("epa") > 0).cast(pl.Float64),

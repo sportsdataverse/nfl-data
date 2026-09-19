@@ -27,7 +27,7 @@ from nfl_espn_build.config import (
 )
 from nfl_espn_build.ingest import EspnStore, resolve_raw_root
 from nfl_espn_build.process import process_season
-from nfl_espn_build.publish import DEFAULT_REPO, publish_files
+from nfl_espn_build.publish import DEFAULT_REPO, PUBLISH_HELD, publish_files
 
 GROUPS = {
     "all": ALL_ORDER,
@@ -118,10 +118,19 @@ def main(argv: list[str] | None = None) -> int:
             for name, path in written.items():
                 if path is None:
                     continue
+                if name in PUBLISH_HELD:
+                    log.info("%s: built, publish held (see publish.PUBLISH_HELD)", name)
+                    continue
                 spec = REGISTRY[name]
                 # the manifest rides with the season parquet so the tag itself
                 # records which processing_version cut each season
                 files = [path, manifest_path(spec, args.out)]
+                if name == "qa":
+                    # the season summary (error-free share + drift findings)
+                    # is part of the asset, not a build artefact
+                    from nfl_espn_build.qa import summary_path
+
+                    files.append(summary_path(path))
                 publish_files(spec.tag, files, repo=args.repo, dry_run=args.dry_run)
     if careers and failed:
         log.error(

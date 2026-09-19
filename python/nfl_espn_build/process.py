@@ -30,6 +30,7 @@ from typing import Any
 
 from nfl_espn_build.config import processing_version
 from nfl_espn_build.ingest import EspnStore
+from nfl_espn_build.qa import qa_row
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +181,15 @@ def build_final(
         odds_source=getattr(proc, "odds_source", None),
         count=len(result.get("plays") or []),
         play_participants=parts.to_dicts() if parts.height else [],
+    )
+    # the report-only QA verdict rides in the final, so every dataset cut --
+    # including a `--no-process` rebuild -- reads it instead of re-validating
+    final["qa"] = qa_row(
+        proc.plays_frame,
+        processing_version=processing_version(),
+        summary=final,
+        box=final.get("advBoxScore"),
+        header=final.get("header"),
     )
     return final
 

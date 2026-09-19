@@ -29,10 +29,91 @@ _EXPLOSIVE_RUSH_EPA = 1.8
 # GEI normalization constant (gameonpaper).
 _GEI_NORM = 179.01777401608126
 
-#: leaderboard qualifier gates, per team game (same as the college grid)
+#: leaderboard qualifier gates, per team game. Pro-Football-Reference's
+#: per-category minimums (https://www.pro-football-reference.com/about/minimums.htm),
+#: the ones gameonpaper.com's leaderboards already advertise; the college grid
+#: borrowed the same three.
 QB_MIN_DROPBACKS_PER_GAME = 14.0
 RB_MIN_RUSHES_PER_GAME = 6.25
 WR_MIN_TARGETS_PER_GAME = 1.875
+
+#: the 1..99 percentile ladder both percentile tables are cut on
+_PCTILES: tuple[float, ...] = tuple(round(0.01 * i, 2) for i in range(1, 100))
+
+#: the qualifier gate per player table, written once and reused by the rank /
+#: percentile attach AND by the percentile-threshold table, so a threshold can
+#: never be taken over a different population than the ``_pct`` it explains.
+QB_QUALIFIES = pl.col("dropbacks") >= QB_MIN_DROPBACKS_PER_GAME * pl.col("team_games")
+RB_QUALIFIES = pl.col("plays") >= RB_MIN_RUSHES_PER_GAME * pl.col("team_games")
+WR_QUALIFIES = pl.col("plays") >= WR_MIN_TARGETS_PER_GAME * pl.col("team_games")
+
+#: table -> (ranked metrics, the subset ranked LOW-is-good). Every entry gets a
+#: ``{metric}_rank`` and a ``{metric}_pct`` on the player table and a threshold
+#: column in ``player_percentiles``.
+PLAYER_RANK_SPECS: dict[str, tuple[list[str], list[str]]] = {
+    "passing": (
+        [
+            "TEPA",
+            "EPAgame",
+            "EPAplay",
+            "success",
+            "comppct",
+            "yards",
+            "yardsplay",
+            "yardsgame",
+            "sack_adj_yards",
+            "yardsdropback",
+            "detmer",
+            "detmergame",
+            "passing_td",
+            "pass_int",
+            "sacked",
+            "cpoe",
+            "qb_epa_play",
+            "epa_cpoe_composite",
+        ],
+        ["pass_int", "sacked"],
+    ),
+    "rushing": (
+        [
+            "TEPA",
+            "EPAgame",
+            "EPAplay",
+            "success",
+            "plays",
+            "yards",
+            "rushing_td",
+            "fumbles",
+            "yardsplay",
+            "yardsgame",
+        ],
+        ["fumbles"],
+    ),
+    "receiving": (
+        [
+            "TEPA",
+            "EPAgame",
+            "EPAplay",
+            "success",
+            "comp",
+            "targets",
+            "catchpct",
+            "yards",
+            "passing_td",
+            "fumbles",
+            "yardsplay",
+            "yardsgame",
+        ],
+        ["fumbles"],
+    ),
+}
+
+#: union of every ranked player metric, in first-seen order -- the column set of
+#: the ``player_percentiles`` table (a metric another group does not rank is null
+#: on that group's rows).
+PLAYER_PERCENTILE_METRICS: list[str] = list(
+    dict.fromkeys(c for cols, _ in PLAYER_RANK_SPECS.values() for c in cols)
+)
 
 
 def _rank(col: str, *, descending: bool) -> pl.Expr:
@@ -383,10 +464,20 @@ def _attach_leader_ranks(
     *,
     keys: list[str],
     min_expr: pl.Expr,
-    rank_cols: list[str],
+    spec: str | None = None,
+    rank_cols: list[str] | None = None,
     asc_cols: list[str] | None = None,
 ) -> pl.DataFrame:
-    """Ranks + percentiles AMONG QUALIFIERS, left-joined back onto every row."""
+    """Ranks + percentiles AMONG QUALIFIERS, left-joined back onto every row.
+
+    Pass ``spec`` (a :data:`PLAYER_RANK_SPECS` key) so the ranked set and its
+    directions are read from the same place ``prepare_player_percentiles`` reads
+    them; ``rank_cols``/``asc_cols`` stay for ad-hoc callers and tests.
+    """
+    if spec is not None:
+        rank_cols, asc_cols = PLAYER_RANK_SPECS[spec]
+    if not rank_cols:
+        raise ValueError("pass either spec= or a non-empty rank_cols=")
     asc = set(asc_cols or [])
     stray = sorted(asc - set(rank_cols))
     if stray:
@@ -471,12 +562,54 @@ def prepare_percentiles(df: pl.DataFrame) -> pl.DataFrame:
         "opportunity_run",
         "third_down_distance",
     ]
-    pctiles = [round(0.01 * i, 2) for i in range(1, 100)]
-    rows: dict[str, list[float]] = {"pctile": pctiles}
+    rows: dict[str, list[float]] = {"pctile": list(_PCTILES)}
     for c in metric_cols:
         vals = per_game[c].cast(pl.Float64).to_numpy().astype(float)
-        rows[c] = [float(np.nanquantile(vals, p, method="linear")) for p in pctiles]
+        rows[c] = [float(np.nanquantile(vals, p, method="linear")) for p in _PCTILES]
     return pl.DataFrame(rows)
+
+
+def prepare_player_percentiles(qualifiers: dict[str, pl.DataFrame]) -> pl.DataFrame:
+    """Metric value at each percentile 1..99, per position group.
+
+    The season twin of the team-level :func:`prepare_percentiles`, and the lookup
+    side of the players' ``_pct`` columns: it answers "what EPA/play is a
+    90th-percentile QB?" without shipping a roster. Shape mirrors the team table
+    -- one row per percentile, one column per metric -- plus a ``position_group``
+    discriminator. A metric a group does not rank is null on that group's rows.
+
+    Two things keep it honest against the ``_pct`` a player carries:
+
+    * it reads the SAME qualifier frames ``_attach_leader_ranks`` ranked, so the
+      population behind a threshold is the population behind the percentile;
+    * a LOW-is-good metric (interceptions, sacks taken, fumbles) is read from the
+      opposite tail -- the 90th percentile of ``pass_int`` is a LOW pick count,
+      the value a QB with ``pass_int_pct == 90`` actually has. Taking the plain
+      90th quantile here would print the worst QBs' numbers against the best
+      QBs' bar.
+    """
+    schema = {"position_group": pl.Utf8, "pctile": pl.Float64}
+    schema.update({m: pl.Float64 for m in PLAYER_PERCENTILE_METRICS})
+    frames = []
+    for group, df in qualifiers.items():
+        ranked, asc = PLAYER_RANK_SPECS[group]
+        cols: dict[str, list] = {
+            "position_group": [group] * len(_PCTILES),
+            "pctile": list(_PCTILES),
+        }
+        for m in PLAYER_PERCENTILE_METRICS:
+            if m not in ranked or df.height == 0:
+                cols[m] = [None] * len(_PCTILES)
+                continue
+            vals = df[m].cast(pl.Float64).to_numpy().astype(float)
+            if not np.isfinite(vals).any():
+                cols[m] = [None] * len(_PCTILES)
+                continue
+            # low-is-good: the Nth percentile of GOODNESS is the (1-N)th of the value
+            qs = [(1.0 - p) if m in asc else p for p in _PCTILES]
+            cols[m] = [float(np.nanquantile(vals, q, method="linear")) for q in qs]
+        frames.append(pl.DataFrame(cols, schema=schema))
+    return pl.concat(frames, how="vertical")
 
 
 def _clean_rank_columns(df: pl.DataFrame) -> pl.DataFrame:
@@ -551,36 +684,9 @@ def build_team_summaries(
             _add_team_games
         )
     )
-    qb = passer_extras(
-        qb,
-        team_off,
-        min_expr=pl.col("dropbacks") >= QB_MIN_DROPBACKS_PER_GAME * pl.col("team_games"),
-    )
+    qb = passer_extras(qb, team_off, min_expr=QB_QUALIFIES)
     qb = _attach_leader_ranks(
-        qb,
-        keys=["pos_team_id", "passer_player_id"],
-        min_expr=pl.col("dropbacks") >= QB_MIN_DROPBACKS_PER_GAME * pl.col("team_games"),
-        rank_cols=[
-            "TEPA",
-            "EPAgame",
-            "EPAplay",
-            "success",
-            "comppct",
-            "yards",
-            "yardsplay",
-            "yardsgame",
-            "sack_adj_yards",
-            "yardsdropback",
-            "detmer",
-            "detmergame",
-            "passing_td",
-            "pass_int",
-            "sacked",
-            "cpoe",
-            "qb_epa_play",
-            "epa_cpoe_composite",
-        ],
-        asc_cols=["pass_int", "sacked"],
+        qb, keys=["pos_team_id", "passer_player_id"], min_expr=QB_QUALIFIES, spec="passing"
     )
     rb = summarize_rusher(
         team_off.filter((pl.col("rush") == 1) & pl.col("rusher_player_id").is_not_null()).pipe(
@@ -588,22 +694,7 @@ def build_team_summaries(
         )
     )
     rb = _attach_leader_ranks(
-        rb,
-        keys=["pos_team_id", "rusher_player_id"],
-        min_expr=pl.col("plays") >= RB_MIN_RUSHES_PER_GAME * pl.col("team_games"),
-        rank_cols=[
-            "TEPA",
-            "EPAgame",
-            "EPAplay",
-            "success",
-            "plays",
-            "yards",
-            "rushing_td",
-            "fumbles",
-            "yardsplay",
-            "yardsgame",
-        ],
-        asc_cols=["fumbles"],
+        rb, keys=["pos_team_id", "rusher_player_id"], min_expr=RB_QUALIFIES, spec="rushing"
     )
     wr = summarize_receiver(
         team_off.filter(
@@ -611,25 +702,16 @@ def build_team_summaries(
         ).pipe(_add_team_games)
     )
     wr = _attach_leader_ranks(
-        wr,
-        keys=["pos_team_id", "receiver_player_id"],
-        min_expr=pl.col("plays") >= WR_MIN_TARGETS_PER_GAME * pl.col("team_games"),
-        rank_cols=[
-            "TEPA",
-            "EPAgame",
-            "EPAplay",
-            "success",
-            "comp",
-            "targets",
-            "catchpct",
-            "yards",
-            "passing_td",
-            "fumbles",
-            "yardsplay",
-            "yardsgame",
-        ],
-        asc_cols=["fumbles"],
+        wr, keys=["pos_team_id", "receiver_player_id"], min_expr=WR_QUALIFIES, spec="receiving"
     )
+    # thresholds over exactly the frames that were ranked above
+    player_percentiles = prepare_player_percentiles(
+        {
+            "passing": qb.filter(QB_QUALIFIES),
+            "rushing": rb.filter(RB_QUALIFIES),
+            "receiving": wr.filter(WR_QUALIFIES),
+        }
+    ).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
     # opponent-adjusted EPA: the shared sdv-py ridge (league-agnostic; keyed on
     # pos_team_id / def_pos_team_id / home / neutral_site / wp_before)
@@ -650,6 +732,7 @@ def build_team_summaries(
 
     return {
         "percentiles": percentiles,
+        "player_percentiles": player_percentiles,
         "team_summaries": team_out,
         "passing": _prepare_for_write(qb, yr).rename({"passer_player_id": "player_id"}),
         "rushing": _prepare_for_write(rb, yr).rename({"rusher_player_id": "player_id"}),

@@ -16,7 +16,16 @@ from pathlib import Path
 import polars as pl
 import pytest
 from nfl_team_summaries import checks
-from nfl_team_summaries.build import _attach_leader_ranks, build_team_summaries
+from nfl_team_summaries.build import (
+    PLAYER_PERCENTILE_METRICS,
+    PLAYER_RANK_SPECS,
+    QB_QUALIFIES,
+    RB_QUALIFIES,
+    WR_QUALIFIES,
+    _attach_leader_ranks,
+    build_team_summaries,
+    prepare_player_percentiles,
+)
 from nfl_team_summaries.crosswalk import attach_team_ids, load_crosswalk
 from nfl_team_summaries.input import filter_season_types, prepare_plays
 from nfl_team_summaries.rbsdm import _RANKED as RBSDM_RANKED
@@ -520,3 +529,173 @@ def test_adjustment_noop_gate_fires():
     same = pl.DataFrame({"adj_off_epa": x, "EPAplay_off": x, "adj_def_epa": x, "EPAplay_def": x})
     with pytest.raises(ValueError, match="NO-OP"):
         checks.assert_adjustment_is_real(same, label="t")
+
+
+# --- percentiles ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("table", ["passing", "rushing", "receiving"])
+def test_pct_is_monotone_with_its_metric_within_its_group(tables, table):
+    """The validation-map gate: a better metric never gets a worse percentile.
+
+    "Better" is the direction ``_rank`` already encodes -- descending for
+    everything except the ``asc_cols`` (picks, sacks taken, fumbles), where a
+    lower count is better. Ties may share a percentile; nothing may invert.
+    """
+    _, out = tables
+    df = out[table]
+    ranked, asc = PLAYER_RANK_SPECS[table]
+    for metric in ranked:
+        q = df.filter(pl.col(metric).is_not_null() & pl.col(f"{metric}_pct").is_not_null())
+        if q.height < 2:
+            continue
+        q = q.sort(metric, descending=metric in asc)
+        pct = q[f"{metric}_pct"].to_list()
+        assert pct == sorted(pct), f"{table}.{metric}_pct inverts against its metric"
+
+
+@pytest.mark.parametrize(
+    "table,gate",
+    [("passing", QB_QUALIFIES), ("rushing", RB_QUALIFIES), ("receiving", WR_QUALIFIES)],
+)
+def test_qualification_is_applied_identically_to_rank_and_pct(tables, table, gate):
+    """Same population for both, and a null metric costs the percentile only.
+
+    ``_rank`` reproduces R's ``na.last=TRUE`` and hands a null metric a trailing
+    rank; ``_pct`` must not, or "unknown" renders as "worst".
+    """
+    _, out = tables
+    df = out[table]
+    ranked, _ = PLAYER_RANK_SPECS[table]
+    qualified = df.filter(gate)
+    if qualified.height == 0:
+        # no back clears 6.25 carries per team-game in the four-game synthetic
+        # season; the table must then carry no ranks at all (the gate firing on
+        # a real population is covered by the unit test below and the 2025 fixture)
+        assert all(df[f"{m}_rank"].null_count() == df.height for m in ranked)
+        return
+    for metric in ranked:
+        rank, pct = pl.col(f"{metric}_rank"), pl.col(f"{metric}_pct")
+        # non-qualifiers carry neither
+        assert df.filter(~gate).filter(rank.is_not_null() | pct.is_not_null()).height == 0, metric
+        # qualifiers all carry a rank; the percentile is dropped exactly where the metric is
+        assert qualified.filter(rank.is_null()).height == 0, metric
+        assert (
+            qualified.filter(pct.is_null()).height
+            == qualified.filter(pl.col(metric).is_null()).height
+        ), metric
+        good = qualified.filter(pct.is_not_null())
+        n = good.height
+        assert (good[f"{metric}_pct"] == 100 * (n + 1 - good[f"{metric}_rank"]) / (n + 1)).all()
+
+
+def test_player_percentiles_shape_and_direction(tables):
+    _, out = tables
+    pp = out["player_percentiles"]
+    assert pp.columns[:2] == ["position_group", "pctile"]
+    assert pp.height == 99 * 3
+    assert set(pp["position_group"].unique()) == {"passing", "rushing", "receiving"}
+    assert (pp["season"] == 2025).all()
+    for m in PLAYER_PERCENTILE_METRICS:
+        assert pp.schema[m] == pl.Float64, m  # never a polars Null column
+    for group, (ranked, asc) in PLAYER_RANK_SPECS.items():
+        g = pp.filter(pl.col("position_group") == group).sort("pctile")
+        assert g.height == 99 and g["pctile"][0] == 0.01 and g["pctile"][-1] == 0.99
+        for m in PLAYER_PERCENTILE_METRICS:
+            if m not in ranked:
+                assert g[m].null_count() == 99, f"{group}.{m} is not a ranked metric there"
+                continue
+            vals = g.filter(pl.col(m).is_not_null())[m].to_list()
+            if len(vals) < 2:
+                continue
+            # ascending from the 1st to the 99th percentile of GOODNESS, which for
+            # a low-is-good metric means a falling raw value
+            assert vals == (sorted(vals, reverse=True) if m in asc else sorted(vals)), (
+                f"{group}.{m}"
+            )
+
+
+def test_player_percentile_thresholds_agree_with_the_players_pct(tables):
+    """A threshold recomputes from the same qualifiers the ``_pct`` came from.
+
+    Median check: the value at pctile 0.50 is the qualifiers' median, and the
+    player nearest 50 on the ``_pct`` scale sits next to it.
+    """
+    _, out = tables
+    pp = out["player_percentiles"]
+    for table, gate in (
+        ("passing", QB_QUALIFIES),
+        ("rushing", RB_QUALIFIES),
+        ("receiving", WR_QUALIFIES),
+    ):
+        qual = out[table].filter(gate)
+        row = pp.filter((pl.col("position_group") == table) & (pl.col("pctile") == 0.5))
+        for metric in PLAYER_RANK_SPECS[table][0]:
+            vals = qual[metric].drop_nulls()
+            if vals.len() == 0:
+                continue
+            assert row[metric][0] == pytest.approx(vals.median()), f"{table}.{metric}"
+
+
+def test_player_percentiles_survive_a_group_with_no_qualifiers():
+    pp = prepare_player_percentiles(
+        {"passing": pl.DataFrame(schema={"TEPA": pl.Float64}), "rushing": pl.DataFrame()}
+    )
+    assert pp.height == 198
+    assert pp["TEPA"].null_count() == 198 and pp.schema["TEPA"] == pl.Float64
+
+
+# --- real 2025 output ------------------------------------------------------------------
+
+
+def test_real_2025_passing_percentiles(  # noqa: D103
+):
+    """Invariants re-checked on a slice of the REAL 2025 nfl_passing build.
+
+    Synthetic pbp cannot catch a qualification or direction regression that only
+    shows up at league scale (34 qualified passers over 17 team games, with real
+    ties -- two QBs share ``pass_int_rank`` 18.5). Provenance: the 2025 rows of
+    ``nfl_passing`` built from the released ``model_pbp_2025`` by
+    ``python -m nfl_team_summaries --seasons 2025``, qualifiers only, six columns.
+    """
+    df = pl.read_csv(FIX / "nfl_passing_2025_pct_sample.csv")
+    assert df.height > 30
+    # every sampled row qualified: PFR's 14 dropbacks per team-game
+    assert (df["dropbacks"] >= 14.0 * df["team_games"]).all()
+    n = df.height
+    for metric, ascending in (("EPAplay", False), ("pass_int", True)):
+        assert (df[f"{metric}_pct"] == 100 * (n + 1 - df[f"{metric}_rank"]) / (n + 1)).all(), metric
+        assert (df[f"{metric}_pct"] > 0).all() and (df[f"{metric}_pct"] < 100).all()
+        s = df.sort(metric, descending=ascending)
+        assert s[f"{metric}_pct"].to_list() == sorted(s[f"{metric}_pct"].to_list()), metric
+
+
+def test_attach_leader_ranks_gates_rank_and_pct_on_the_same_rows():
+    """The gate is one filter: a non-qualifier gets neither a rank nor a percentile."""
+    df = pl.DataFrame(
+        {
+            "k": list("abcdef"),
+            "plays": [20.0, 18.0, 16.0, 14.0, 2.0, 1.0],  # e, f miss 6.25/game x 2
+            "team_games": [2] * 6,
+            "TEPA": [5.0, 4.0, 3.0, 2.0, 9.0, 8.0],
+            "EPAgame": [1.0, 2.0, 3.0, None, 5.0, 6.0],
+            "EPAplay": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "success": [0.5] * 6,
+            "yards": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            "rushing_td": [1.0] * 6,
+            "fumbles": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            "yardsplay": [1.0] * 6,
+            "yardsgame": [1.0] * 6,
+        }
+    )
+    out = _attach_leader_ranks(df, keys=["k"], min_expr=RB_QUALIFIES, spec="rushing")
+    miss = out.filter(pl.col("k").is_in(["e", "f"]))
+    assert miss["TEPA_rank"].null_count() == 2 and miss["TEPA_pct"].null_count() == 2
+    hit = out.filter(~pl.col("k").is_in(["e", "f"])).sort("k")
+    assert hit["TEPA_rank"].to_list() == [1.0, 2.0, 3.0, 4.0]
+    assert hit["TEPA_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]
+    # a null metric keeps its trailing rank but loses the percentile
+    assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_rank"][0] == 4.0
+    assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_pct"][0] is None
+    # fumbles rank low-is-good: the cleanest back tops the percentile
+    assert hit.sort("fumbles")["fumbles_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]

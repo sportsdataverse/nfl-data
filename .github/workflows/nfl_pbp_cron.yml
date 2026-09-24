@@ -23,9 +23,13 @@ on:
         default: ""
 
   schedule:
-    # Mondays 09:00 UTC, September through February (active NFL season window).
-    # Off-season runs (March–August) are no-ops if nfl-raw is unchanged.
-    - cron: "0 9 * 9-12,1,2 1"
+    # Tuesdays 20:00 UTC, September through February (active NFL season window).
+    # AFTER nfl-raw's daily scrape (11:45 UTC cron, pushed ~15:30-17:15 UTC), not
+    # before it: the old Monday 09:00 slot built each week before Sunday's games
+    # were captured, so the season summaries (nfl_passing & co.) stopped at the
+    # previous Thursday -- 2026 week 2 shipped with only DET-BUF in it
+    # (GOP #267). Tuesday's scrape carries Sunday AND Monday night.
+    - cron: "0 20 * 9-12,1,2 2"
 
 # Prevent two builds from overlapping (e.g. a manual dispatch during a cron run).
 concurrency:

@@ -61,6 +61,16 @@ def _pass_tendencies(plays: pl.DataFrame) -> pl.DataFrame:
         neutral_pass_rate_off=pl.col("pass").filter(_NEUTRAL).mean(),
         neutral_xpass_rate_off=pl.col("xpass").filter(_NEUTRAL).mean(),
         neutral_pass_oe_off=pl.col("pass_oe").filter(_NEUTRAL).mean(),
+        pass_rate_off_n=pl.col("pass").is_not_null().sum().cast(pl.Int64),
+        xpass_rate_off_n=pl.col("xpass").is_not_null().sum().cast(pl.Int64),
+        pass_oe_off_n=pl.col("pass_oe").is_not_null().sum().cast(pl.Int64),
+        neutral_pass_rate_off_n=pl.col("pass").filter(_NEUTRAL).is_not_null().sum().cast(pl.Int64),
+        neutral_xpass_rate_off_n=pl.col("xpass")
+        .filter(_NEUTRAL)
+        .is_not_null()
+        .sum()
+        .cast(pl.Int64),
+        neutral_pass_oe_off_n=pl.col("pass_oe").filter(_NEUTRAL).is_not_null().sum().cast(pl.Int64),
     )
 
 
@@ -93,6 +103,15 @@ def _fourth_downs(raw: pl.DataFrame) -> pl.DataFrame:
             fourth_go_when_recommended_off=pl.col("went_for_it")
             .filter(pl.col("rec_go") == 1)
             .mean(),
+            fourth_go_rate_off_n=pl.len().cast(pl.Int64),
+            fourth_go_expected_off_n=pl.len().cast(pl.Int64),
+            fourth_go_over_expected_off_n=pl.len().cast(pl.Int64),
+            fourth_go_boost_off_n=pl.col("go_boost")
+            .filter(pl.col("rec_go") == 1)
+            .is_not_null()
+            .sum()
+            .cast(pl.Int64),
+            fourth_go_when_recommended_off_n=(pl.col("rec_go") == 1).sum().cast(pl.Int64),
         )
         .with_columns(
             fourth_go_over_expected_off=pl.col("fourth_go_rate_off")
@@ -108,12 +127,14 @@ def _luck(raw: pl.DataFrame) -> pl.DataFrame:
     own = fum.group_by("pos_team_id").agg(
         fumbles_off=pl.len(),
         luck_fumble_rec_pct_off=1 - pl.col("fumble_lost").fill_null(0).cast(pl.Float64).mean(),
+        luck_fumble_rec_pct_off_n=pl.len().cast(pl.Int64),
     )
     opp = (
         fum.group_by("def_pos_team_id")
         .agg(
             fumbles_forced_def=pl.len(),
             luck_fumble_rec_pct_def=pl.col("fumble_lost").fill_null(0).cast(pl.Float64).mean(),
+            luck_fumble_rec_pct_def_n=pl.len().cast(pl.Int64),
         )
         .rename({"def_pos_team_id": "pos_team_id"})
     )
@@ -126,6 +147,7 @@ def _luck(raw: pl.DataFrame) -> pl.DataFrame:
         .agg(
             opp_fg_att_def=pl.len(),
             luck_opp_fg_pct_def=(pl.col("field_goal_result") == "made").cast(pl.Float64).mean(),
+            luck_opp_fg_pct_def_n=pl.len().cast(pl.Int64),
         )
         .rename({"def_pos_team_id": "pos_team_id"})
     )
@@ -134,14 +156,29 @@ def _luck(raw: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-_SERIES_INPUT = ("season", "week", "posteam", "defteam", "down", "series", "series_success", "series_result")
+_SERIES_INPUT = (
+    "season",
+    "week",
+    "posteam",
+    "defteam",
+    "down",
+    "series",
+    "series_success",
+    "series_result",
+)
 
 
 def _series(raw: pl.DataFrame) -> pl.DataFrame:
     """Offense / defense series conversion rate (nflfastR ``off_scr`` / ``def_scr``)."""
     if any(c not in raw.columns for c in _SERIES_INPUT):
         return pl.DataFrame(
-            schema={"pos_team_id": pl.Utf8, "series_conv_off": pl.Float64, "series_conv_def": pl.Float64}
+            schema={
+                "pos_team_id": pl.Utf8,
+                "series_conv_off": pl.Float64,
+                "series_conv_def": pl.Float64,
+                "series_conv_off_n": pl.Int64,
+                "series_conv_def_n": pl.Int64,
+            }
         )
     rates = calculate_nfl_series_conversion_rates(
         raw.filter(pl.col("posteam").is_not_null()).select(_SERIES_INPUT)
@@ -150,6 +187,8 @@ def _series(raw: pl.DataFrame) -> pl.DataFrame:
         pl.col("pos_team_id"),
         pl.col("off_scr").alias("series_conv_off"),
         pl.col("def_scr").alias("series_conv_def"),
+        pl.col("off_n").cast(pl.Int64).alias("series_conv_off_n"),
+        pl.col("def_n").cast(pl.Int64).alias("series_conv_def_n"),
     )
 
 
@@ -211,6 +250,11 @@ def passer_extras(qb: pl.DataFrame, team_off: pl.DataFrame, *, min_expr: pl.Expr
             qb_epa_play=pl.col("qb_epa").mean()
             if "qb_epa" in team_off.columns
             else pl.col("EPA").mean(),
+            cpoe_n=pl.col("cpoe").is_not_null().sum().cast(pl.Int64),
+            qb_epa_play_n=(pl.col("qb_epa") if "qb_epa" in team_off.columns else pl.col("EPA"))
+            .is_not_null()
+            .sum()
+            .cast(pl.Int64),
         )
     )
     qb = qb.join(extra, on=keys, how="left")

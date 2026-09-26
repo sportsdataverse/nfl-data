@@ -207,11 +207,48 @@ def add_derived_metrics(plays: pl.DataFrame) -> pl.DataFrame:
     return df.sort(["game_id", "game_play_number"])
 
 
+#: every MEAN-aggregated team metric -> the play-level column it averages; its
+#: ``_n`` is that column's non-null count (the mean's actual denominator)
+_TEAM_MEAN_SOURCES: dict[str, str] = {
+    "passrate": "pass",
+    "rushrate": "rush",
+    "havoc": "havoc",
+    "explosive": "explosive",
+    "EPAplay": "EPA",
+    "yardsplay": "yards_gained",
+    "play_stuffed": "play_stuffed",
+    "success": "epa_success",
+    "red_zone_success": "red_zone_success",
+    "third_down_success": "third_down_success",
+    "third_down_distance": "third_down_distance",
+    "late_down_success": "late_down_success",
+    "early_down_EPA": "early_down_EPA",
+    "start_position": "drive_start_yards_to_goal",
+    "nonExplosiveEpaPerPlay": "nonExplosiveEpa",
+    "line_yards": "line_yards",
+    "opportunity_rate": "opportunity_run",
+}
+#: ratio metrics -> the count they divide by (read before n_games / n_drives are dropped)
+_TEAM_RATIO_DENOMINATORS: dict[str, str] = {
+    "playsgame": "n_games",
+    "EPAgame": "n_games",
+    "yardsgame": "n_games",
+    "drivesgame": "n_games",
+    "EPAdrive": "n_drives",
+    "yardsdrive": "n_drives",
+    "playsdrive": "n_drives",
+}
+
+
 def _summarize_team(
     df: pl.DataFrame, group: str, *, ascending: bool, remove_cols: tuple[str, ...] = ()
 ) -> pl.DataFrame:
     """One side of the grid for one group key (offense or defense)."""
     g = df.group_by(group).agg(
+        *[
+            pl.col(src).is_not_null().sum().cast(pl.Int64).alias(f"{m}_n")
+            for m, src in _TEAM_MEAN_SOURCES.items()
+        ],
         plays=pl.len(),
         n_games=pl.col("game_id").n_unique(),
         # n_unique counts null as a value; a scrimmage play with no fixed_drive must not add a drive
@@ -245,6 +282,7 @@ def _summarize_team(
         drivesgame=pl.col("n_drives") / pl.col("n_games"),
         yardsdrive=pl.col("yards") / pl.col("n_drives"),
         playsdrive=pl.col("plays") / pl.col("n_drives"),
+        *[pl.col(d).cast(pl.Int64).alias(f"{m}_n") for m, d in _TEAM_RATIO_DENOMINATORS.items()],
     ).drop("n_games", "n_drives")
     g = g.sort(group)
     d = ascending
@@ -459,6 +497,43 @@ def summarize_receiver(df: pl.DataFrame) -> pl.DataFrame:
     return _per_game_rates(g)
 
 
+_PER_GAME_N = {m: pl.col("games") for m in ("EPAgame", "yardsgame", "playsgame")}
+#: player rate -> the count it is a rate over (transcribed from summarize_* above)
+PLAYER_SAMPLE_SIZES: dict[str, dict[str, pl.Expr]] = {
+    "passing": {
+        "EPAplay": pl.col("dropbacks"),
+        "yardsdropback": pl.col("dropbacks"),
+        "success": pl.col("plays"),  # plays == dropbacks here
+        "comppct": pl.col("att"),
+        "yardsplay": pl.col("att"),  # _per_game_rates(yards_denom="att")
+        "detmer": pl.col("games"),
+        "detmergame": pl.col("games"),
+        **_PER_GAME_N,
+    },
+    "rushing": {
+        "EPAplay": pl.col("plays"),
+        "success": pl.col("plays"),
+        "yardsplay": pl.col("plays"),
+        **_PER_GAME_N,
+    },
+    "receiving": {
+        "EPAplay": pl.col("plays"),
+        "success": pl.col("plays"),
+        "yardsplay": pl.col("plays"),
+        "catchpct": pl.col("targets"),
+        **_PER_GAME_N,
+    },
+}
+
+
+def _attach_sample_sizes(df: pl.DataFrame, denominators: dict[str, pl.Expr]) -> pl.DataFrame:
+    """Add ``{rate}_n`` beside every rate ``df`` carries: the count it is a rate over (0 when null)."""
+    present = {m: e for m, e in denominators.items() if m in df.columns}
+    return df.with_columns(
+        *[e.fill_null(0).cast(pl.Int64).alias(f"{m}_n") for m, e in present.items()]
+    )
+
+
 def _attach_leader_ranks(
     data: pl.DataFrame,
     *,
@@ -613,8 +688,15 @@ def prepare_player_percentiles(qualifiers: dict[str, pl.DataFrame]) -> pl.DataFr
 
 
 def _clean_rank_columns(df: pl.DataFrame) -> pl.DataFrame:
-    """``TEPA_rank_off`` -> ``TEPA_off_rank`` (the join suffixes land mid-name)."""
-    renames = {c: c.replace("_rank", "", 1) + "_rank" for c in df.columns if "_rank" in c}
+    """``TEPA_rank_off`` -> ``TEPA_off_rank`` and ``EPAplay_n_off_pass`` -> ``EPAplay_off_pass_n``
+    (the join suffixes land mid-name)."""
+    rank_renames = {c: c.replace("_rank", "", 1) + "_rank" for c in df.columns if "_rank" in c}
+    n_renames = {c: c.replace("_n_", "_", 1) + "_n" for c in df.columns if "_n_" in c}
+    assert not (rank_renames.keys() & n_renames.keys()), (
+        "a column needs both a _rank and a _n_ mid-name relocation -- "
+        "the two rename dicts must stay disjoint"
+    )
+    renames = rank_renames | n_renames
     renames = {k: v for k, v in renames.items() if k != v}
     return df.rename(renames) if renames else df
 
@@ -668,7 +750,7 @@ def build_team_summaries(
     )
     percentiles = prepare_percentiles(pctls).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
-    rc = ("start_position", "start_position_rank")
+    rc = ("start_position", "start_position_rank", "start_position_n")
     overall = _side_pair(team_off)
     pass_data = _side_pair(team_off.filter(pl.col("pass") == 1), remove_cols=rc)
     rush_data = _side_pair(team_off.filter(pl.col("rush") == 1), remove_cols=rc)
@@ -688,6 +770,7 @@ def build_team_summaries(
     qb = _attach_leader_ranks(
         qb, keys=["pos_team_id", "passer_player_id"], min_expr=QB_QUALIFIES, spec="passing"
     )
+    qb = _attach_sample_sizes(qb, PLAYER_SAMPLE_SIZES["passing"])
     rb = summarize_rusher(
         team_off.filter((pl.col("rush") == 1) & pl.col("rusher_player_id").is_not_null()).pipe(
             _add_team_games
@@ -696,6 +779,7 @@ def build_team_summaries(
     rb = _attach_leader_ranks(
         rb, keys=["pos_team_id", "rusher_player_id"], min_expr=RB_QUALIFIES, spec="rushing"
     )
+    rb = _attach_sample_sizes(rb, PLAYER_SAMPLE_SIZES["rushing"])
     wr = summarize_receiver(
         team_off.filter(
             (pl.col("pass_attempt") == 1) & pl.col("receiver_player_id").is_not_null()
@@ -704,6 +788,7 @@ def build_team_summaries(
     wr = _attach_leader_ranks(
         wr, keys=["pos_team_id", "receiver_player_id"], min_expr=WR_QUALIFIES, spec="receiving"
     )
+    wr = _attach_sample_sizes(wr, PLAYER_SAMPLE_SIZES["receiving"])
     # thresholds over exactly the frames that were ranked above
     player_percentiles = prepare_player_percentiles(
         {

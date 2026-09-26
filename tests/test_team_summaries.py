@@ -699,3 +699,41 @@ def test_attach_leader_ranks_gates_rank_and_pct_on_the_same_rows():
     assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_pct"][0] is None
     # fumbles rank low-is-good: the cleanest back tops the percentile
     assert hit.sort("fumbles")["fumbles_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]
+
+
+# --- sample sizes -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("table", ["passing", "rushing", "receiving", "team_summaries"])
+def test_every_n_column_is_int_suffixed_and_has_its_rate(tables, table):
+    _, out = tables
+    df = out[table]
+    ns = [c for c in df.columns if c.endswith("_n")]
+    assert ns, table
+    assert [c for c in df.columns if "_n_" in c] == []
+    assert [c for c in ns if c[:-2] not in df.columns] == []
+    assert all(df.schema[c] == pl.Int64 for c in ns)
+
+
+def test_rates_carry_their_real_denominators(tables):
+    _, out = tables
+    qb, wr, ts = out["passing"], out["receiving"], out["team_summaries"]
+    assert (qb["EPAplay_n"] == qb["dropbacks"].cast(pl.Int64)).all()
+    assert (qb["comppct_n"] == qb["att"].cast(pl.Int64)).all()
+    assert (qb["yardsplay_n"] == qb["att"].cast(pl.Int64)).all()  # yards_denom="att" in this league
+    assert (wr["catchpct_n"] == wr["targets"].cast(pl.Int64)).all()
+    assert (ts["EPAplay_off_n"] == ts["plays_off"].cast(pl.Int64)).all()
+    assert (
+        ts["EPAplay_off_pass_n"].fill_null(0) == ts["plays_off_pass"].fill_null(0).cast(pl.Int64)
+    ).all()
+
+
+def test_every_rbsdm_rate_has_its_sample_size(tables):
+    _, out = tables
+    ts = out["team_summaries"]
+    rates = [c for c in RBSDM_RANKED if c != "fourth_decisions_off" and c in ts.columns]
+    assert [c for c in rates if f"{c}_n" not in ts.columns] == []
+    assert (
+        ts["fourth_go_rate_off_n"].fill_null(0)
+        == ts["fourth_decisions_off"].fill_null(0).cast(pl.Int64)
+    ).all()

@@ -96,10 +96,11 @@ def season_frame(season: int, out: str | Path, store: EspnStore | None = None) -
     if season not in present:
         return pl.DataFrame()
     if len(present) < len(seasons):
-        log.warning(
-            "rolling_windows %s: pbp history missing for %s; baselines read a short career",
-            season,
-            sorted(set(seasons) - set(present)),
+        # every season 2002.. is on the tag, so a gap is a failed download; a
+        # short history would publish wrong prev / career baselines
+        raise RuntimeError(
+            f"rolling_windows {season}: pbp history missing for "
+            f"{sorted(set(seasons) - set(present))}; not publishing short baselines"
         )
     cols = [*FOOTBALL_PBP_COLUMNS, "homeTeamId", "awayTeamId"]
     frames = []

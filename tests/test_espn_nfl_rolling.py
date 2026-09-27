@@ -52,7 +52,8 @@ def test_game_dates_are_the_eastern_calendar_day_of_the_crosswalk_kickoff():
     assert fixture.rows() == [(401772510, date(2025, 9, 4))]
 
 
-def test_season_frame_windows_the_written_pbp(built):  # noqa: F811
+def test_season_frame_windows_the_written_pbp(built, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2025)
     _, out = built
     df = rolling.season_frame(2025, out, EspnStore(resolve_raw_root(FIX)))
     assert df["season"].unique().to_list() == [2025]
@@ -68,7 +69,7 @@ def test_season_frame_windows_the_written_pbp(built):  # noqa: F811
     assert set(df.filter(pl.col("entity_type") == "team")["entity_id"].unique()) == {"6", "21"}
 
 
-def test_season_frame_reads_a_season_with_no_player_ids(tmp_path):
+def _write_2003_season(tmp_path):
     # 2002-2007 pbp carries passer / rusher ids as an all-null (Null-dtype) column
     path = rolling._pbp_path(2003, tmp_path)
     path.parent.mkdir(parents=True)
@@ -93,10 +94,22 @@ def test_season_frame_reads_a_season_with_no_player_ids(tmp_path):
             "awayTeamId": [6],
         }
     ).write_parquet(path)
-    store = SimpleNamespace(
+    return SimpleNamespace(
         crosswalk_games=lambda: [
             {"espn_event_id": 1, "season": 2003, "kickoff_utc": "2003-09-07T17:00Z"}
         ]
     )
-    df = rolling.season_frame(2003, tmp_path, store)
+
+
+def test_season_frame_reads_a_season_with_no_player_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2003)
+    df = rolling.season_frame(2003, tmp_path, _write_2003_season(tmp_path))
     assert set(df["entity_type"]) == {"team"} and set(df["entity_id"]) == {"6"}
+
+
+def test_missing_history_fails_instead_of_publishing_short_baselines(tmp_path, monkeypatch):
+    # 2002 is absent after the (stubbed) download: a failed fetch, not a short career
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2002)
+    store = _write_2003_season(tmp_path)
+    with pytest.raises(RuntimeError, match=r"history missing for \[2002\]"):
+        rolling.season_frame(2003, tmp_path, store)

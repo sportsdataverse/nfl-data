@@ -49,6 +49,7 @@ def built(tmp_path_factory):
     # rolling_windows' history seasons come from the published tag; offline there
     # is none (its game dates read the fixture crosswalk, no stub needed)
     mp.setattr(rolling, "fetch_history", lambda seasons, out: None)
+    mp.setattr(rolling, "PBP_FLOOR", 2025)  # the fixture season is the whole history
     root = tmp_path_factory.mktemp("espn_nfl")
     cache, out = root / "cache", root / "out"
     rc = main(

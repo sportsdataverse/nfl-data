@@ -803,6 +803,7 @@ def test_five_factor_columns_and_ranks_exist(tables):
     for c in FIVE_FACTORS:
         assert c in ts.columns and f"{c}_rank" in ts.columns, c
         assert ts.schema[c] == pl.Float64, c
+        assert ts.schema[f"{c}_rank"] == pl.Float64, c
     for c in ("pts_per_opp_off_n", "pts_per_opp_def_n"):
         assert ts.schema[c] == pl.Int64, c
 
@@ -857,9 +858,11 @@ def _five_factor_pbp() -> pl.DataFrame:
 
     KC: a TD drive that snaps at the 35; a FG drive whose deepest snap is
     exactly the 40; a punt drive that stalls at the 41 (and fumbles, but KC
-    recovers); an interception; a lost fumble. BUF: an interception, and a punt
-    KC muffs and BUF recovers -- a special-teams giveaway charged to the
-    RECEIVING team, which is not ``posteam`` on a punt.
+    recovers); an interception; a lost fumble. BUF: two interceptions (uneven
+    on purpose, so charging picks to the wrong side shows), the second of which
+    the KC defender fumbles back to BUF -- one giveaway and one takeaway for EACH
+    side on one play; and a punt KC muffs and BUF recovers -- a special-teams
+    giveaway charged to the RECEIVING team, which is not ``posteam`` on a punt.
     """
     rng = random.Random(0)
     # (game, fixed_drive, offense, fixed_drive_result, [(yardline_100, kind, overrides)])
@@ -872,6 +875,24 @@ def _five_factor_pbp() -> pl.DataFrame:
             "KC",
             "Field goal",
             [(60, "run", {}), (45, "pass", {}), (40, "run", {}), (40, "field_goal", {})],
+        ),
+        (
+            _FF_G1,
+            4,
+            "BUF",
+            "Punt",
+            [
+                (
+                    70,
+                    "pass",
+                    {
+                        "interception": 1,
+                        "fumble": 1,
+                        "fumble_lost": 1,
+                        "fumbled_1_team": "KC",
+                    },
+                )
+            ],
         ),
         (
             _FF_G2,
@@ -933,6 +954,7 @@ def _five_factor_pbp() -> pl.DataFrame:
 
 def _five_factor_rows() -> dict[str, dict]:
     pbp = _five_factor_pbp()
+    assert (pbp["interception"] == 1).sum() == 3  # BUF throws two, KC one: uneven on purpose
     plays = add_derived_metrics(prepare_plays(pbp, 2025, schedule_fn=_schedule))
     team = _prepare_for_write(
         _side_pair(plays)
@@ -963,16 +985,54 @@ def test_points_per_scoring_opportunity_by_hand():
 def test_turnovers_per_game_by_hand():
     rows = _five_factor_rows()
     kc, buf = rows["KC"], rows["BUF"]
-    # KC: a pick, a LOST fumble and a muffed punt (the fumble it recovered is no
-    # giveaway) against one takeaway, over two games. Every play counts, as in
-    # the official differential: the muff is KC's giveaway although BUF had the ball.
-    assert kc["turnovers_off"] == pytest.approx(1.5)
-    assert kc["turnovers_def"] == pytest.approx(0.5)
+    # KC gives it away 4 times -- a pick, a LOST fumble, a muffed punt and the
+    # fumble its defender lost after intercepting BUF (the fumble KC recovered is
+    # no giveaway) -- and takes it away twice: BUF's two picks. Over two games.
+    # Every play counts, as in the official differential: the muff and the
+    # fumble-back are KC's giveaways although BUF had the ball.
+    assert kc["turnovers_off"] == pytest.approx(2.0)
+    assert kc["turnovers_def"] == pytest.approx(1.0)
     assert kc["turnover_margin"] == pytest.approx(-1.0)
-    assert buf["turnovers_off"] == pytest.approx(0.5)
-    assert buf["turnovers_def"] == pytest.approx(1.5)
+    assert buf["turnovers_off"] == pytest.approx(1.0)
+    assert buf["turnovers_def"] == pytest.approx(2.0)
     assert buf["turnover_margin"] == pytest.approx(1.0)
     # fewer giveaways, more takeaways and the better margin each rank 1
     assert (buf["turnovers_off_rank"], kc["turnovers_off_rank"]) == (1.0, 2.0)
     assert (buf["turnovers_def_rank"], kc["turnovers_def_rank"]) == (1.0, 2.0)
     assert (buf["turnover_margin_rank"], kc["turnover_margin_rank"]) == (1.0, 2.0)
+
+
+def test_turnover_games_count_either_side_of_the_ball():
+    """A game where the raw frame never gives a team the ball still counts for it.
+
+    Drop BUF's only possession of game 2 (its punt, and KC's muff with it): BUF
+    still played two games, so both of its rates divide by 2 and the league
+    margin stays 0. Counting games from ``posteam`` alone would divide BUF's
+    rates by 1.
+    """
+    pbp = _five_factor_pbp().filter(
+        ~((pl.col("game_id") == _FF_G2[0]) & (pl.col("posteam") == "BUF"))
+    )
+    t = _turnovers(pbp)
+    assert abs(t["turnover_margin"].sum()) <= 1e-9
+    buf = t.filter(pl.col("pos_team_id") == "2").row(0, named=True)  # BUF on ESPN
+    assert buf["turnovers_off"] == pytest.approx(1.0)  # its two picks, / 2
+    assert buf["turnovers_def"] == pytest.approx(1.5)  # KC's pick, lost fumble, fumble-back, / 2
+
+
+def test_no_drive_results_means_no_points_per_trip():
+    """1999-2001 ``model_pbp`` carry no ``fixed_drive_result``.
+
+    The season must still build. Its points per trip are UNKNOWN -- null and
+    unranked, never 0.0 (which ``sum()`` over null points would produce) -- while
+    the trip counts and the other Five Factors columns stand.
+    """
+    pbp = _fake_pbp().drop("fixed_drive_result")
+    plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
+    ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
+    for c in ("pts_per_opp_off", "pts_per_opp_def", "pts_per_opp_margin"):
+        assert ts[c].is_null().all(), c
+        assert ts[f"{c}_rank"].is_null().all(), c
+    assert (ts["pts_per_opp_off_n"] > 0).all() and (ts["pts_per_opp_def_n"] > 0).all()
+    for c in ("explosive_margin", "turnovers_off", "turnovers_def", "turnover_margin"):
+        assert ts[c].null_count() == 0 and ts[f"{c}_rank"].null_count() == 0, c

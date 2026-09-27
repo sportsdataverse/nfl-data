@@ -132,12 +132,16 @@ def prepare_plays(
         int=_flag("interception").cast(pl.Float64),
         fumble_vec=_flag("fumble").cast(pl.Float64),
         # sdv-py tendencies' drive points: 7 for a touchdown drive, 3 for a
-        # field goal, else 0 (the extra point is not the drive's doing)
+        # field goal, else 0 (the extra point is not the drive's doing). The
+        # 1999-2001 assets carry no fixed_drive_result: points are then UNKNOWN
+        # (null), never 0, and the builder publishes no points-per-trip for them
         drive_points=pl.when(pl.col("fixed_drive_result") == "Touchdown")
         .then(7.0)
         .when(pl.col("fixed_drive_result") == "Field goal")
         .then(3.0)
-        .otherwise(0.0),
+        .otherwise(0.0)
+        if "fixed_drive_result" in df.columns
+        else pl.lit(None, dtype=pl.Float64),
         pass_breakup=pl.col("pass_defense_1_player_id").is_not_null(),
         # nflfastR's pass_attempt is 1 on sacks too; an ATTEMPT here is a ball
         # actually thrown (complete, incomplete or intercepted)

@@ -424,16 +424,18 @@ def _drives(plays: pl.DataFrame, group: str, ascending: bool) -> pl.DataFrame:
         total_available_yards=pl.col("total_available_yards").sum(),
         total_gained_yards=pl.col("total_gained_yards").sum(),
         pts_per_opp_n=pl.col("opp").sum().cast(pl.Int64),
-        opp_points=pl.col("points").filter(pl.col("opp")).sum(),
+        opp_points=pl.col("points").filter(pl.col("opp") == True).sum(),  # noqa: E712
+        # sum() skips nulls: an asset without drive results would read as 0 points
+        points_known=pl.col("points").is_not_null().all(),
     )
     agg = (
         agg.with_columns(
             available_yards_pct=pl.col("total_gained_yards") / pl.col("total_available_yards"),
-            pts_per_opp=pl.when(pl.col("pts_per_opp_n") > 0)
+            pts_per_opp=pl.when((pl.col("pts_per_opp_n") > 0) & pl.col("points_known"))
             .then(pl.col("opp_points") / pl.col("pts_per_opp_n"))
             .otherwise(None),
         )
-        .drop("opp_points")
+        .drop("opp_points", "points_known")
         .sort(group)
     )
     return agg.with_columns(
@@ -475,18 +477,39 @@ def _turnovers(raw: pl.DataFrame) -> pl.DataFrame:
     ``posteam``), and each is the other team's takeaway. Kick and punt muffs count,
     as they do in the official differential (2024: 30 of 32 teams match ESPN; the
     scrimmage-only count matched 9). ``turnover_margin`` = takeaways - giveaways.
+    A team's games are those it appears in on EITHER side, so both rates share one
+    denominator and the league margin sums to 0 even where the raw frame has gaps.
+
+    Known limitation: ``fumble_lost`` is one flag per play and ``fumbled_1_team`` the
+    FIRST fumbler, so a play with two lost fumbles keeps only the first. In 2024 that
+    is ``2024_15_CIN_TEN`` play 3191 (TEN fumbles, CIN recovers, CIN fumbles out of
+    the end zone for a touchback): CIN's giveaway and TEN's takeaway are missed --
+    the two teams that miss ESPN by one. (``2024_13_PIT_CIN`` play 1857, where PIT
+    recovers its own second fumble, is counted right.) The exact fix needs sdv-py
+    to record the team per lost fumble (stat 106).
     """
-    raw = raw.filter(pl.col("posteam").is_not_null())
-    ints = raw.filter(pl.col("interception").fill_null(0) == 1)
-    lost = raw.filter(pl.col("fumble_lost").fill_null(0) == 1)
+    ints = raw.filter((pl.col("interception").fill_null(0) == 1) & pl.col("posteam").is_not_null())
+    lost = raw.filter((pl.col("fumble_lost").fill_null(0) == 1) & pl.col("posteam").is_not_null())
     fumbler = pl.coalesce("fumbled_1_team", "posteam")
-    other = pl.when(fumbler == pl.col("posteam")).then(pl.col("defteam")).otherwise("posteam")
+    other = (
+        pl.when(fumbler == pl.col("posteam")).then(pl.col("defteam")).otherwise(pl.col("posteam"))
+    )
     give = pl.concat([ints.select(team=pl.col("posteam")), lost.select(team=fumbler)])
     take = pl.concat([ints.select(team=pl.col("defteam")), lost.select(team=other)])
+    games = (
+        pl.concat(
+            [
+                raw.select(team=pl.col("posteam"), game_id=pl.col("game_id")),
+                raw.select(team=pl.col("defteam"), game_id=pl.col("game_id")),
+            ]
+        )
+        .drop_nulls()
+        .unique()
+        .group_by("team")
+        .agg(games=pl.len())
+    )
     out = (
-        raw.group_by(pl.col("posteam").alias("team"))
-        .agg(games=pl.col("game_id").n_unique())
-        .join(give.group_by("team").agg(giveaways=pl.len()), on="team", how="left")
+        games.join(give.group_by("team").agg(giveaways=pl.len()), on="team", how="left")
         .join(take.group_by("team").agg(takeaways=pl.len()), on="team", how="left")
         .with_columns(
             turnovers_off=pl.col("giveaways").fill_null(0) / pl.col("games"),

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from nfl_espn_build import build, config, process, publish, qa
+from nfl_espn_build import build, config, process, publish, qa, rolling
 from nfl_espn_build import tendencies as tendencies_mod
 from nfl_espn_build.cli import main
 from nfl_espn_build.config import ALL_ORDER, REGISTRY, processing_version
@@ -46,6 +46,10 @@ def built(tmp_path_factory):
             FIXTURE_COACHES if season == 2025 else pl.DataFrame(schema=tendencies_mod.COACH_SCHEMA)
         ),
     )
+    # rolling_windows' history seasons come from the published tag; offline there
+    # is none (its game dates read the fixture crosswalk, no stub needed)
+    mp.setattr(rolling, "fetch_history", lambda seasons, out: None)
+    mp.setattr(rolling, "PBP_FLOOR", 2025)  # the fixture season is the whole history
     root = tmp_path_factory.mktemp("espn_nfl")
     cache, out = root / "cache", root / "out"
     rc = main(
@@ -92,7 +96,7 @@ def test_every_registry_dataset_is_written(built):
         if spec.tendencies == "careers":  # one season-less file across every coach season
             assert "season" not in df.columns and df["seasons"].unique().to_list() == [1]
             continue
-        if spec.aggregate or spec.tendencies:  # a season leaderboard has no game identity
+        if spec.aggregate or spec.tendencies or spec.rolling:  # season-level: no game identity
             assert "game_id" not in df.columns and df["season"].unique().to_list() == [2025]
             continue
         assert {"game_id", "season", "week", "nflverse_game_id"} <= set(df.columns), name

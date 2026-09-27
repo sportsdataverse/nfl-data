@@ -106,6 +106,9 @@ class DatasetSpec:
     #: ``"team"`` (season x team), ``"coach"`` (season x team x head coach) or
     #: ``"careers"`` (every written coach season summed per coach, one file)
     tendencies: str | None = None
+    #: ``sportsdataverse.rolling_windows`` over the WRITTEN pbp seasons through
+    #: the build season (:mod:`nfl_espn_build.rolling`), not the season's finals
+    rolling: bool = False
 
 
 def _adv(section: str, key: str | None = None) -> DatasetSpec:
@@ -183,6 +186,12 @@ REGISTRY["coach_careers"] = DatasetSpec(
     "coach_careers", "coach_careers", "espn_nfl_coach_careers", tendencies="careers"
 )
 
+#: last-N-events form per player / team (shim 64); tag nfl_rolling_windows, the
+#: twin of cfbfastR-cfb-data's cfb_rolling_windows (no espn_ prefix on either)
+REGISTRY["rolling_windows"] = DatasetSpec(
+    "rolling_windows", "rolling_windows", "nfl_rolling_windows", rolling=True
+)
+
 #: The ten advanced-box datasets, in the cfb stage-04 order.
 ADV_ORDER: list[str] = [
     "adv_team",
@@ -216,4 +225,6 @@ ALL_ORDER: list[str] = [
     *USAGE_ADV_ORDER,
     *USAGE_LEADERBOARD_ORDER,
     *TENDENCIES_ORDER,
+    # last: it reads the pbp this run just wrote
+    "rolling_windows",
 ]

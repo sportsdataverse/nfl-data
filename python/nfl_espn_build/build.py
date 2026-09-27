@@ -23,6 +23,7 @@ from typing import Any
 
 import polars as pl
 
+from nfl_espn_build import rolling as _rolling
 from nfl_espn_build import tendencies as _tendencies
 from nfl_espn_build.config import REGISTRY, DatasetSpec, processing_version
 from nfl_espn_build.ingest import EspnStore
@@ -349,11 +350,12 @@ def build_season(
     usage = UsageCache("nfl")
     for name in datasets:
         spec = REGISTRY[name]
-        df = (
-            careers_frame(out)
-            if spec.tendencies == "careers"
-            else dataset_frame(spec, finals, usage)
-        )
+        if spec.tendencies == "careers":
+            df = careers_frame(out)
+        elif spec.rolling:
+            df = _rolling.season_frame(season, out, store)
+        else:
+            df = dataset_frame(spec, finals, usage)
         path = write_dataset(df, spec, season, out)
         written[name] = path
         if name == "qa":

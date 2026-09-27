@@ -58,7 +58,7 @@ Output: parquet uploaded to releases on `sportsdataverse/sportsdataverse-data` (
 
 | Producer (`python -m ...`) | Release tag | Range | Source |
 |---|---|---|---|
-| `native_pbp build --enrich` → `nfl_model_publish pbp` | `nfl_model_pbp` | 1999– | nfl-raw JSON + sdv-py `enrich_nfl_pbp(method="lead_diff")` |
+| `native_pbp build --enrich` → `nfl_model_publish pbp` | `nfl_model_pbp` | 1999– | nfl-raw JSON + sdv-py `enrich_nfl_pbp(method="lead_diff")`; 1999–2002 thin Shield games from nflverse pbp (see Gotchas) |
 | `nfl_model_publish rosters` | `nfl_rosters` | per-season | NFL Shield rosters API |
 | `nfl_model_publish players` | `nfl_players` | season-less | ESPN core-v2 athletes (~7,500 `$ref`s, dedup on espn_id; runs several minutes) |
 | `nfl_model_publish player-stats` | `nfl_player_stats` | 1999– | aggregates SDV-native PBP release (week-level, REG+POST, offense) |
@@ -104,6 +104,12 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   carry no `text`, in the summary and in the core items alike, so `NFLPlayProcess` cannot parse
   them and never will. `process_season` tallies them as `stub` (a warning) rather than `failed`,
   so the season's other games still build and publish; the stub games simply have no final.
+- **Shield thin games (1999–2002).** api.nfl.com serves `driveChart.plays` as GAME_START/END_GAME
+  plus a stray play for every 2000–2001 game, 2002 weeks 1–15 and six late-1999 games; a re-scrape
+  returns the same. `native_pbp.cli._backfill_thin_games` swaps each ≤2002 game under 100 rows for
+  its nflverse pbp rows (CC-BY-4.0) in the build schema, minus the timeout / two-minute-warning
+  markers the build drops. `2000_03_SD_KC` and `2000_06_BUF_MIA` have no play data anywhere and
+  are absent. Backfilled games carry nflverse `play_id`s; Shield-only columns stay null.
 - **No NGS scraper here.** NextGen Stats lives in sdv-py (`load_nfl_nextgen_stats`); references to
   "ngs" in this repo are PBP feature columns, not a producer.
 - **Public-tier endpoints only.** Auth-walled Shield endpoints are excluded; rosters/players use the

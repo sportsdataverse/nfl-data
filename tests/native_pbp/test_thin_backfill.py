@@ -15,7 +15,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 from native_pbp.build import build_season as build_season_frame
-from native_pbp.cli import _backfill_thin_games, build_season
+from native_pbp.cli import _INT64_YARDS, _backfill_thin_games, build_season
 from polars.testing import assert_frame_equal
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "shield_thin"
@@ -129,6 +129,10 @@ def test_team_codes_use_the_era_abbreviation(tmp_path, nflverse):
     assert _team_values(g02) == {"STL", "PHI", "MIA", "MIN"}
     assert g00.filter(pl.col("play_id") == 761)["posteam"].to_list() == ["OAK"]  # was LV
     assert g00.filter(pl.col("play_id") == 17)["posteam"].to_list() == [None]  # was ""
+    # `home` as the build emits it: Int64 1/0, never null -- 0 when posteam is null
+    assert g00.schema["home"] == pl.Int64 and g00["home"].null_count() == 0
+    home = dict(g00.filter(pl.col("play_id").is_in([761, 17])).select("play_id", "home").rows())
+    assert home == {761: 1, 17: 0}  # OAK's ball at OAK; a no-posteam captains row
 
 
 def test_drive_yard_lines_follow_the_build_not_nflverse_strings(tmp_path, nflverse):
@@ -151,8 +155,13 @@ def test_drive_yard_lines_follow_the_build_not_nflverse_strings(tmp_path, nflver
 
 def test_backfilled_seasons_carry_the_2003_column_set(tmp_path, nflverse):
     ref = build_season_frame(2003, raw_dir=_raw(tmp_path / "ref", CAR_HOU))
-    assert set(_build(tmp_path / "a", 2000, KC_OAK, SD_KC, BUF_MIA).columns) == set(ref.columns)
-    assert set(_build(tmp_path / "b", 2002, STL_PHI, MIA_MIN).columns) == set(ref.columns)
+    g00 = _build(tmp_path / "a", 2000, KC_OAK, SD_KC, BUF_MIA)
+    g02 = _build(tmp_path / "b", 2002, STL_PHI, MIA_MIN)
+    assert set(g00.columns) == set(ref.columns) == set(g02.columns)
+    # Null-typed in the stubs, nflverse Float64: cast to the published assets' Int64
+    for c in _INT64_YARDS:
+        assert NV.schema[c] == pl.Float64
+        assert g00.schema[c] == g02.schema[c] == pl.Int64, c
 
 
 def test_full_length_2002_game_is_untouched(tmp_path, nflverse):
@@ -168,9 +177,8 @@ def test_full_length_2002_game_is_untouched(tmp_path, nflverse):
 
 def test_2003_game_is_untouched_even_when_thin(tmp_path, nflverse):
     raw = _raw(tmp_path, CAR_HOU)
-    thin = build_season_frame(2003, raw_dir=raw).head(
-        40
-    )  # a real 2003 game, cut below the threshold
+    # a real 2003 game, cut below the threshold
+    thin = build_season_frame(2003, raw_dir=raw).head(40)
 
     assert _backfill_thin_games(thin, 2003, raw) is thin
     assert nflverse == []  # no nflverse fetch for a Shield-complete season
@@ -183,3 +191,25 @@ def test_games_with_no_data_anywhere_are_dropped_and_logged(tmp_path, nflverse, 
     out = capsys.readouterr().out
     assert "model_pbp 2000: backfilled 1 thin Shield game(s) from nflverse" in out
     assert f"no play data anywhere: ['{SD_KC}', '{BUF_MIA}']" in out
+
+
+def test_partial_raw_library_backfills_only_its_own_games(tmp_path, nflverse, capsys):
+    # nflverse has KC_OAK, but it is missing from this raw library: never pulled in or counted
+    g = _build(tmp_path, 2000, SD_KC, BUF_MIA)
+
+    assert KC_OAK not in g["game_id"].to_list()
+    out = capsys.readouterr().out
+    assert "model_pbp 2000: backfilled 0 thin Shield game(s) from nflverse" in out
+    assert f"no play data anywhere: ['{SD_KC}', '{BUF_MIA}']" in out
+
+
+def test_fractional_value_bound_for_an_int64_column_fails_loudly(tmp_path, monkeypatch):
+    # polars' strict Float64 -> Int64 cast would truncate 1.5 to 1 silently
+    bump = pl.when(pl.col("play_id") == 761).then(1.5).otherwise(pl.col("yards_after_catch"))
+    nv = NV.with_columns(yards_after_catch=bump)
+    monkeypatch.setattr(
+        "sportsdataverse.nfl.load_nfl_pbp",
+        lambda seasons: nv.filter(pl.col("season").is_in(list(seasons))),
+    )
+    with pytest.raises(ValueError, match="fractional nflverse values.*yards_after_catch"):
+        _build(tmp_path, 2000, KC_OAK)

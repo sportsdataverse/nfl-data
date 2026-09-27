@@ -110,6 +110,9 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   its nflverse pbp rows (CC-BY-4.0) in the build schema, minus the timeout / two-minute-warning
   markers the build drops. `2000_03_SD_KC` and `2000_06_BUF_MIA` have no play data anywhere and
   are absent. Backfilled games carry nflverse `play_id`s; Shield-only columns stay null.
+  **Not yet applied** by `model_training/play_level/ingest.py:191` (`load_native_pbp`, the
+  `--source native` path), which calls `native_pbp.build.build_season` directly: a native-source
+  run over 1999–2002 still sees the stub games.
 - **No NGS scraper here.** NextGen Stats lives in sdv-py (`load_nfl_nextgen_stats`); references to
   "ngs" in this repo are PBP feature columns, not a producer.
 - **Public-tier endpoints only.** Auth-walled Shield endpoints are excluded; rosters/players use the

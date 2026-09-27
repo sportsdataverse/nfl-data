@@ -41,4 +41,7 @@ nv.select([c for c in nv.columns if c in keep]).write_parquet(
 EOF
 ```
 
-nflverse data is CC-BY-4.0.
+nflverse_pbp.parquet is adapted from nflverse-data `pbp/play_by_play_{2000,2002}.parquet`
+(https://github.com/nflverse/nflverse-data), © nflverse contributors, licensed CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/). Changes: filtered to two games and trimmed to the
+columns listed above.

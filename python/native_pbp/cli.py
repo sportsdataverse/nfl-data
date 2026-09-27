@@ -32,6 +32,9 @@ from native_pbp.playstats import build_playstats_season as _build_playstats_seas
 #: driveChart.plays is GAME_START/END_GAME plus a stray play for every 2000-2001 game,
 #: 2002 weeks 1-15 and six late-1999 games (live re-probe 2026-09-27). nflverse pbp covers
 #: them; from 2003 every Shield game is full.
+#: Backfilled rows come from nflverse-data `pbp` (https://github.com/nflverse/nflverse-data),
+#: © nflverse contributors, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); credit
+#: nflverse in the nfl_model_pbp release notes for 1999-2002.
 _THIN_SHIELD_LAST_SEASON = 2002
 #: ponytail: a play-count heuristic. Full games log ~150+ plays and the thin payloads 1-70,
 #: so a real game under 100 plays would be swapped for nflverse's rows and a thin payload of
@@ -47,16 +50,27 @@ _MARKER_DESC = r"(?i)^\s*(timeout\b|two-minute warning)"
 #: ponytail: tackled_for_loss / touchdown are 0/1 flags standing in for per-play stat-id
 #: counts -- exact except on multi-TFL / multi-TD plays. The other Shield-only columns
 #: (extra_point_*/field_goal_*/two_point_* flags, misc_yards, lateral recovery yards,
-#: play_seq, shield_play_type, special_teams_play_type) stay null for backfilled games.
+#: def_tackles_for_loss_yards, play_seq, shield_play_type, special_teams_play_type) stay
+#: null for backfilled games.
 _DERIVED = {
-    "home": lambda: pl.col("posteam") == pl.col("home_team"),
+    # the build's 1/0, 0 when posteam is null (shield_pbp/parse.py:504)
+    "home": lambda: (pl.col("posteam") == pl.col("home_team")).fill_null(False),
     "def_tackles_for_loss": lambda: pl.col("tackled_for_loss"),
     "td_ids_touchdown": lambda: pl.col("touchdown"),
     # build semantics (shield_pbp/drives.py:374-375): yardline_100 of the drive's
-    # first/last play; nflverse ships "SEA 20" strings that don't cast
+    # first/last play; nflverse ships "SEA 20" strings that don't cast. nflverse files an
+    # END QUARTER row under the next drive, so such a drive starts null (27 in 2002).
     "drive_start_yard_line": lambda: pl.col("yardline_100").first().over(_DRIVE),
     "drive_end_yard_line": lambda: pl.col("yardline_100").last().over(_DRIVE),
 }
+#: Null-typed in stub-only seasons (so nflverse's Float64 would leak through); the Shield
+#: build and the published 2003/2004 assets type them Int64.
+_INT64_YARDS = (
+    "lateral_receiving_yards",
+    "fumble_recovery_2_yards",
+    "lateral_rushing_yards",
+    "yards_after_catch",
+)
 
 
 def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> pl.DataFrame:
@@ -88,7 +102,7 @@ def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> 
         )
     is_timeout = (pl.col("play_type_nfl") == "TIMEOUT").fill_null(False)
     is_marker = is_timeout | pl.col("desc").fill_null("").str.contains(_MARKER_DESC)
-    nv = nv.filter(~pl.col("game_id").is_in(full.implode()), ~is_marker)
+    nv = nv.filter(pl.col("game_id").is_in(sorted(thin)), ~is_marker)
     # nflverse team columns carry the modern LA/LAC/LV (game_id and every Shield season use
     # the era's STL/SD/OAK), and "" for no team on some 1999-2000 non-play rows
     team_cols = [
@@ -98,8 +112,19 @@ def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> 
     ]
     remap = {t: _nflverse_abbr(t, season) for t in ("LA", "LAC", "LV")} | {"": None}
     nv = nv.with_columns(pl.col(team_cols).replace(remap))
+    target = {c: pl.Int64 if c in _INT64_YARDS else dt for c, dt in df.schema.items()}
+    # polars' strict cast truncates 1.5 -> 1 silently: refuse a fractional float bound for Int64
+    to_int = [
+        c
+        for c, dt in target.items()
+        if dt.is_integer() and c not in _DERIVED and c in nv.columns and nv.schema[c].is_float()
+    ]
+    fractional = nv.select((pl.col(to_int) % 1 != 0).sum()).row(0, named=True)
+    if any(fractional.values()):
+        bad = {c: n for c, n in fractional.items() if n}
+        raise ValueError(f"model_pbp {season}: fractional nflverse values in Int64 columns: {bad}")
     cols = []
-    for c, dt in df.schema.items():
+    for c, dt in target.items():
         expr = _DERIVED[c]() if c in _DERIVED else pl.col(c) if c in nv.columns else pl.lit(None)
         # a stub-only season leaves many build columns Null-typed: keep nflverse's dtype there
         # (a cast to Null wipes the values); the diagonal_relaxed concat unifies the rest

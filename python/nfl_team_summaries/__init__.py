@@ -2,7 +2,7 @@
 
 The NFL twin of ``cfbfastR-cfb-data``'s ``team_summaries`` producer. It reads
 the released ``nfl_model_pbp`` season parquet (nfl.com Shield JSON ->
-nflfastR-parity -> sdv-py EP/WP enrichment) and emits six tables under the
+nflfastR-parity -> sdv-py EP/WP enrichment) and emits seven tables under the
 SAME column contract the college tables carry, so gameonpaper.com's shared
 components render either league:
 
@@ -16,6 +16,10 @@ components render either league:
 ``player_percentiles``  the same ladder per POSITION GROUP over the leaderboard
                     qualifiers -- the lookup side of the players' ``_pct``
                     columns ("what EPA/play is a 90th-percentile QB?").
+``league_averages``  mean / median / sd / n league baseline for every published
+                    metric, one row per (season, level, entity, category,
+                    metric) -- the population behind the ``_rank`` / ``_pct``
+                    columns and the ``percentiles`` ladder.
 
 Team key is the ESPN team id (``team_id``) because that is the id every site
 URL, logo and API filter uses; ``pos_team`` carries the nflverse abbreviation.

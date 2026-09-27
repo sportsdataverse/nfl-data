@@ -19,6 +19,7 @@ from nfl_team_summaries import checks
 from nfl_team_summaries.build import (
     PLAYER_PERCENTILE_METRICS,
     PLAYER_RANK_SPECS,
+    QB_MIN_DROPBACKS_PER_GAME,
     QB_QUALIFIES,
     RB_QUALIFIES,
     WR_QUALIFIES,
@@ -507,6 +508,14 @@ def test_percentiles_shape(tables):
     assert (pc["season"] == 2025).all()
 
 
+def test_tables_registry_matches_the_build_output(tables):
+    from nfl_team_summaries.__main__ import TABLES
+
+    _, out = tables
+    assert set(TABLES) == set(out)
+    assert TABLES["league_averages"] == ("nfl_league_averages", "league_averages")
+
+
 # --- guards ------------------------------------------------------------------------
 
 
@@ -737,3 +746,27 @@ def test_every_rbsdm_rate_has_its_sample_size(tables):
         ts["fourth_go_rate_off_n"].fill_null(0)
         == ts["fourth_decisions_off"].fill_null(0).cast(pl.Int64)
     ).all()
+
+
+# --- league baselines --------------------------------------------------------------
+
+
+def test_league_averages_describe_the_qualified_population(tables):
+    _, out = tables
+    la = out["league_averages"]
+    assert set(la["level"].unique()) == {"nfl"}
+    rows = la.filter((pl.col("category") == "passing") & (pl.col("metric") == "EPAplay"))
+    qual = out["passing"].filter(QB_QUALIFIES & pl.col("EPAplay").is_finite())
+    assert qual.height > 0
+    row = rows.row(0, named=True)
+    assert row["n"] == qual.height and row["qualifier_min"] == QB_MIN_DROPBACKS_PER_GAME
+    assert row["mean"] == pytest.approx(qual["EPAplay"].mean())
+
+
+def test_team_game_median_matches_the_percentiles_table(tables):
+    _, out = tables
+    tg = out["league_averages"].filter(pl.col("category") == "team_game")
+    mid = out["percentiles"].filter((pl.col("pctile") - 0.5).abs() < 1e-9).row(0, named=True)
+    assert tg.height > 0
+    for r in tg.iter_rows(named=True):
+        assert r["median"] == pytest.approx(mid[r["metric"]], abs=1e-9), r["metric"]

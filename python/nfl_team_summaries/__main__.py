@@ -38,6 +38,7 @@ TABLES = {
     # (percentile x position group, not percentile x team-game) and the team
     # table is already a published contract the site reads.
     "player_percentiles": ("nfl_player_percentiles", "player_percentiles"),
+    "league_averages": ("nfl_league_averages", "league_averages"),
 }
 
 

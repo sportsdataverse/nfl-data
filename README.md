@@ -223,6 +223,29 @@ table: for a **low-is-good** metric (`pass_int`, `sacked`, `fumbles`) the row at
 a LOW count — so a bar drawn from these thresholds agrees with the player's own
 `_pct` instead of contradicting it.
 
+## League averages
+
+`nfl_league_averages` is the mean / median / sd / n baseline behind every
+`_rank` / `_pct` column and the `percentiles` ladder — the college twin's
+`cfb_league_averages`, ported straight over (`python/nfl_team_summaries/league_averages.py`
+mirrors `cfbfastR-cfb-data`'s module of the same name; only the levels differ, since this
+league has one tier where the college grid splits fbs/p4/g5). The grain is one row per
+`(season, level, entity, category, metric)`, with `level` always `nfl` (no p4/g5-style
+split in a single-tier league):
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| season | Int64 | Season year (e.g. 2025). |
+| level | Utf8 | Always `nfl` in this league. |
+| entity | Utf8 | Population the row is drawn from: `team` (`team_summaries`, `team_game`) or `player` (`passing`, `rushing`, `receiving`). |
+| category | Utf8 | Source table the metric comes from: `team_summaries`, `passing`, `rushing`, `receiving`, or `team_game` (the per-game frame behind `percentiles`). |
+| metric | Utf8 | Name of the summarized column (e.g. `EPAplay`, `TEPA`). Ids, ranks, percentiles and sample-size (`_n`) columns are never metrics. |
+| mean | Float64 | **Unweighted mean of `metric` across qualifying, finite entity rows — not a pooled per-play rate.** Averaging 32 teams' EPA/play is not the same number as EPA/play over every play league-wide, and this column is always the former. |
+| median | Float64 | Median of `metric` across the same rows. |
+| sd | Float64 | Sample standard deviation (`ddof=1`); null when `n == 1` (no spread from a single value). |
+| n | Int64 | Count of finite, qualifying rows the statistics are computed over — **the same denominator as the matching `{metric}_pct` column**, since a baseline is never taken over a different population than the percentile beside it. A null or non-finite metric value is skipped and does not count toward `n`. |
+| qualifier_min | Float64 | The per-team-game leaderboard gate applied before summarizing a player category (14.0 dropbacks for `passing`, 6.25 carries for `rushing`, 1.875 targets for `receiving`); **null on the team categories** (`team_summaries`, `team_game`), which have no qualifier. |
+
 ## Consumers
 
 The packages that read what this repo produces:
@@ -239,7 +262,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_03_pbp_publish.py`
 - `python/nfl_data_04_rosters_players.py`
 - `python/nfl_data_05_ratings_weekly.py`
-- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
+- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles + league baselines (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`, `nfl_league_averages`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

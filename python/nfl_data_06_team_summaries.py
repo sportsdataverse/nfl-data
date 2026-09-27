@@ -2,10 +2,11 @@
 
 Thin numbered entry over ``nfl_team_summaries``; args forward verbatim to its CLI.
 Reads the released (or locally built) ``model_pbp`` season parquet and publishes
-``nfl_team_summaries``, ``nfl_passing``, ``nfl_rushing``, ``nfl_receiving`` and
-``nfl_percentiles`` -- the tables gameonpaper.com's NFL leaderboards, team pages
-and trends read through sdv-db. Lifecycle: ingest -> model_pbp -> pbp_publish ->
-rosters_players -> ratings_weekly -> team_summaries.
+``nfl_team_summaries``, ``nfl_passing``, ``nfl_rushing``, ``nfl_receiving``,
+``nfl_percentiles``, ``nfl_player_percentiles`` and ``nfl_league_averages`` -- the
+tables gameonpaper.com's NFL leaderboards, team pages and trends read through
+sdv-db. Lifecycle: ingest -> model_pbp -> pbp_publish -> rosters_players ->
+ratings_weekly -> team_summaries.
 
 Usage::
 

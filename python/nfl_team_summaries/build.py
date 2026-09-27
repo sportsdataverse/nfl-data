@@ -1,4 +1,4 @@
-"""The five season tables from a prepared scrimmage frame.
+"""The seven season tables from a prepared scrimmage frame.
 
 Structure and column names are transcribed from ``cfbfastR-cfb-data``'s
 ``cfb_data_build/team_summaries.py`` (itself a port of the R
@@ -21,6 +21,7 @@ from sportsdataverse.cfb import cfb_adjusted_epa
 
 from .checks import assert_adjustment_is_real, assert_finite, assert_passer_identity
 from .crosswalk import load_crosswalk
+from .league_averages import build_league_averages
 from .rbsdm import passer_extras, team_extras
 
 # Explosive-play EPA thresholds (shared with the college grid).
@@ -46,6 +47,46 @@ _PCTILES: tuple[float, ...] = tuple(round(0.01 * i, 2) for i in range(1, 100))
 QB_QUALIFIES = pl.col("dropbacks") >= QB_MIN_DROPBACKS_PER_GAME * pl.col("team_games")
 RB_QUALIFIES = pl.col("plays") >= RB_MIN_RUSHES_PER_GAME * pl.col("team_games")
 WR_QUALIFIES = pl.col("plays") >= WR_MIN_TARGETS_PER_GAME * pl.col("team_games")
+
+#: (gate, minimum per team game) per player table -- the league baselines read the
+#: same gates the rank / percentile attach does
+PLAYER_QUALIFIERS: dict[str, tuple[pl.Expr, float]] = {
+    "passing": (QB_QUALIFIES, QB_MIN_DROPBACKS_PER_GAME),
+    "rushing": (RB_QUALIFIES, RB_MIN_RUSHES_PER_GAME),
+    "receiving": (WR_QUALIFIES, WR_MIN_TARGETS_PER_GAME),
+}
+#: one level in this league (the college grid splits fbs / p4 / g5)
+LEVELS: dict[str, pl.Expr | None] = {"nfl": None}
+
+#: the per-(game, team) metrics the percentile ladder is cut on
+PERCENTILE_METRICS: list[str] = [
+    "GEI",
+    "EPAplay",
+    "pass_success",
+    "rush_success",
+    "early_down_success",
+    "early_down_EPA",
+    "late_down_success",
+    "success",
+    "yardsplay",
+    "dropbacks",
+    "rushes",
+    "EPAdropback",
+    "EPArush",
+    "yardsdropback",
+    "pass_explosive",
+    "rush_explosive",
+    "explosive",
+    "third_down_success",
+    "red_zone_success",
+    "play_stuffed",
+    "nonExplosiveEpaPerPlay",
+    "havoc",
+    "yardsrush",
+    "lineyards",
+    "opportunity_run",
+    "third_down_distance",
+]
 
 #: table -> (ranked metrics, the subset ranked LOW-is-good). Every entry gets a
 #: ``{metric}_rank`` and a ``{metric}_pct`` on the player table and a threshold
@@ -567,8 +608,10 @@ def _attach_leader_ranks(
     return data.join(out, on=keys, how="left")
 
 
-def prepare_percentiles(df: pl.DataFrame) -> pl.DataFrame:
-    """Per-(game, team) metrics -> the 1..99 quantile table."""
+def per_game_metrics(df: pl.DataFrame) -> pl.DataFrame:
+    """One row per (game_id, pos_team): the team-game metrics both the percentile
+    ladder and the ``team_game`` league baselines are cut over.
+    """
     per_game = df.group_by(["game_id", "pos_team"]).agg(
         GEI=pl.col("GEI").drop_nulls().first(),
         EPAplay=pl.col("EPA").mean(),
@@ -609,36 +652,15 @@ def prepare_percentiles(df: pl.DataFrame) -> pl.DataFrame:
         .then(0.0)
         .otherwise((pl.col("sum_yds_receiving") + pl.col("sum_yds_sacked")) / pl.col("dropbacks")),
     )
-    metric_cols = [
-        "GEI",
-        "EPAplay",
-        "pass_success",
-        "rush_success",
-        "early_down_success",
-        "early_down_EPA",
-        "late_down_success",
-        "success",
-        "yardsplay",
-        "dropbacks",
-        "rushes",
-        "EPAdropback",
-        "EPArush",
-        "yardsdropback",
-        "pass_explosive",
-        "rush_explosive",
-        "explosive",
-        "third_down_success",
-        "red_zone_success",
-        "play_stuffed",
-        "nonExplosiveEpaPerPlay",
-        "havoc",
-        "yardsrush",
-        "lineyards",
-        "opportunity_run",
-        "third_down_distance",
-    ]
+    # the select drops the sum_* helper columns, which would otherwise become
+    # "metrics" for the league baselines cut over this same frame
+    return per_game.select("game_id", "pos_team", *PERCENTILE_METRICS)
+
+
+def _quantiles(per_game: pl.DataFrame) -> pl.DataFrame:
+    """The 1..99 ladder over :func:`per_game_metrics`."""
     rows: dict[str, list[float]] = {"pctile": list(_PCTILES)}
-    for c in metric_cols:
+    for c in PERCENTILE_METRICS:
         vals = per_game[c].cast(pl.Float64).to_numpy().astype(float)
         rows[c] = [float(np.nanquantile(vals, p, method="linear")) for p in _PCTILES]
     return pl.DataFrame(rows)
@@ -647,7 +669,7 @@ def prepare_percentiles(df: pl.DataFrame) -> pl.DataFrame:
 def prepare_player_percentiles(qualifiers: dict[str, pl.DataFrame]) -> pl.DataFrame:
     """Metric value at each percentile 1..99, per position group.
 
-    The season twin of the team-level :func:`prepare_percentiles`, and the lookup
+    The season twin of the team-level :func:`_quantiles`, and the lookup
     side of the players' ``_pct`` columns: it answers "what EPA/play is a
     90th-percentile QB?" without shipping a roster. Shape mirrors the team table
     -- one row per percentile, one column per metric -- plus a ``position_group``
@@ -733,7 +755,7 @@ def _prepare_for_write(df: pl.DataFrame, yr: int) -> pl.DataFrame:
 def build_team_summaries(
     plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int
 ) -> dict[str, pl.DataFrame]:
-    """Build the five tables.
+    """Build the seven tables.
 
     Args:
         plays_input: :func:`nfl_team_summaries.input.prepare_plays` output.
@@ -748,7 +770,8 @@ def build_team_summaries(
     pctls = team_off.with_columns(
         GEI=(pl.col("wpa").abs().sum().over("game_id")) * (_GEI_NORM / pl.len().over("game_id"))
     )
-    percentiles = prepare_percentiles(pctls).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
+    per_game = per_game_metrics(pctls)
+    percentiles = _quantiles(per_game).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
     rc = ("start_position", "start_position_rank", "start_position_n")
     overall = _side_pair(team_off)
@@ -815,7 +838,7 @@ def build_team_summaries(
     )
     assert_passer_identity(qb, label=str(yr))
 
-    return {
+    tables = {
         "percentiles": percentiles,
         "player_percentiles": player_percentiles,
         "team_summaries": team_out,
@@ -823,3 +846,7 @@ def build_team_summaries(
         "rushing": _prepare_for_write(rb, yr).rename({"rusher_player_id": "player_id"}),
         "receiving": _prepare_for_write(wr, yr).rename({"receiver_player_id": "player_id"}),
     }
+    tables["league_averages"] = build_league_averages(
+        {**tables, "team_game": per_game}, yr, levels=LEVELS, qualifiers=PLAYER_QUALIFIERS
+    )
+    return tables

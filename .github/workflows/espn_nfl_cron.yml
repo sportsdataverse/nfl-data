@@ -11,6 +11,8 @@ name: espn_nfl processed-game datasets
 # so a scheduled run processes the whole current season (~285 games, ~40 min
 # at 2 workers) every time; the backfill (2002 onward) is a one-off from a
 # checkout with a persistent cache (`scripts/espn_nfl_data.sh -s 2002 -e 2026`).
+# nfl_rolling_windows (last in `all`) reads every pbp season 2002..S, so the run
+# downloads the history seasons from the espn_nfl_pbp tag with gh (GH_TOKEN).
 #
 # Serialized with the repo's other publishing workflows: two runs in flight
 # put one behind the other's upload and a cancelled upload leaves a tag

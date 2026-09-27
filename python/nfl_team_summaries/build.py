@@ -166,6 +166,12 @@ def _rank(col: str, *, descending: bool) -> pl.Expr:
     return pl.when(c.is_null()).then(null_trail).otherwise(base)
 
 
+def _rank_known(col: str, *, descending: bool) -> pl.Expr:
+    """``_rank`` for a metric that can be legitimately absent: a null stays UNRANKED
+    (null) instead of taking a trailing rank, so "no sample" never renders as "worst"."""
+    return pl.col(col).rank(method="average", descending=descending)
+
+
 def _pct(col: str) -> pl.Expr:
     """Percentile (0-100) of ``{col}_rank`` among qualifiers that HAVE the metric.
 
@@ -313,9 +319,12 @@ def _summarize_team(
         nonExplosiveEpaPerPlay=pl.col("nonExplosiveEpa").mean(),
         line_yards=pl.col("line_yards").mean(),
         opportunity_rate=pl.col("opportunity_run").mean(),
+        turnover_count=pl.col("turnover").sum(),
     )
     g = g.with_columns(
         playsgame=pl.col("plays") / pl.col("n_games"),
+        # giveaways per game on offense, takeaways per game on defense
+        turnovers=pl.col("turnover_count") / pl.col("n_games"),
         EPAdrive=pl.col("TEPA") / pl.col("n_drives"),
         EPAgame=pl.col("TEPA") / pl.col("n_games"),
         yardsgame=pl.col("yards") / pl.col("n_games"),
@@ -324,7 +333,7 @@ def _summarize_team(
         yardsdrive=pl.col("yards") / pl.col("n_drives"),
         playsdrive=pl.col("plays") / pl.col("n_drives"),
         *[pl.col(d).cast(pl.Int64).alias(f"{m}_n") for m, d in _TEAM_RATIO_DENOMINATORS.items()],
-    ).drop("n_games", "n_drives")
+    ).drop("n_games", "n_drives", "turnover_count")
     g = g.sort(group)
     d = ascending
     g = g.with_columns(
@@ -354,6 +363,8 @@ def _summarize_team(
         nonExplosiveEpaPerPlay_rank=_rank("nonExplosiveEpaPerPlay", descending=not d),
         line_yards_rank=_rank("line_yards", descending=not d),
         opportunity_rate_rank=_rank("opportunity_rate", descending=not d),
+        # fewer giveaways is better on offense, more takeaways on defense
+        turnovers_rank=_rank("turnovers", descending=d),
     )
     if remove_cols:
         g = g.drop([c for c in remove_cols if c in g.columns])
@@ -370,11 +381,18 @@ def _mutate_summary_margins(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns(
         [_rank(f"{b}_margin", descending=True).alias(f"{b}_margin_rank") for b in _MARGIN_BASES]
     )
-    if "start_position_off" in df.columns:
+    if "start_position_off" in df.columns:  # the overall pair; the splits drop these (``rc``)
         out = out.with_columns(
             start_position_margin=(100 - pl.col("start_position_off"))
-            - (100 - pl.col("start_position_def"))
-        ).with_columns(start_position_margin_rank=_rank("start_position_margin", descending=True))
+            - (100 - pl.col("start_position_def")),
+            explosive_margin=pl.col("explosive_off") - pl.col("explosive_def"),
+            # takeaways minus giveaways: positive is good, like every other margin
+            turnover_margin=pl.col("turnovers_def") - pl.col("turnovers_off"),
+        ).with_columns(
+            start_position_margin_rank=_rank("start_position_margin", descending=True),
+            explosive_margin_rank=_rank("explosive_margin", descending=True),
+            turnover_margin_rank=_rank("turnover_margin", descending=True),
+        )
     return out
 
 
@@ -405,17 +423,30 @@ def _drives(plays: pl.DataFrame, group: str, ascending: bool) -> pl.DataFrame:
         .agg(
             total_available_yards=pl.col("drive_start_yards_to_goal").first(),
             total_gained_yards=pl.col("drive_yards").last(),
+            # a scoring opportunity (sdv-py tendencies): a snap inside the opponent 40
+            opp=(pl.col("yards_to_goal") <= 40).any(),
+            points=pl.col("drive_points").first(),
         )
     )
     agg = per_drive.group_by(group).agg(
         total_available_yards=pl.col("total_available_yards").sum(),
         total_gained_yards=pl.col("total_gained_yards").sum(),
+        pts_per_opp_n=pl.col("opp").sum().cast(pl.Int64),
+        opp_points=pl.col("points").filter(pl.col("opp")).sum(),
     )
-    agg = agg.with_columns(
-        available_yards_pct=pl.col("total_gained_yards") / pl.col("total_available_yards")
-    ).sort(group)
+    agg = (
+        agg.with_columns(
+            available_yards_pct=pl.col("total_gained_yards") / pl.col("total_available_yards"),
+            pts_per_opp=pl.when(pl.col("pts_per_opp_n") > 0)
+            .then(pl.col("opp_points") / pl.col("pts_per_opp_n"))
+            .otherwise(None),
+        )
+        .drop("opp_points")
+        .sort(group)
+    )
     return agg.with_columns(
-        available_yards_pct_rank=_rank("available_yards_pct", descending=not ascending)
+        available_yards_pct_rank=_rank("available_yards_pct", descending=not ascending),
+        pts_per_opp_rank=_rank_known("pts_per_opp", descending=not ascending),
     )
 
 
@@ -431,6 +462,7 @@ def _drives_table(plays: pl.DataFrame) -> pl.DataFrame:
             - pl.col("total_gained_yards_def"),
             available_yards_pct_margin=pl.col("available_yards_pct_off")
             - pl.col("available_yards_pct_def"),
+            pts_per_opp_margin=pl.col("pts_per_opp_off") - pl.col("pts_per_opp_def"),
         )
         .with_columns(
             total_available_yards_margin_rank=_rank(
@@ -438,6 +470,7 @@ def _drives_table(plays: pl.DataFrame) -> pl.DataFrame:
             ),
             total_gained_yards_margin_rank=_rank("total_gained_yards_margin", descending=True),
             available_yards_pct_margin_rank=_rank("available_yards_pct_margin", descending=True),
+            pts_per_opp_margin_rank=_rank_known("pts_per_opp_margin", descending=True),
         )
     )
 
@@ -773,7 +806,13 @@ def build_team_summaries(
     per_game = per_game_metrics(pctls)
     percentiles = _quantiles(per_game).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
-    rc = ("start_position", "start_position_rank", "start_position_n")
+    rc = (
+        "start_position",
+        "start_position_rank",
+        "start_position_n",
+        "turnovers",
+        "turnovers_rank",
+    )
     overall = _side_pair(team_off)
     pass_data = _side_pair(team_off.filter(pl.col("pass") == 1), remove_cols=rc)
     rush_data = _side_pair(team_off.filter(pl.col("rush") == 1), remove_cols=rc)

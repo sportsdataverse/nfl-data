@@ -906,9 +906,11 @@ def build_team_summaries(
     ).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
     # opponent-adjusted EPA: the shared sdv-py ridge (league-agnostic; keyed on
-    # pos_team_id / def_pos_team_id / home / neutral_site / wp_before)
+    # pos_team_id / def_pos_team_id / home / neutral_site / wp_before). NFL keeps
+    # the pre-#598 method: #598's refit was validated on CFB only and needs
+    # wp_before_naive, which this build doesn't create (owner decision 2026-09-27).
     adj = (
-        cfb_adjusted_epa(plays)
+        cfb_adjusted_epa(plays, method="pre598")
         .drop("pos_team")
         .with_columns(team_id=pl.col("team_id").cast(pl.Int64))
     )

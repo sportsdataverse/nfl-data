@@ -27,7 +27,6 @@ from nfl_espn_build.tendencies import exclude_exhibitions
 log = logging.getLogger(__name__)
 
 PBP_FLOOR = 2002
-GAME_DATES_SCHEMA = {"game_id": pl.Int64, "game_date": pl.Date}
 
 
 def _pbp_path(season: int, out: str | Path) -> Path:

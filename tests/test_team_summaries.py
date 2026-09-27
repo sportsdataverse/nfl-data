@@ -508,6 +508,14 @@ def test_percentiles_shape(tables):
     assert (pc["season"] == 2025).all()
 
 
+def test_tables_registry_matches_the_build_output(tables):
+    from nfl_team_summaries.__main__ import TABLES
+
+    _, out = tables
+    assert set(TABLES) == set(out)
+    assert TABLES["league_averages"] == ("nfl_league_averages", "league_averages")
+
+
 # --- guards ------------------------------------------------------------------------
 
 
@@ -749,9 +757,7 @@ def test_league_averages_describe_the_qualified_population(tables):
     assert set(la["level"].unique()) == {"nfl"}
     rows = la.filter((pl.col("category") == "passing") & (pl.col("metric") == "EPAplay"))
     qual = out["passing"].filter(QB_QUALIFIES & pl.col("EPAplay").is_finite())
-    if qual.height == 0:
-        assert rows.height == 0
-        return
+    assert qual.height > 0
     row = rows.row(0, named=True)
     assert row["n"] == qual.height and row["qualifier_min"] == QB_MIN_DROPBACKS_PER_GAME
     assert row["mean"] == pytest.approx(qual["EPAplay"].mean())

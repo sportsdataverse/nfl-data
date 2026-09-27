@@ -1,4 +1,4 @@
-"""The five season tables from a prepared scrimmage frame.
+"""The seven season tables from a prepared scrimmage frame.
 
 Structure and column names are transcribed from ``cfbfastR-cfb-data``'s
 ``cfb_data_build/team_summaries.py`` (itself a port of the R
@@ -666,15 +666,10 @@ def _quantiles(per_game: pl.DataFrame) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def prepare_percentiles(df: pl.DataFrame) -> pl.DataFrame:
-    """Per-(game, team) metrics -> the 1..99 quantile table."""
-    return _quantiles(per_game_metrics(df))
-
-
 def prepare_player_percentiles(qualifiers: dict[str, pl.DataFrame]) -> pl.DataFrame:
     """Metric value at each percentile 1..99, per position group.
 
-    The season twin of the team-level :func:`prepare_percentiles`, and the lookup
+    The season twin of the team-level :func:`_quantiles`, and the lookup
     side of the players' ``_pct`` columns: it answers "what EPA/play is a
     90th-percentile QB?" without shipping a roster. Shape mirrors the team table
     -- one row per percentile, one column per metric -- plus a ``position_group``
@@ -760,7 +755,7 @@ def _prepare_for_write(df: pl.DataFrame, yr: int) -> pl.DataFrame:
 def build_team_summaries(
     plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int
 ) -> dict[str, pl.DataFrame]:
-    """Build the five tables.
+    """Build the seven tables.
 
     Args:
         plays_input: :func:`nfl_team_summaries.input.prepare_plays` output.

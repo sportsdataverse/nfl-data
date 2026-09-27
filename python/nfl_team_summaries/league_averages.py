@@ -4,8 +4,9 @@ One row per (season, level, entity, category, metric). The statistics describe t
 DISTRIBUTION OF ENTITY ROWS -- teams, qualified players, team-games -- not a pooled
 rate: ``mean`` is the unweighted mean of those rows, the same population the
 ``_rank`` / ``_pct`` columns and the ``percentiles`` ladder are cut over, so ``n`` is
-that percentile's denominator. A null or non-finite value is skipped and does not
-count toward ``n``; a metric with no finite value in a level gets no row.
+that percentile's denominator for finite values. A null or non-finite value is
+skipped and does not count toward ``n``; a metric with no finite value in a level
+gets no row.
 
 Pure: the caller passes the frames, the level filters and the qualifier gates
 (``build.LEVELS`` / ``PLAYER_QUALIFIERS``). cfbfastR-cfb-data carries the same

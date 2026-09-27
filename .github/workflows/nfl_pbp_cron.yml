@@ -166,7 +166,7 @@ jobs:
 
       # ── 12. Season summaries (team grid, leaderboards, percentiles) ───────
       # Reads the model_pbp parquets just built (no re-download) and publishes
-      # the five nfl_* summary tags gameonpaper.com's NFL pages read via sdv-db.
+      # the seven nfl_* summary tags gameonpaper.com's NFL pages read via sdv-db.
       - name: Build + publish season summaries
         working-directory: nfl-data/python
         env:

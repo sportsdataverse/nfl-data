@@ -27,6 +27,7 @@ from nfl_team_summaries.build import (
     _drives_table,
     _prepare_for_write,
     _side_pair,
+    _turnovers,
     add_derived_metrics,
     build_team_summaries,
     prepare_player_percentiles,
@@ -181,6 +182,9 @@ def _fake_pbp(seed: int = 7) -> pl.DataFrame:
         fumble_lost=pl.when((pl.col("play_type") == "run") & (pl.col("play_id") == 6))
         .then(1)
         .otherwise(pl.col("fumble_lost")),
+        fumbled_1_team=pl.when((pl.col("play_type") == "run") & (pl.col("play_id") == 6))
+        .then(pl.col("posteam"))
+        .otherwise(pl.col("fumbled_1_team")),
     )
     return df
 
@@ -251,6 +255,7 @@ def _play(
         "interception": 0,
         "fumble": 0,
         "fumble_lost": 0,
+        "fumbled_1_team": None,
         "fumble_forced": 0,
         "pass_defense_1_player_id": f"{defteam}-CB1"
         if kind == "pass" and not complete and rng.random() < 0.5
@@ -852,7 +857,9 @@ def _five_factor_pbp() -> pl.DataFrame:
 
     KC: a TD drive that snaps at the 35; a FG drive whose deepest snap is
     exactly the 40; a punt drive that stalls at the 41 (and fumbles, but KC
-    recovers); an interception; a lost fumble. BUF: an interception, a punt.
+    recovers); an interception; a lost fumble. BUF: an interception, and a punt
+    KC muffs and BUF recovers -- a special-teams giveaway charged to the
+    RECEIVING team, which is not ``posteam`` on a punt.
     """
     rng = random.Random(0)
     # (game, fixed_drive, offense, fixed_drive_result, [(yardline_100, kind, overrides)])
@@ -871,11 +878,32 @@ def _five_factor_pbp() -> pl.DataFrame:
             1,
             "KC",
             "Punt",
-            [(80, "run", {}), (55, "pass", {}), (41, "run", {"fumble": 1}), (41, "punt", {})],
+            [
+                (80, "run", {}),
+                (55, "pass", {}),
+                (41, "run", {"fumble": 1, "fumbled_1_team": "KC"}),
+                (41, "punt", {}),
+            ],
         ),
-        (_FF_G2, 2, "BUF", "Punt", [(70, "run", {}), (50, "pass", {}), (50, "punt", {})]),
+        (
+            _FF_G2,
+            2,
+            "BUF",
+            "Punt",
+            [
+                (70, "run", {}),
+                (50, "pass", {}),
+                (50, "punt", {"fumble": 1, "fumble_lost": 1, "fumbled_1_team": "KC"}),
+            ],
+        ),
         (_FF_G2, 3, "KC", "Turnover", [(75, "pass", {"interception": 1})]),
-        (_FF_G2, 4, "KC", "Turnover", [(70, "run", {"fumble": 1, "fumble_lost": 1})]),
+        (
+            _FF_G2,
+            4,
+            "KC",
+            "Turnover",
+            [(70, "run", {"fumble": 1, "fumble_lost": 1, "fumbled_1_team": "KC"})],
+        ),
     ]
     rows = []
     play_id = {g[0]: 0 for g in (_FF_G1, _FF_G2)}
@@ -904,9 +932,13 @@ def _five_factor_pbp() -> pl.DataFrame:
 
 
 def _five_factor_rows() -> dict[str, dict]:
-    plays = add_derived_metrics(prepare_plays(_five_factor_pbp(), 2025, schedule_fn=_schedule))
+    pbp = _five_factor_pbp()
+    plays = add_derived_metrics(prepare_plays(pbp, 2025, schedule_fn=_schedule))
     team = _prepare_for_write(
-        _side_pair(plays).join(_drives_table(plays), on="pos_team_id", how="left"), 2025
+        _side_pair(plays)
+        .join(_drives_table(plays), on="pos_team_id", how="left")
+        .join(_turnovers(pbp), on="pos_team_id", how="left"),
+        2025,
     )
     return {r["pos_team"]: r for r in team.iter_rows(named=True)}
 
@@ -931,14 +963,15 @@ def test_points_per_scoring_opportunity_by_hand():
 def test_turnovers_per_game_by_hand():
     rows = _five_factor_rows()
     kc, buf = rows["KC"], rows["BUF"]
-    # KC: a pick and a LOST fumble (the fumble it recovered is no giveaway), one
-    # takeaway, over two games
-    assert kc["turnovers_off"] == pytest.approx(1.0)
+    # KC: a pick, a LOST fumble and a muffed punt (the fumble it recovered is no
+    # giveaway) against one takeaway, over two games. Every play counts, as in
+    # the official differential: the muff is KC's giveaway although BUF had the ball.
+    assert kc["turnovers_off"] == pytest.approx(1.5)
     assert kc["turnovers_def"] == pytest.approx(0.5)
-    assert kc["turnover_margin"] == pytest.approx(-0.5)
+    assert kc["turnover_margin"] == pytest.approx(-1.0)
     assert buf["turnovers_off"] == pytest.approx(0.5)
-    assert buf["turnovers_def"] == pytest.approx(1.0)
-    assert buf["turnover_margin"] == pytest.approx(0.5)
+    assert buf["turnovers_def"] == pytest.approx(1.5)
+    assert buf["turnover_margin"] == pytest.approx(1.0)
     # fewer giveaways, more takeaways and the better margin each rank 1
     assert (buf["turnovers_off_rank"], kc["turnovers_off_rank"]) == (1.0, 2.0)
     assert (buf["turnovers_def_rank"], kc["turnovers_def_rank"]) == (1.0, 2.0)

@@ -9,8 +9,6 @@ nflfastR conventions kept on purpose (rbsdm.com uses the same ones):
 * a DROPBACK (``pass`` here) is a pass attempt, a sack or a QB scramble;
 * a RUSH is a rush attempt that is not a scramble;
 * ``success`` is ``epa > 0``;
-* a giveaway (``turnover``) is an interception or a lost fumble on a scrimmage
-  play; muffs and return fumbles on kicks are outside the scrimmage frame;
 * kneels, spikes, no-plays (penalties), kickoffs, punts, FGs and conversions are
   not scrimmage plays. Fourth-down decisions and special teams are read from
   the raw frame separately (:mod:`nfl_team_summaries.rbsdm`).
@@ -133,9 +131,6 @@ def prepare_plays(
         sack_vec=_flag("sack").cast(pl.Float64),
         int=_flag("interception").cast(pl.Float64),
         fumble_vec=_flag("fumble").cast(pl.Float64),
-        # a giveaway: a pick or a LOST fumble, once per play (a pick the
-        # defender fumbles back is still the offense's one giveaway)
-        turnover=((_flag("interception") == 1) | (_flag("fumble_lost") == 1)).cast(pl.Float64),
         # sdv-py tendencies' drive points: 7 for a touchdown drive, 3 for a
         # field goal, else 0 (the extra point is not the drive's doing)
         drive_points=pl.when(pl.col("fixed_drive_result") == "Touchdown")

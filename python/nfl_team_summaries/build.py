@@ -20,7 +20,7 @@ import polars as pl
 from sportsdataverse.cfb import cfb_adjusted_epa
 
 from .checks import assert_adjustment_is_real, assert_finite, assert_passer_identity
-from .crosswalk import load_crosswalk
+from .crosswalk import attach_team_ids, load_crosswalk
 from .league_averages import build_league_averages
 from .rbsdm import passer_extras, team_extras
 
@@ -319,12 +319,9 @@ def _summarize_team(
         nonExplosiveEpaPerPlay=pl.col("nonExplosiveEpa").mean(),
         line_yards=pl.col("line_yards").mean(),
         opportunity_rate=pl.col("opportunity_run").mean(),
-        turnover_count=pl.col("turnover").sum(),
     )
     g = g.with_columns(
         playsgame=pl.col("plays") / pl.col("n_games"),
-        # giveaways per game on offense, takeaways per game on defense
-        turnovers=pl.col("turnover_count") / pl.col("n_games"),
         EPAdrive=pl.col("TEPA") / pl.col("n_drives"),
         EPAgame=pl.col("TEPA") / pl.col("n_games"),
         yardsgame=pl.col("yards") / pl.col("n_games"),
@@ -333,7 +330,7 @@ def _summarize_team(
         yardsdrive=pl.col("yards") / pl.col("n_drives"),
         playsdrive=pl.col("plays") / pl.col("n_drives"),
         *[pl.col(d).cast(pl.Int64).alias(f"{m}_n") for m, d in _TEAM_RATIO_DENOMINATORS.items()],
-    ).drop("n_games", "n_drives", "turnover_count")
+    ).drop("n_games", "n_drives")
     g = g.sort(group)
     d = ascending
     g = g.with_columns(
@@ -363,8 +360,6 @@ def _summarize_team(
         nonExplosiveEpaPerPlay_rank=_rank("nonExplosiveEpaPerPlay", descending=not d),
         line_yards_rank=_rank("line_yards", descending=not d),
         opportunity_rate_rank=_rank("opportunity_rate", descending=not d),
-        # fewer giveaways is better on offense, more takeaways on defense
-        turnovers_rank=_rank("turnovers", descending=d),
     )
     if remove_cols:
         g = g.drop([c for c in remove_cols if c in g.columns])
@@ -386,12 +381,9 @@ def _mutate_summary_margins(df: pl.DataFrame) -> pl.DataFrame:
             start_position_margin=(100 - pl.col("start_position_off"))
             - (100 - pl.col("start_position_def")),
             explosive_margin=pl.col("explosive_off") - pl.col("explosive_def"),
-            # takeaways minus giveaways: positive is good, like every other margin
-            turnover_margin=pl.col("turnovers_def") - pl.col("turnovers_off"),
         ).with_columns(
             start_position_margin_rank=_rank("start_position_margin", descending=True),
             explosive_margin_rank=_rank("explosive_margin", descending=True),
-            turnover_margin_rank=_rank("turnover_margin", descending=True),
         )
     return out
 
@@ -473,6 +465,41 @@ def _drives_table(plays: pl.DataFrame) -> pl.DataFrame:
             pts_per_opp_margin_rank=_rank_known("pts_per_opp_margin", descending=True),
         )
     )
+
+
+def _turnovers(raw: pl.DataFrame) -> pl.DataFrame:
+    """Giveaways / takeaways per game over EVERY play -- the official book's count.
+
+    An interception is the passing team's giveaway; a lost fumble is the fumbling
+    team's (``fumbled_1_team``: on a punt that is the RECEIVING team, not
+    ``posteam``), and each is the other team's takeaway. Kick and punt muffs count,
+    as they do in the official differential (2024: 30 of 32 teams match ESPN; the
+    scrimmage-only count matched 9). ``turnover_margin`` = takeaways - giveaways.
+    """
+    raw = raw.filter(pl.col("posteam").is_not_null())
+    ints = raw.filter(pl.col("interception").fill_null(0) == 1)
+    lost = raw.filter(pl.col("fumble_lost").fill_null(0) == 1)
+    fumbler = pl.coalesce("fumbled_1_team", "posteam")
+    other = pl.when(fumbler == pl.col("posteam")).then(pl.col("defteam")).otherwise("posteam")
+    give = pl.concat([ints.select(team=pl.col("posteam")), lost.select(team=fumbler)])
+    take = pl.concat([ints.select(team=pl.col("defteam")), lost.select(team=other)])
+    out = (
+        raw.group_by(pl.col("posteam").alias("team"))
+        .agg(games=pl.col("game_id").n_unique())
+        .join(give.group_by("team").agg(giveaways=pl.len()), on="team", how="left")
+        .join(take.group_by("team").agg(takeaways=pl.len()), on="team", how="left")
+        .with_columns(
+            turnovers_off=pl.col("giveaways").fill_null(0) / pl.col("games"),
+            turnovers_def=pl.col("takeaways").fill_null(0) / pl.col("games"),
+        )
+        .with_columns(turnover_margin=pl.col("turnovers_def") - pl.col("turnovers_off"))
+        .with_columns(
+            turnovers_off_rank=_rank("turnovers_off", descending=False),
+            turnovers_def_rank=_rank("turnovers_def", descending=True),
+            turnover_margin_rank=_rank("turnover_margin", descending=True),
+        )
+    )
+    return attach_team_ids(out, "team", "pos_team").drop("team", "games", "giveaways", "takeaways")
 
 
 def _add_team_games(df: pl.DataFrame) -> pl.DataFrame:
@@ -806,13 +833,7 @@ def build_team_summaries(
     per_game = per_game_metrics(pctls)
     percentiles = _quantiles(per_game).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
-    rc = (
-        "start_position",
-        "start_position_rank",
-        "start_position_n",
-        "turnovers",
-        "turnovers_rank",
-    )
+    rc = ("start_position", "start_position_rank", "start_position_n")
     overall = _side_pair(team_off)
     pass_data = _side_pair(team_off.filter(pl.col("pass") == 1), remove_cols=rc)
     rush_data = _side_pair(team_off.filter(pl.col("rush") == 1), remove_cols=rc)
@@ -820,6 +841,7 @@ def build_team_summaries(
         overall.join(_drives_table(plays), on="pos_team_id", how="left", suffix="_drive")
         .join(pass_data, on="pos_team_id", how="left", suffix="_pass")
         .join(rush_data, on="pos_team_id", how="left", suffix="_rush")
+        .join(_turnovers(raw_pbp), on="pos_team_id", how="left")
     )
 
     # leaderboards

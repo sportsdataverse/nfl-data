@@ -20,7 +20,7 @@ import polars as pl
 from sportsdataverse.cfb import cfb_adjusted_epa
 
 from .checks import assert_adjustment_is_real, assert_finite, assert_passer_identity
-from .crosswalk import load_crosswalk
+from .crosswalk import attach_team_ids, load_crosswalk
 from .league_averages import build_league_averages
 from .rbsdm import passer_extras, team_extras
 
@@ -164,6 +164,12 @@ def _rank(col: str, *, descending: bool) -> pl.Expr:
     n_nonnull = c.is_not_null().sum()
     null_trail = (n_nonnull + c.is_null().cum_sum()).cast(pl.Float64)
     return pl.when(c.is_null()).then(null_trail).otherwise(base)
+
+
+def _rank_known(col: str, *, descending: bool) -> pl.Expr:
+    """``_rank`` for a metric that can be legitimately absent: a null stays UNRANKED
+    (null) instead of taking a trailing rank, so "no sample" never renders as "worst"."""
+    return pl.col(col).rank(method="average", descending=descending)
 
 
 def _pct(col: str) -> pl.Expr:
@@ -370,11 +376,15 @@ def _mutate_summary_margins(df: pl.DataFrame) -> pl.DataFrame:
     out = out.with_columns(
         [_rank(f"{b}_margin", descending=True).alias(f"{b}_margin_rank") for b in _MARGIN_BASES]
     )
-    if "start_position_off" in df.columns:
+    if "start_position_off" in df.columns:  # the overall pair; the splits drop these (``rc``)
         out = out.with_columns(
             start_position_margin=(100 - pl.col("start_position_off"))
-            - (100 - pl.col("start_position_def"))
-        ).with_columns(start_position_margin_rank=_rank("start_position_margin", descending=True))
+            - (100 - pl.col("start_position_def")),
+            explosive_margin=pl.col("explosive_off") - pl.col("explosive_def"),
+        ).with_columns(
+            start_position_margin_rank=_rank("start_position_margin", descending=True),
+            explosive_margin_rank=_rank("explosive_margin", descending=True),
+        )
     return out
 
 
@@ -405,17 +415,32 @@ def _drives(plays: pl.DataFrame, group: str, ascending: bool) -> pl.DataFrame:
         .agg(
             total_available_yards=pl.col("drive_start_yards_to_goal").first(),
             total_gained_yards=pl.col("drive_yards").last(),
+            # a scoring opportunity (sdv-py tendencies): a snap inside the opponent 40
+            opp=(pl.col("yards_to_goal") <= 40).any(),
+            points=pl.col("drive_points").first(),
         )
     )
     agg = per_drive.group_by(group).agg(
         total_available_yards=pl.col("total_available_yards").sum(),
         total_gained_yards=pl.col("total_gained_yards").sum(),
+        pts_per_opp_n=pl.col("opp").sum().cast(pl.Int64),
+        opp_points=pl.col("points").filter(pl.col("opp") == True).sum(),  # noqa: E712
+        # sum() skips nulls: an asset without drive results would read as 0 points
+        points_known=pl.col("points").is_not_null().all(),
     )
-    agg = agg.with_columns(
-        available_yards_pct=pl.col("total_gained_yards") / pl.col("total_available_yards")
-    ).sort(group)
+    agg = (
+        agg.with_columns(
+            available_yards_pct=pl.col("total_gained_yards") / pl.col("total_available_yards"),
+            pts_per_opp=pl.when((pl.col("pts_per_opp_n") > 0) & pl.col("points_known"))
+            .then(pl.col("opp_points") / pl.col("pts_per_opp_n"))
+            .otherwise(None),
+        )
+        .drop("opp_points", "points_known")
+        .sort(group)
+    )
     return agg.with_columns(
-        available_yards_pct_rank=_rank("available_yards_pct", descending=not ascending)
+        available_yards_pct_rank=_rank("available_yards_pct", descending=not ascending),
+        pts_per_opp_rank=_rank_known("pts_per_opp", descending=not ascending),
     )
 
 
@@ -431,6 +456,7 @@ def _drives_table(plays: pl.DataFrame) -> pl.DataFrame:
             - pl.col("total_gained_yards_def"),
             available_yards_pct_margin=pl.col("available_yards_pct_off")
             - pl.col("available_yards_pct_def"),
+            pts_per_opp_margin=pl.col("pts_per_opp_off") - pl.col("pts_per_opp_def"),
         )
         .with_columns(
             total_available_yards_margin_rank=_rank(
@@ -438,8 +464,65 @@ def _drives_table(plays: pl.DataFrame) -> pl.DataFrame:
             ),
             total_gained_yards_margin_rank=_rank("total_gained_yards_margin", descending=True),
             available_yards_pct_margin_rank=_rank("available_yards_pct_margin", descending=True),
+            pts_per_opp_margin_rank=_rank_known("pts_per_opp_margin", descending=True),
         )
     )
+
+
+def _turnovers(raw: pl.DataFrame) -> pl.DataFrame:
+    """Giveaways / takeaways per game over EVERY play -- the official book's count.
+
+    An interception is the passing team's giveaway; a lost fumble is the fumbling
+    team's (``fumbled_1_team``: on a punt that is the RECEIVING team, not
+    ``posteam``), and each is the other team's takeaway. Kick and punt muffs count,
+    as they do in the official differential (2024: 30 of 32 teams match ESPN; the
+    scrimmage-only count matched 9). ``turnover_margin`` = takeaways - giveaways.
+    A team's games are those it appears in on EITHER side, so both rates share one
+    denominator and the league margin sums to 0 even where the raw frame has gaps.
+
+    Known limitation: ``fumble_lost`` is one flag per play and ``fumbled_1_team`` the
+    FIRST fumbler, so a play with two lost fumbles keeps only the first. In 2024 that
+    is ``2024_15_CIN_TEN`` play 3191 (TEN fumbles, CIN recovers, CIN fumbles out of
+    the end zone for a touchback): CIN's giveaway and TEN's takeaway are missed --
+    the two teams that miss ESPN by one. (``2024_13_PIT_CIN`` play 1857, where PIT
+    recovers its own second fumble, is counted right.) The exact fix needs sdv-py
+    to record the team per lost fumble (stat 106).
+    """
+    ints = raw.filter((pl.col("interception").fill_null(0) == 1) & pl.col("posteam").is_not_null())
+    lost = raw.filter((pl.col("fumble_lost").fill_null(0) == 1) & pl.col("posteam").is_not_null())
+    fumbler = pl.coalesce("fumbled_1_team", "posteam")
+    other = (
+        pl.when(fumbler == pl.col("posteam")).then(pl.col("defteam")).otherwise(pl.col("posteam"))
+    )
+    give = pl.concat([ints.select(team=pl.col("posteam")), lost.select(team=fumbler)])
+    take = pl.concat([ints.select(team=pl.col("defteam")), lost.select(team=other)])
+    games = (
+        pl.concat(
+            [
+                raw.select(team=pl.col("posteam"), game_id=pl.col("game_id")),
+                raw.select(team=pl.col("defteam"), game_id=pl.col("game_id")),
+            ]
+        )
+        .drop_nulls()
+        .unique()
+        .group_by("team")
+        .agg(games=pl.len())
+    )
+    out = (
+        games.join(give.group_by("team").agg(giveaways=pl.len()), on="team", how="left")
+        .join(take.group_by("team").agg(takeaways=pl.len()), on="team", how="left")
+        .with_columns(
+            turnovers_off=pl.col("giveaways").fill_null(0) / pl.col("games"),
+            turnovers_def=pl.col("takeaways").fill_null(0) / pl.col("games"),
+        )
+        .with_columns(turnover_margin=pl.col("turnovers_def") - pl.col("turnovers_off"))
+        .with_columns(
+            turnovers_off_rank=_rank("turnovers_off", descending=False),
+            turnovers_def_rank=_rank("turnovers_def", descending=True),
+            turnover_margin_rank=_rank("turnover_margin", descending=True),
+        )
+    )
+    return attach_team_ids(out, "team", "pos_team").drop("team", "games", "giveaways", "takeaways")
 
 
 def _add_team_games(df: pl.DataFrame) -> pl.DataFrame:
@@ -781,6 +864,7 @@ def build_team_summaries(
         overall.join(_drives_table(plays), on="pos_team_id", how="left", suffix="_drive")
         .join(pass_data, on="pos_team_id", how="left", suffix="_pass")
         .join(rush_data, on="pos_team_id", how="left", suffix="_rush")
+        .join(_turnovers(raw_pbp), on="pos_team_id", how="left")
     )
 
     # leaderboards

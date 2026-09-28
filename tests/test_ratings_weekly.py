@@ -109,7 +109,7 @@ def _vintages(today: dt.date | None) -> tuple[list[dt.date], list[int]]:
     out = build_season(
         2026, ratings_fn=fake_ratings, schedule_fn=lambda seasons: SCHEDULE_2026, today=today
     )
-    return calls, out["as_of_week"].to_list()
+    return calls, [] if out.is_empty() else out["as_of_week"].to_list()
 
 
 def test_future_vintages_are_not_built():
@@ -140,6 +140,17 @@ def test_vintage_is_built_once_every_game_before_its_cutoff_is_over(today, weeks
     cutoff itself would publish the pre-week-W vintage only after week W.
     """
     assert _vintages(today)[1] == weeks
+
+
+def test_preseason_builds_no_vintage():
+    """Before kickoff only as_of_week 1 is final, and it has no prior games: its
+    one fit is attempted and nothing is built. Week 2's cutoff is past a game
+    that has not been played, so no later week is fit.
+    """
+    calls, weeks = _vintages(dt.date(2026, 9, 1))
+
+    assert calls == [dt.date(2026, 9, 9)]
+    assert weeks == []
 
 
 def test_completed_season_keeps_every_vintage():

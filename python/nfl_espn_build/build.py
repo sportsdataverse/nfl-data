@@ -353,7 +353,7 @@ def build_season(
         if spec.tendencies == "careers":
             df = careers_frame(out)
         elif spec.rolling:
-            df = _rolling.season_frame(season, out, store)
+            df = _rolling.season_frame(season, out, store, pbp_cut="pbp" in datasets)
         else:
             df = dataset_frame(spec, finals, usage)
         path = write_dataset(df, spec, season, out)

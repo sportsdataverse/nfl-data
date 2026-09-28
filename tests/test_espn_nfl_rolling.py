@@ -113,3 +113,34 @@ def test_missing_history_fails_instead_of_publishing_short_baselines(tmp_path, m
     store = _write_2003_season(tmp_path)
     with pytest.raises(RuntimeError, match=r"history missing for \[2002\]"):
         rolling.season_frame(2003, tmp_path, store)
+
+
+def test_a_rolling_only_run_replaces_the_current_season_pbp(tmp_path, monkeypatch):
+    """Without pbp in the same run, the on-disk current season may be stale: it is re-fetched."""
+    stale = rolling._pbp_path(2026, tmp_path)
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale")
+    asked: list[list[int]] = []
+
+    def fake_fetch(seasons, out):
+        asked.append(list(seasons))
+        assert not stale.exists(), "the stale file must be gone before the download"
+
+    monkeypatch.setattr(rolling, "fetch_history", fake_fetch)
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2025)
+    # the download "failed" (fake_fetch wrote nothing): no current season, so nothing to publish
+    assert rolling.season_frame(2026, tmp_path, pbp_cut=False).is_empty()
+    assert asked == [[2025, 2026]]
+
+
+def test_a_full_run_keeps_the_pbp_it_just_cut(tmp_path, monkeypatch):
+    fresh = rolling._pbp_path(2026, tmp_path)
+    fresh.parent.mkdir(parents=True)
+    fresh.write_bytes(b"fresh")
+    asked: list[list[int]] = []
+    monkeypatch.setattr(rolling, "fetch_history", lambda seasons, out: asked.append(list(seasons)))
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2025)
+    with pytest.raises(RuntimeError, match="history missing"):  # 2025 absent offline
+        rolling.season_frame(2026, tmp_path, pbp_cut=True)
+    assert fresh.read_bytes() == b"fresh"
+    assert asked == [[2025]]

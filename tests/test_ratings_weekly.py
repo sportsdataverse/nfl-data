@@ -1,8 +1,10 @@
 """Hermetic tests for the nfl_ratings_weekly builder (no network)."""
 
 import datetime as dt
+from pathlib import Path
 
 import polars as pl
+import pytest
 from nfl_ratings_weekly.builder import build_season, week_starts
 
 
@@ -84,3 +86,65 @@ def test_cli_publish_exits_zero_when_no_season_has_vintages_yet(monkeypatch, tmp
     rc = cli.main(["--seasons", "2026", "--out", str(tmp_path), "--publish"])
     assert rc == 0
     assert list(tmp_path.glob("*.parquet")) == []
+
+
+#: The real 2026 schedule, weeks 1-5 (``load_nfl_schedule``: game_id/week/gameday).
+#: Week 3 ends with Monday night on 09-28; week 4 kicks off Thursday 10-01.
+SCHEDULE_2026 = pl.read_csv(
+    Path(__file__).parent / "fixtures" / "nfl_schedule_2026_wk1_5.csv",
+    schema_overrides={"gameday": pl.Utf8},
+)
+
+
+def _vintages(today: dt.date | None) -> tuple[list[dt.date], list[int]]:
+    """Build 2026 against the fixture; return (as_of_dates fit, as_of_weeks emitted)."""
+    calls: list[dt.date] = []
+
+    def fake_ratings(season, *, as_of_date):
+        calls.append(as_of_date)
+        if as_of_date <= dt.date(2026, 9, 9):
+            return pl.DataFrame()  # week 1: no prior games
+        return pl.DataFrame({"team_id": ["A"], "adj_net": [1.0]})
+
+    out = build_season(
+        2026, ratings_fn=fake_ratings, schedule_fn=lambda seasons: SCHEDULE_2026, today=today
+    )
+    return calls, out["as_of_week"].to_list()
+
+
+def test_future_vintages_are_not_built():
+    """The schedule lists every week before it is played. A vintage with an
+    unplayed game before its cutoff refit the games already played and shipped
+    them relabelled: 2026 as_of_week 4-18 were identical (review of 2026-09-28).
+    On 09-28 Monday night is still to come, so as_of_week 4 is not final yet.
+    """
+    calls, weeks = _vintages(dt.date(2026, 9, 28))
+
+    assert weeks == [2, 3]
+    assert calls == [dt.date(2026, 9, 9), dt.date(2026, 9, 17), dt.date(2026, 9, 24)]
+
+
+@pytest.mark.parametrize(
+    "today, weeks",
+    [
+        (dt.date(2026, 9, 28), [2, 3]),  # Monday night (week 3) is dated today
+        (dt.date(2026, 9, 29), [2, 3, 4]),  # Tuesday cron: week 3 is final
+        (dt.date(2026, 10, 1), [2, 3, 4]),  # as_of_week 4's own cutoff day
+        (dt.date(2026, 10, 6), [2, 3, 4, 5]),
+    ],
+)
+def test_vintage_is_built_once_every_game_before_its_cutoff_is_over(today, weeks):
+    """Boundary: as_of_week W's cutoff is week W's FIRST kickoff, so W is final
+    once the last game before it is over -- the Tuesday after week W-1, which is
+    when the cron runs. A game dated today is not over yet. Waiting for the
+    cutoff itself would publish the pre-week-W vintage only after week W.
+    """
+    assert _vintages(today)[1] == weeks
+
+
+def test_completed_season_keeps_every_vintage():
+    """Every game is in the past: the same vintages as before."""
+    calls, weeks = _vintages(dt.date(2027, 3, 1))
+
+    assert weeks == [2, 3, 4, 5]
+    assert calls == [dt.date.fromisoformat(c) for _, c in week_starts(SCHEDULE_2026)]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 import polars as pl
 from sportsdataverse.errors import NoDataError
@@ -41,6 +42,7 @@ def build_season(
     *,
     ratings_fn: Optional[Callable[..., pl.DataFrame]] = None,
     schedule_fn: Optional[Callable[..., pl.DataFrame]] = None,
+    today: Optional[dt.date] = None,
 ) -> pl.DataFrame:
     """Build the season's vintage table: one block per ``as_of_week``.
 
@@ -51,10 +53,22 @@ def build_season(
     yields an empty fit and emits no rows; weeks that fail after retry are
     reported and skipped, never silently absent.
 
+    Only final vintages are built: the loop stops at the first week with a game
+    before its cutoff that is not over yet. The schedule lists every week up
+    front, and a later vintage has nothing new to fit, so it refit the games
+    already played and shipped them relabelled (2026 ``as_of_week`` 4-18 were
+    identical, review of 2026-09-28). A game dated ``today`` is not over yet;
+    so on the Tuesday after week ``W-1``, when the cron runs, vintage ``W`` is
+    built. Stopping at the cutoff itself would hold the pre-week vintage back
+    until week ``W`` had been played -- a Tuesday-only cron would publish it the
+    Tuesday after.
+
     Args:
         season: The season to build.
         ratings_fn: Injectable ``nfl_ratings`` (hermetic tests).
         schedule_fn: Injectable ``load_nfl_schedule`` (hermetic tests).
+        today: The date to build as of, in US Eastern time like ``gameday``;
+            ``None`` means now.
 
     Returns:
         Long frame: the ``nfl_ratings`` columns plus ``as_of_week`` (Int32).
@@ -66,9 +80,15 @@ def build_season(
         ratings_fn = ratings_fn or nfl_ratings
         schedule_fn = schedule_fn or load_nfl_schedule
     schedule = schedule_fn(seasons=[season])
+    today = today or dt.datetime.now(ZoneInfo("America/New_York")).date()
+    days = schedule["gameday"].cast(pl.Utf8).str.slice(0, 10)
+    # the first gameday not over yet; None once the season is played out
+    upcoming = days.filter(days >= today.isoformat()).min()
     frames: list[pl.DataFrame] = []
     built: list[int] = []
     for week, cutoff in week_starts(schedule):
+        if upcoming is not None and cutoff > upcoming:
+            break  # an unplayed game precedes this cutoff, and every later one
         try:
             d = ratings_fn(season, as_of_date=dt.date.fromisoformat(cutoff))
         except NoDataError as e:

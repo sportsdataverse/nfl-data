@@ -113,3 +113,78 @@ def test_missing_history_fails_instead_of_publishing_short_baselines(tmp_path, m
     store = _write_2003_season(tmp_path)
     with pytest.raises(RuntimeError, match=r"history missing for \[2002\]"):
         rolling.season_frame(2003, tmp_path, store)
+
+
+def test_a_rolling_only_run_replaces_the_current_season_pbp(tmp_path, monkeypatch):
+    """Without pbp in the same run, the on-disk current season may be stale: it is re-fetched."""
+    stale = rolling._pbp_path(2026, tmp_path)
+    stale.parent.mkdir(parents=True)
+    stale.write_bytes(b"stale")
+    asked: list[list[int]] = []
+
+    def fake_fetch(seasons, out):
+        asked.append(list(seasons))
+        assert not stale.exists(), "the stale file must be gone before the download"
+
+    monkeypatch.setattr(rolling, "fetch_history", fake_fetch)
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2025)
+    # the download "failed" (fake_fetch wrote nothing): no current season, so nothing to publish
+    assert rolling.season_frame(2026, tmp_path, pbp_cut=False).is_empty()
+    assert asked == [[2025, 2026]]
+
+
+def test_a_full_run_keeps_the_pbp_it_just_cut(tmp_path, monkeypatch):
+    fresh = rolling._pbp_path(2026, tmp_path)
+    fresh.parent.mkdir(parents=True)
+    fresh.write_bytes(b"fresh")
+    asked: list[list[int]] = []
+    monkeypatch.setattr(rolling, "fetch_history", lambda seasons, out: asked.append(list(seasons)))
+    monkeypatch.setattr(rolling, "PBP_FLOOR", 2025)
+    with pytest.raises(RuntimeError, match="history missing"):  # 2025 absent offline
+        rolling.season_frame(2026, tmp_path, pbp_cut=True)
+    assert fresh.read_bytes() == b"fresh"
+    assert asked == [[2025]]
+
+
+@pytest.mark.parametrize(
+    ("order", "fresh"),
+    [(["pbp", "rolling_windows"], True), (["rolling_windows", "pbp"], False)],
+)
+def test_only_a_pbp_written_earlier_in_the_run_counts_as_fresh(tmp_path, monkeypatch, order, fresh):
+    from nfl_espn_build import build
+
+    seen: list[bool] = []
+    monkeypatch.setattr(build, "load_season_finals", lambda cache_dir, season: [])
+    monkeypatch.setattr(build, "attach_crosswalk", lambda finals, store, season: None)
+    monkeypatch.setattr(
+        build, "dataset_frame", lambda spec, finals, usage: pl.DataFrame({"x": [1]})
+    )
+    monkeypatch.setattr(
+        build._rolling, "season_frame",
+        lambda season, out, store, *, pbp_cut: seen.append(pbp_cut) or pl.DataFrame(),
+    )  # fmt: skip
+    monkeypatch.setattr(
+        build, "write_dataset", lambda df, spec, season, out: tmp_path if df.height else None
+    )
+    build.build_season(order, 2026, cache_dir=tmp_path, out=tmp_path)
+    assert seen == [fresh]
+
+
+# the autouse _offline fixture swaps fetch_history for a no-op per test; keep the real one
+_REAL_FETCH_HISTORY = rolling.fetch_history
+
+
+def test_a_failed_download_leaves_no_partial_parquet(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    def fake_run(cmd, check):
+        out_file = cmd[cmd.index("-O") + 1]
+        with open(out_file, "wb") as fh:  # a truncated transfer
+            fh.write(b"PAR1 partial")
+        return sp.CompletedProcess(cmd, 1)
+
+    monkeypatch.setattr(rolling.subprocess, "run", fake_run)
+    target = rolling._pbp_path(2025, tmp_path)
+    _REAL_FETCH_HISTORY([2025], tmp_path)
+    assert not target.exists()
+    assert not any(target.parent.iterdir())

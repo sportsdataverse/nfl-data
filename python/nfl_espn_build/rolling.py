@@ -35,17 +35,28 @@ def _pbp_path(season: int, out: str | Path) -> Path:
 
 
 def fetch_history(seasons: list[int], out: str | Path) -> None:
-    """Download every missing season's pbp parquet from the published tag."""
+    """Download every missing season's pbp parquet from the published tag.
+
+    Each download lands on a temporary name and is renamed only when ``gh``
+    succeeds, so a failed or truncated transfer never leaves a partial parquet
+    that the next step would take for a present season.
+    """
     for s in seasons:
         path = _pbp_path(s, out)
         if path.is_file():
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
+        tmp = path.with_name(f".{path.name}.part")
+        tmp.unlink(missing_ok=True)
+        done = subprocess.run(
             ["gh", "release", "download", REGISTRY["pbp"].tag, "-R", DEFAULT_REPO,
-             "-p", path.name, "-D", str(path.parent), "--skip-existing"],
+             "-p", path.name, "-O", str(tmp), "--clobber"],
             check=False,
         )  # fmt: skip
+        if done.returncode == 0 and tmp.is_file():
+            tmp.replace(path)
+        else:
+            tmp.unlink(missing_ok=True)
 
 
 def game_dates(store: EspnStore) -> pl.DataFrame:
@@ -77,12 +88,20 @@ def game_dates(store: EspnStore) -> pl.DataFrame:
     )
 
 
-def season_frame(season: int, out: str | Path, store: EspnStore | None = None) -> pl.DataFrame:
+def season_frame(
+    season: int, out: str | Path, store: EspnStore | None = None, *, pbp_cut: bool = True
+) -> pl.DataFrame:
     """Rolling windows for ``season`` over every written pbp season up to it.
 
     ``store`` is the build's nfl-raw reader (default: the CLI's resolution --
     ``$NFL_RAW_DIR``, the sibling checkout, else HTTP). Empty when ``season``
     has no written pbp.
+
+    ``pbp_cut`` says the same run just wrote ``season``'s pbp (``--dataset all``
+    cuts pbp before rolling_windows). Without it the local current-season file
+    may be days old -- a rolling-only run once published 2026 cut at a pbp from
+    nine days earlier -- so it is replaced from the published tag; if that
+    download fails the season is empty and nothing is published.
     """
     from sportsdataverse.rolling_windows import (
         FOOTBALL_PBP_COLUMNS,
@@ -91,7 +110,9 @@ def season_frame(season: int, out: str | Path, store: EspnStore | None = None) -
     )
 
     seasons = list(range(PBP_FLOOR, season + 1))
-    fetch_history(seasons[:-1], out)
+    if not pbp_cut:
+        _pbp_path(season, out).unlink(missing_ok=True)
+    fetch_history(seasons if not pbp_cut else seasons[:-1], out)
     present = [s for s in seasons if _pbp_path(s, out).is_file()]
     if season not in present:
         return pl.DataFrame()

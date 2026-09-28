@@ -353,7 +353,9 @@ def build_season(
         if spec.tendencies == "careers":
             df = careers_frame(out)
         elif spec.rolling:
-            df = _rolling.season_frame(season, out, store, pbp_cut="pbp" in datasets)
+            # only a pbp this run already WROTE is fresh; listing pbp after rolling_windows
+            # (or an empty pbp) must not vouch for the file on disk
+            df = _rolling.season_frame(season, out, store, pbp_cut=written.get("pbp") is not None)
         else:
             df = dataset_frame(spec, finals, usage)
         path = write_dataset(df, spec, season, out)

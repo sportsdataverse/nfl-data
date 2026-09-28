@@ -35,17 +35,28 @@ def _pbp_path(season: int, out: str | Path) -> Path:
 
 
 def fetch_history(seasons: list[int], out: str | Path) -> None:
-    """Download every missing season's pbp parquet from the published tag."""
+    """Download every missing season's pbp parquet from the published tag.
+
+    Each download lands on a temporary name and is renamed only when ``gh``
+    succeeds, so a failed or truncated transfer never leaves a partial parquet
+    that the next step would take for a present season.
+    """
     for s in seasons:
         path = _pbp_path(s, out)
         if path.is_file():
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
+        tmp = path.with_name(f".{path.name}.part")
+        tmp.unlink(missing_ok=True)
+        done = subprocess.run(
             ["gh", "release", "download", REGISTRY["pbp"].tag, "-R", DEFAULT_REPO,
-             "-p", path.name, "-D", str(path.parent), "--skip-existing"],
+             "-p", path.name, "-O", str(tmp), "--clobber"],
             check=False,
         )  # fmt: skip
+        if done.returncode == 0 and tmp.is_file():
+            tmp.replace(path)
+        else:
+            tmp.unlink(missing_ok=True)
 
 
 def game_dates(store: EspnStore) -> pl.DataFrame:

@@ -338,9 +338,20 @@ def test_attach_coaches_drops_unattributed_games():
             "homeTeamId": [10, 10, 30],
         }
     )
+    # the plays carry no nflverse_game_id, so the (unique) ESPN id stands in
     coaches = pl.DataFrame(
-        {"game_id": [1], "home_coach": ["Home HC"], "away_coach": ["Away HC"]},
-        schema={"game_id": pl.Int64, "home_coach": pl.Utf8, "away_coach": pl.Utf8},
+        {
+            "nflverse_game_id": ["2030_01_B_A"],
+            "game_id": [1],
+            "home_coach": ["Home HC"],
+            "away_coach": ["Away HC"],
+        },
+        schema={
+            "nflverse_game_id": pl.Utf8,
+            "game_id": pl.Int64,
+            "home_coach": pl.Utf8,
+            "away_coach": pl.Utf8,
+        },
     )
     out = tendencies_mod.attach_coaches(plays, coaches)
     assert out["coach"].to_list() == ["Home HC", "Away HC"]
@@ -358,9 +369,10 @@ def test_attach_coaches_drops_unattributed_games():
 CTX = ("home", "away", "neutral_site", "after_bye", "opener", "one_score_game", "win")
 
 
-def test_attach_context_from_nflverse_schedule_rows():
+def test_attach_context_from_nflverse_schedule_rows(caplog):
     # A (ESPN 10) vs B (ESPN 20): week 1 at a neutral site, A designated home off 13 days'
-    # rest and winning 24-21; week 2 at B, a 17-17 tie
+    # rest and winning 24-21; week 2 at B, a 17-17 tie. The plays carry no nflverse_game_id,
+    # so each game resolves through its (unique) ESPN id.
     sched = pl.DataFrame(
         {
             "game_id": ["2030_01_B_A", "2030_02_A_B"],
@@ -381,7 +393,8 @@ def test_attach_context_from_nflverse_schedule_rows():
     plays = pl.DataFrame(
         {"game_id": [1, 1, 2, 2], "pos_team": [10, 20, 20, 10], "homeTeamId": [10, 10, 20, 20]}
     )
-    out = tendencies_mod.attach_context(plays, tendencies_mod.schedule_context(sched))
+    games = tendencies_mod.schedule_context(sched)
+    out = tendencies_mod.attach_context(plays, games)
     assert out.columns[:3] == plays.columns and out.height == plays.height
     ctx = [c for c in out.columns if c.startswith(("ctx_", "def_ctx_"))]
     assert sorted(ctx) == sorted([f"{p}{c}" for p in ("ctx_", "def_ctx_") for c in CTX])
@@ -392,7 +405,7 @@ def test_attach_context_from_nflverse_schedule_rows():
         r = rows[(1, team)]
         assert r["ctx_neutral_site"] and r["def_ctx_neutral_site"]
         assert not (r["ctx_home"] or r["ctx_away"] or r["def_ctx_home"] or r["def_ctx_away"])
-    # after a bye = the TEAM's rest >= 13 (A's 13, not B's 7)
+    # after a bye = the TEAM's rest (A's 13, not B's 7)
     assert rows[(1, 10)]["ctx_after_bye"] and not rows[(1, 20)]["ctx_after_bye"]
     assert rows[(1, 10)]["ctx_win"] and not rows[(1, 20)]["ctx_win"]
     # both openers are week 1; the week-2 tie is one score, home/away, and a win for nobody
@@ -405,12 +418,115 @@ def test_attach_context_from_nflverse_schedule_rows():
     for (game, team), r in rows.items():
         opp = rows[(game, 30 - team)]
         assert {c: r[f"def_ctx_{c}"] for c in CTX} == {c: opp[f"ctx_{c}"] for c in CTX}
-    # a game missing from the schedule keeps its plays, Boolean and never true
-    lone = tendencies_mod.attach_context(
-        plays.with_columns(game_id=pl.lit(9)), tendencies_mod.schedule_context(sched)
-    )
+    # a game missing from the schedule keeps its plays, Boolean and never true, and says so
+    with caplog.at_level("WARNING", logger=tendencies_mod.__name__):
+        lone = tendencies_mod.attach_context(plays.with_columns(game_id=pl.lit(9)), games)
+    assert "1 game(s) not in the nflverse schedule" in caplog.text
     assert lone.height == 4
     assert not any(lone.select(pl.col("^(def_)?ctx_.*$").fill_null(False).any()).row(0))
+    # an unattributable snap (null pos_team) gets null side context, never the away team's
+    blind = tendencies_mod.attach_context(
+        pl.DataFrame(
+            {"game_id": [2], "pos_team": [None], "homeTeamId": [20]},
+            schema={"game_id": pl.Int64, "pos_team": pl.Int64, "homeTeamId": pl.Int64},
+        ),
+        games,
+    ).row(0, named=True)
+    side = ("home", "away", "after_bye", "opener", "win")
+    assert all(blind[f"{p}{c}"] is None for p in ("ctx_", "def_ctx_") for c in side)
+    assert blind["ctx_one_score_game"] and not blind["ctx_neutral_site"]  # the game's own
+
+
+def _schedule(**cols):
+    """nflverse schedule rows: every column the context reads, overridable per test."""
+    n = len(cols["game_id"])
+    base = {
+        "game_type": ["REG"] * n,
+        "location": ["Home"] * n,
+        "home_rest": [7] * n,
+        "away_rest": [7] * n,
+        "home_coach": ["H HC"] * n,
+        "away_coach": ["A HC"] * n,
+    }
+    return pl.DataFrame({**base, **cols})
+
+
+def test_schedule_context_edges():
+    games = tendencies_mod.schedule_context(
+        _schedule(
+            game_id=["2030_01_B_A", "2030_02_A_B", "2030_19_A_B"],
+            game_type=["REG", "REG", "WC"],
+            week=[1, 2, 19],
+            home_team=["A", "B", "B"],
+            away_team=["B", "A", "A"],
+            # an 8-point game, an unplayed one, a 9-point playoff game
+            home_score=[24, None, 30],
+            away_score=[16, None, 21],
+            # 12 days before a regular-season game is a bye; 14 before a playoff game is not
+            home_rest=[12, 7, 14],
+            away_rest=[7, 7, 14],
+            espn=["1", "2", "3"],
+        )
+    )
+    assert dict(games.schema) == tendencies_mod.COACH_SCHEMA
+    g = {r["nflverse_game_id"]: r for r in games.iter_rows(named=True)}
+    reg, unplayed, wc = g["2030_01_B_A"], g["2030_02_A_B"], g["2030_19_A_B"]
+    assert reg["one_score_game"] and not wc["one_score_game"]  # margin 8 in, 9 out
+    assert reg["home_after_bye"] and not reg["away_after_bye"]
+    assert not (wc["home_after_bye"] or wc["away_after_bye"])
+    assert reg["home_opener"] and reg["away_opener"] and not wc["home_opener"]
+    assert reg["home_win"] and not reg["away_win"]
+    # no score yet: neither a win nor a one-score game
+    assert not (unplayed["home_win"] or unplayed["away_win"] or unplayed["one_score_game"])
+
+
+def test_schedule_rows_are_keyed_by_nflverse_game_id(caplog):
+    # nflverse lists ESPN id 231027024 for THREE 2003 games; ESPN's own 231027024 is MIA @ SD
+    # (moved to Tempe by the wildfires), 231026012 is BUF @ KC. The crosswalk's nflverse id
+    # on the plays picks the right row; a repeated ESPN id is never used as a fallback.
+    sched = _schedule(
+        game_id=["2003_08_BUF_KC", "2003_08_MIA_SD", "2003_11_KC_CIN"],
+        week=[8, 8, 11],
+        location=["Home", "Neutral", "Home"],
+        home_team=["KC", "SD", "CIN"],
+        away_team=["BUF", "MIA", "KC"],
+        home_score=[38, 10, 24],
+        away_score=[5, 26, 19],
+        home_rest=[6, 8, 7],
+        away_rest=[7, 8, 7],
+        espn=["231027024", "231027024", "231027024"],
+        home_coach=["Dick Vermeil", "Marty Schottenheimer", "Marvin Lewis"],
+        away_coach=["Gregg Williams", "Dave Wannstedt", "Dick Vermeil"],
+    )
+    games = tendencies_mod.schedule_context(sched)
+    plays = pl.DataFrame(
+        {
+            "game_id": [231027024, 231027024, 231026012, 231026012, 231027024],
+            "nflverse_game_id": ["2003_08_MIA_SD"] * 2 + ["2003_08_BUF_KC"] * 2 + [None],
+            "pos_team": [15, 24, 12, 2, 24],
+            "homeTeamId": [24, 24, 12, 12, 24],
+        }
+    )
+    with caplog.at_level("WARNING", logger=tendencies_mod.__name__):
+        out = tendencies_mod.attach_context(plays, games)
+    rows = out.rows(named=True)
+    mia, sd, kc, buf, blind = rows
+    assert mia["ctx_neutral_site"] and sd["ctx_neutral_site"] and not sd["ctx_home"]
+    assert mia["ctx_win"] and not sd["ctx_win"] and not mia["ctx_one_score_game"]
+    assert kc["ctx_home"] and kc["ctx_win"] and buf["ctx_away"] and not kc["ctx_neutral_site"]
+    # the play with no nflverse id and a repeated ESPN id gets no context rather than a guess
+    assert not any(v for k, v in blind.items() if "ctx_" in k)
+    assert "1 game(s) not in the nflverse schedule" in caplog.text
+    coached = tendencies_mod.attach_coaches(plays, games)
+    assert coached["coach"].to_list() == [
+        "Dave Wannstedt",
+        "Marty Schottenheimer",
+        "Dick Vermeil",
+        "Gregg Williams",
+    ]
+    # a schedule repeating an nflverse game id cannot be joined at all
+    with pytest.raises(pl.exceptions.ComputeError):
+        tendencies_mod.attach_context(plays, pl.concat([games, games.head(1)]))
 
 
 def test_unavailable_schedule_warns_and_emits_no_context(built, monkeypatch, caplog):
@@ -429,6 +545,24 @@ def test_unavailable_schedule_warns_and_emits_no_context(built, monkeypatch, cap
     team = tendencies_mod.team_tendencies(plays, games)
     assert team.height == 2
     assert not [c for c in team.columns if any(k in c for k in ("_home", "_away", "opener", "bye"))]
+
+
+def test_partial_schedule_keeps_the_coaches(built, monkeypatch, caplog):
+    import sportsdataverse.nfl as sdv_nfl
+
+    monkeypatch.setattr(
+        sdv_nfl, "load_nfl_schedule", lambda *a, **k: FIXTURE_SCHEDULE.drop("home_rest")
+    )
+    with caplog.at_level("WARNING", logger=tendencies_mod.__name__):
+        games = REAL_COACH_GAMES(2025)
+        cache, _ = built
+        plays = tendencies_mod.season_plays(process.load_season_finals(cache, 2025))
+        bare = tendencies_mod.attach_context(plays, games)
+    assert games.height == 1 and "home_rest" in caplog.text
+    assert not [c for c in bare.columns if "ctx_" in c]
+    coach = tendencies_mod.coach_tendencies(plays, games)
+    assert set(coach["coach"].to_list()) == {"Nick Sirianni", "Brian Schottenheimer"}
+    assert "games_home" not in coach.columns
 
 
 def test_tendencies_carry_game_context(built):

@@ -34,6 +34,11 @@ from nfl_espn_build.qa import qa_row
 
 log = logging.getLogger(__name__)
 
+
+class PartialGame(Exception):
+    """A completed game whose truncated ESPN feed the processor turns into no play frame."""
+
+
 #: summary keys carried into the final verbatim (media dropped)
 _KEEP = (
     "plays",
@@ -141,7 +146,12 @@ def build_final(
     shield_game_id: str | None = None,
     odds_override: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Process one stored game; ``None`` when the game has not completed."""
+    """Process one stored game; ``None`` when the game has not completed.
+
+    Raises:
+        PartialGame: the game completed but its feed is too short for the
+            processor to build a play frame from.
+    """
     if status_state(summary) != "post":
         return None
     from sportsdataverse.football.play_participants import (
@@ -161,6 +171,10 @@ def build_final(
     )
     proc.espn_nfl_pbp(summary=summary)
     result = proc.run_processing_pipeline()
+    if proc.plays_frame is None:
+        # a truncated feed (2003 week 1: 17 plays over 4 drives) fails the processor's
+        # corrupt-pbp check: it hands back the raw plays but builds no frame to cut or QA
+        raise PartialGame(f"{len(result.get('plays') or [])} raw plays, no processed frame")
 
     season_block = result.get("season") or {}
     if not isinstance(season_block, dict):
@@ -250,8 +264,10 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
     ``"stub"`` is a completed game whose plays carry no text (all of 2005, the
     2004 Pro Bowl, the 2008 AFC Championship): the processor cannot parse it and
     never will, so it is a warning, not a failure that would hold back the
-    season's other games. Any final an older sdv-py left for it is removed so
-    the game cannot ride into a cut.
+    season's other games. ``"partial"`` is the same verdict for a completed game
+    whose feed is truncated (a few drives of 2002-2004 and 2007): the processor
+    builds no play frame from it (:class:`PartialGame`). Either way any final an
+    older sdv-py left for it is removed so the game cannot ride into a cut.
     """
     root, season, ev, cache_dir = args
     store = EspnStore(root)
@@ -276,6 +292,10 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
             return event_id, "not_final"
         write_final(final_path(cache_dir, season, event_id), final)
         return event_id, "processed"
+    except PartialGame as exc:
+        log.warning("season %s event %s: partial feed (%s); skipped", season, event_id, exc)
+        final_path(cache_dir, season, event_id).unlink(missing_ok=True)
+        return event_id, "partial"
     except Exception as exc:  # noqa: BLE001 -- one bad game must not sink the season
         log.error("season %s event %s failed: %r", season, event_id, exc)
         return event_id, "failed"

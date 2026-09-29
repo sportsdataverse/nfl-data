@@ -13,7 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from nfl_espn_build import build, config, process, publish, qa, rolling
+from nfl_espn_build import build, config, process, publish, qa, reshapers, rolling
 from nfl_espn_build import tendencies as tendencies_mod
 from nfl_espn_build.cli import main
 from nfl_espn_build.config import ALL_ORDER, REGISTRY, processing_version
@@ -264,15 +264,28 @@ def test_careers_are_cut_once_after_the_season_loop(built, monkeypatch):
     assert all("coach_careers" not in c[0] for c in cuts[:-1]) and len(cuts) == 3
 
 
-def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
+@pytest.mark.parametrize(
+    ("tally", "held"),
+    [
+        # partial + stub games are warnings: the season still builds and publishes
+        ({"listed": 3, "processed": 1, "partial": 1, "stub": 1}, False),
+        # one failed game holds back the season, and so the career table
+        ({"listed": 3, "processed": 1, "partial": 1, "failed": 1}, True),
+    ],
+)
+def test_only_a_failed_game_holds_back_the_season_and_careers(built, monkeypatch, tally, held):
     cache, out = built
     cuts: list[list[str]] = []
-    monkeypatch.setattr(
-        "nfl_espn_build.cli.process_season", lambda *a, **k: {"listed": 1, "failed": 1}
-    )
+    sent: list[str] = []
+    monkeypatch.setattr("nfl_espn_build.cli.process_season", lambda *a, **k: dict(tally))
     monkeypatch.setattr(
         "nfl_espn_build.cli.build_season",
-        lambda datasets, season, **kw: cuts.append(list(datasets)) or {},
+        lambda datasets, season, **kw: (
+            cuts.append(list(datasets)) or {d: out / f"{d}.parquet" for d in datasets}
+        ),
+    )
+    monkeypatch.setattr(
+        "nfl_espn_build.cli.publish_files", lambda tag, files, **kw: sent.append(tag)
     )
     rc = main(
         [
@@ -286,9 +299,16 @@ def test_careers_are_skipped_when_a_season_failed(built, monkeypatch):
             str(cache),
             "--out",
             str(out),
+            "--publish",
+            "--dry-run",
         ]
     )
-    assert rc == 1 and cuts == []
+    if held:
+        assert rc == 1 and cuts == [] and sent == []
+    else:
+        assert rc == 0
+        assert cuts == [["team_tendencies", "coach_tendencies"], ["coach_careers"]]
+        assert sent == [REGISTRY[d].tag for d in config.TENDENCIES_ORDER]
 
 
 def test_pro_bowl_is_excluded_from_usage_leaderboards(built):
@@ -771,22 +791,32 @@ def test_odds_override_from_schedule_lines(monkeypatch):
     assert process.odds_override_for(2025, 9) is None
 
 
-def test_stub_plays_are_skipped_not_failed(tmp_path):
-    """A completed game whose plays carry no text is a warning, never a season failure."""
+def _fixture_summary() -> dict:
+    with gzip.open(FIX / "raw" / "2025" / f"{EVENT}.json.gz", "rt", encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _raw_root(tmp_path: Path, summary: dict) -> Path:
+    """A one-game raw library holding ``summary`` (and no core play items) for the fixture event."""
     root = tmp_path / "raw"
     for sub in ("raw", "plays"):
         (root / sub / "2025").mkdir(parents=True)
-    with gzip.open(FIX / "raw" / "2025" / f"{EVENT}.json.gz", "rt", encoding="utf-8") as fh:
-        summary = json.load(fh)
-    for drive in summary["drives"]["previous"]:
-        for play in drive["plays"]:
-            play.pop("text", None)
     with gzip.open(root / "raw" / "2025" / f"{EVENT}.json.gz", "wt", encoding="utf-8") as fh:
         json.dump(summary, fh)
     with gzip.open(root / "plays" / "2025" / f"{EVENT}.json.gz", "wt", encoding="utf-8") as fh:
         json.dump({"items": []}, fh)
     (root / "crosswalk").mkdir()
     (root / "crosswalk" / "games.json").write_text((FIX / "crosswalk" / "games.json").read_text())
+    return root
+
+
+def test_stub_plays_are_skipped_not_failed(tmp_path):
+    """A completed game whose plays carry no text is a warning, never a season failure."""
+    summary = _fixture_summary()
+    for drive in summary["drives"]["previous"]:
+        for play in drive["plays"]:
+            play.pop("text", None)
+    root = _raw_root(tmp_path, summary)
     assert not process.summary_has_play_text(summary)
     assert not process.summary_has_play_text({"drives": [{"plays": [{"id": 1}]}]})
     assert process.summary_has_play_text(
@@ -803,6 +833,36 @@ def test_stub_plays_are_skipped_not_failed(tmp_path):
     assert not stale.exists() and process.load_season_finals(tmp_path / "cache", 2025) == []
     tally = process.process_season(EspnStore(str(root)), 2025, tmp_path / "cache", workers=1)
     assert tally.get("stub") == 1 and not tally.get("failed")
+
+
+def test_truncated_feed_is_kept_as_partial_not_failed(tmp_path, monkeypatch):
+    """A completed game whose play feed is truncated keeps its final; the QA says why it is unscored.
+
+    2003 week 1 ships 17 plays over 4 drives beside a complete box score: sdv-py's
+    corrupt-pbp check hands back the raw plays with no ``plays_frame``, which the
+    report-only QA must tolerate instead of failing the game (and so the season).
+    """
+    monkeypatch.setattr(process, "schedule_lines", lambda season: {})
+    summary = _fixture_summary()
+    summary["drives"]["previous"] = summary["drives"]["previous"][:3]  # 35 plays, all with text
+    assert process.summary_has_play_text(summary)
+    root = _raw_root(tmp_path, summary)
+    cache = tmp_path / "cache"
+    event_id, status = process._process_one((str(root), 2025, {"espn_event_id": EVENT}, str(cache)))
+    assert (event_id, status) == (EVENT, "partial")
+    assert process.final_is_current(process.final_path(cache, 2025, EVENT))
+    (final,) = process.load_season_finals(cache, 2025)
+    assert final["count"] == 35 and final["boxscore"]["teams"]
+    assert final["qa"]["status"] == qa.NO_PLAYS_FRAME
+    assert final["qa"]["game_id"] == EVENT and final["qa"]["season"] == 2025
+    assert final["qa"]["ok"] is None and final["qa"]["n_errors"] is None
+    # the published QA row keeps the schema: identity set, verdict null
+    row = reshapers.reshape_qa(final).row(0, named=True)
+    assert row["game_id"] == EVENT and row["ok"] is None
+    # and the game's real box score still reaches the per-game cuts
+    assert reshapers.reshape_team_box(final).height == 2
+    tally = process.process_season(EspnStore(str(root)), 2025, cache, workers=1, reprocess=True)
+    assert tally.get("partial") == 1 and not tally.get("failed")
 
 
 def test_pregame_summary_is_not_cached():

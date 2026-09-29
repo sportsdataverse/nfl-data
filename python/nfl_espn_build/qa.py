@@ -58,6 +58,12 @@ MAX_ERROR_SHARE = 0.30
 #: fails on QA. Flipping this to ``True`` is the ratchet step, its own PR.
 BLOCKING = False
 
+#: ``qa_row``'s ``status`` for a game the processor built no play frame from (a
+#: truncated feed): the row is written with ``ok`` and the counts null -- not
+#: validated, which is neither a pass nor an error. The key rides in the cached
+#: final only; the published row carries the null ``ok``.
+NO_PLAYS_FRAME = "no_plays_frame"
+
 #: One row per validated game. ``failed_rule_ids`` / ``warned_rule_ids`` are
 #: comma-joined rather than ``List(Utf8)`` so the same frame serialises to
 #: parquet, csv and rds unchanged across the three release families.
@@ -82,7 +88,7 @@ def _utc_now() -> str:
 
 
 def qa_row(
-    plays: pl.DataFrame,
+    plays: pl.DataFrame | None,
     *,
     processing_version: str,
     summary: dict[str, Any] | None = None,
@@ -91,7 +97,28 @@ def qa_row(
     source: str = SOURCE,
     league: str = LEAGUE,
 ) -> dict[str, Any]:
-    """Validate one processed game and flatten the report into a QA row."""
+    """Validate one processed game and flatten the report into a QA row.
+
+    ``plays`` is ``None`` when the processor built no frame (a truncated feed
+    trips its corrupt-pbp check): the row then says so rather than validating.
+    """
+    if plays is None:
+        game = summary or {}
+        return {
+            "game_id": game.get("id"),
+            "league": league,
+            "source": source,
+            "season": game.get("season"),
+            "processing_version": processing_version,
+            "n_rows": None,
+            "ok": None,
+            "n_errors": None,
+            "n_warnings": None,
+            "failed_rule_ids": None,
+            "warned_rule_ids": None,
+            "built_at": _utc_now(),
+            "status": NO_PLAYS_FRAME,
+        }
     from sportsdataverse.validation import validate_game
 
     report = validate_game(plays, league, header=header, source=source, summary=summary, box=box)
@@ -248,10 +275,15 @@ def season_summary(
     processing_version: str,
     drift: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Games, error-free share, per-rule counts and the drift findings."""
+    """Games, error-free share, per-rule counts and the drift findings.
+
+    The share is over the validated games: a ``no_plays_frame`` row (null
+    ``ok``) was never checked, so it counts as neither error-free nor an error.
+    """
     games = qa.height
+    validated = int(qa.get_column("ok").is_not_null().sum()) if games else 0
     error_free = int(qa.get_column("ok").sum()) if games else 0
-    share = error_free / games if games else None
+    share = error_free / validated if validated else None
     counts: dict[str, int] = {}
     for col in ("failed_rule_ids", "warned_rule_ids"):
         for cell in qa.get_column(col).drop_nulls().to_list() if games else []:
@@ -266,6 +298,7 @@ def season_summary(
         "built_at": _utc_now(),
         "games": games,
         "games_error_free": error_free,
+        "games_no_plays_frame": games - validated,
         "error_free_share": round(share, 4) if share is not None else None,
         "error_share": round(error_share, 4) if error_share is not None else None,
         "max_error_share": MAX_ERROR_SHARE,

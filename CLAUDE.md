@@ -104,6 +104,11 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   carry no `text`, in the summary and in the core items alike, so `NFLPlayProcess` cannot parse
   them and never will. `process_season` tallies them as `stub` (a warning) rather than `failed`,
   so the season's other games still build and publish; the stub games simply have no final.
+  **Truncated feeds** (21 games: 2002 ×2, 2003 ×12 mostly week 1, 2004 ×6, 2007 ×1; e.g.
+  `230907009` = 17 plays over 4 drives) are different: sdv-py's corrupt-pbp check (<50 plays)
+  returns the raw plays but no `plays_frame`, while the box score is complete. Their final IS
+  written; `qa.qa_row(None)` gives a `no_plays_frame` verdict (`ok` and counts null, outside
+  the error-free share) and the tally labels them `partial`, never `failed`.
 - **Shield thin games (1999–2002).** api.nfl.com serves `driveChart.plays` as GAME_START/END_GAME
   plus a stray play for every 2000–2001 game, 2002 weeks 1–15 and six late-1999 games; a re-scrape
   returns the same. `native_pbp.cli._backfill_thin_games` swaps each ≤2002 game under 100 rows for

@@ -30,7 +30,7 @@ from typing import Any
 
 from nfl_espn_build.config import processing_version
 from nfl_espn_build.ingest import EspnStore
-from nfl_espn_build.qa import qa_row
+from nfl_espn_build.qa import NO_PLAYS_FRAME, qa_row
 
 log = logging.getLogger(__name__)
 
@@ -252,6 +252,12 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
     never will, so it is a warning, not a failure that would hold back the
     season's other games. Any final an older sdv-py left for it is removed so
     the game cannot ride into a cut.
+
+    ``"partial"`` is a completed game with a truncated play feed (21 games of
+    2002-2004 and 2007; ``230907009`` is 17 plays over 4 drives): the processor
+    builds no play frame from it, but its box score is complete, so the final
+    is written with a ``no_plays_frame`` QA verdict. Like ``"stub"`` it is a
+    label, never a failure.
     """
     root, season, ev, cache_dir = args
     store = EspnStore(root)
@@ -275,6 +281,14 @@ def _process_one(args: tuple[str, int, dict[str, Any], str]) -> tuple[int, str]:
         if final is None:
             return event_id, "not_final"
         write_final(final_path(cache_dir, season, event_id), final)
+        if final["qa"].get("status") == NO_PLAYS_FRAME:
+            log.warning(
+                "season %s event %s: truncated feed (%s plays), no play frame; final kept, QA not run",
+                season,
+                event_id,
+                final["count"],
+            )
+            return event_id, "partial"
         return event_id, "processed"
     except Exception as exc:  # noqa: BLE001 -- one bad game must not sink the season
         log.error("season %s event %s failed: %r", season, event_id, exc)

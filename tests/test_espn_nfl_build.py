@@ -13,7 +13,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-from nfl_espn_build import build, config, process, publish, qa, rolling
+from nfl_espn_build import build, config, process, publish, qa, reshapers, rolling
 from nfl_espn_build import tendencies as tendencies_mod
 from nfl_espn_build.cli import main
 from nfl_espn_build.config import ALL_ORDER, REGISTRY, processing_version
@@ -835,28 +835,34 @@ def test_stub_plays_are_skipped_not_failed(tmp_path):
     assert tally.get("stub") == 1 and not tally.get("failed")
 
 
-def test_truncated_feed_is_partial_not_failed(tmp_path, monkeypatch):
-    """A completed game whose feed is too short for a play frame is a warning, never a failure.
+def test_truncated_feed_is_kept_as_partial_not_failed(tmp_path, monkeypatch):
+    """A completed game whose play feed is truncated keeps its final; the QA says why it is unscored.
 
-    2003 week 1 ships 17 plays over 4 drives: sdv-py's corrupt-pbp check hands back the
-    raw plays with no ``plays_frame``, which the report-only QA cannot score.
+    2003 week 1 ships 17 plays over 4 drives beside a complete box score: sdv-py's
+    corrupt-pbp check hands back the raw plays with no ``plays_frame``, which the
+    report-only QA must tolerate instead of failing the game (and so the season).
     """
     monkeypatch.setattr(process, "schedule_lines", lambda season: {})
     summary = _fixture_summary()
     summary["drives"]["previous"] = summary["drives"]["previous"][:3]  # 35 plays, all with text
     assert process.summary_has_play_text(summary)
-    with pytest.raises(process.PartialGame):
-        process.build_final(summary, [], EVENT)
     root = _raw_root(tmp_path, summary)
-    # a final an older sdv-py left behind for the game is removed, not re-cut
-    stale = process.final_path(tmp_path / "cache", 2025, EVENT)
-    stale.parent.mkdir(parents=True)
-    stale.write_text("{}")
-    event_id, status = process._process_one(
-        (str(root), 2025, {"espn_event_id": EVENT}, str(tmp_path / "cache"))
-    )
+    cache = tmp_path / "cache"
+    event_id, status = process._process_one((str(root), 2025, {"espn_event_id": EVENT}, str(cache)))
     assert (event_id, status) == (EVENT, "partial")
-    assert not stale.exists() and process.load_season_finals(tmp_path / "cache", 2025) == []
+    assert process.final_is_current(process.final_path(cache, 2025, EVENT))
+    (final,) = process.load_season_finals(cache, 2025)
+    assert final["count"] == 35 and final["boxscore"]["teams"]
+    assert final["qa"]["status"] == qa.NO_PLAYS_FRAME
+    assert final["qa"]["game_id"] == EVENT and final["qa"]["season"] == 2025
+    assert final["qa"]["ok"] is None and final["qa"]["n_errors"] is None
+    # the published QA row keeps the schema: identity set, verdict null
+    row = reshapers.reshape_qa(final).row(0, named=True)
+    assert row["game_id"] == EVENT and row["ok"] is None
+    # and the game's real box score still reaches the per-game cuts
+    assert reshapers.reshape_team_box(final).height == 2
+    tally = process.process_season(EspnStore(str(root)), 2025, cache, workers=1, reprocess=True)
+    assert tally.get("partial") == 1 and not tally.get("failed")
 
 
 def test_pregame_summary_is_not_cached():

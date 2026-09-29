@@ -116,6 +116,19 @@ def test_season_summary_sidecar(qa_built):
     assert isinstance(s["counts_by_rule"], dict) and s["drift"] == []
 
 
+def test_no_plays_frame_row_is_neither_error_free_nor_an_error():
+    """A truncated feed's null-``ok`` row stays out of the share, and is counted apart."""
+    row = qa.qa_row(None, processing_version="v", summary={"id": 1, "season": 2003})
+    assert row["status"] == qa.NO_PLAYS_FRAME and row["game_id"] == 1 and row["ok"] is None
+    frame = pl.DataFrame(
+        [{k: r.get(k) for k in qa.QA_SCHEMA} for r in (row, {"ok": True}, {"ok": False})],
+        schema=qa.QA_SCHEMA,
+    )
+    s = qa.season_summary(frame, 2003, processing_version="v")
+    assert (s["games"], s["games_error_free"], s["games_no_plays_frame"]) == (3, 1, 1)
+    assert s["error_free_share"] == 0.5 and s["counts_by_rule"] == {}
+
+
 def test_drift_gate_reports_schema_null_constant_and_mean_shift(qa_built):
     _, out = qa_built
     new = pl.read_parquet(build.output_path(REGISTRY["pbp"], 2025, out))

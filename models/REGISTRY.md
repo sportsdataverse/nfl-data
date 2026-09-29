@@ -89,7 +89,7 @@ Copied into sdv-py's `sportsdataverse/nfl/models/` package data by
 
 | model | artifact(s) | release tag | training data | fitting script | gates at publish | last retrain | cadence |
 |---|---|---|---|---|---|---|---|
-| NFL ratings (weekly vintages) | `nfl_ratings_weekly_{season}.parquet`, 1999–2025 | `nfl_ratings_weekly` | model_pbp season-to-date, `as_of_week` EXCLUSIVE (leak-safe, nfl-data#24) | `python/nfl_ratings_weekly` | vintage discipline: as-of split enforced in the builder | 2026-08-07 (backfill publish) | weekly in-season (Tue 10:00 UTC, Sep–Feb) |
+| NFL ratings (weekly vintages) | `nfl_ratings_weekly_{season}.parquet`, 1999–2025 | `nfl_ratings_weekly` | model_pbp season-to-date, `as_of_week` EXCLUSIVE (leak-safe, nfl-data#24) | `python/nfl_ratings_weekly` | vintage discipline: as-of split enforced in the builder | 2026-08-07 (backfill publish) | weekly in-season (Tue 14:00 UTC, Sep–Feb) |
 
 ## Documented but not trained here
 

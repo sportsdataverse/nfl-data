@@ -25,8 +25,9 @@ on:
         type: boolean
         default: false
   schedule:
-    # Tuesdays 10:00 UTC, Sep-Feb (in-season + playoffs)
-    - cron: "0 10 * 9-12,1-2 2"
+    # Tuesdays 14:00 UTC, Sep-Feb (in-season + playoffs)
+    # not earlier: nflverse's Monday-night pbp often lands hours after its 05:33 UTC cron
+    - cron: "0 14 * 9-12,1-2 2"
 
 # Publishing writes to sportsdataverse-data via SDV_GH_TOKEN, never to this
 # repository — the job token stays read-only.

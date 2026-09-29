@@ -23,7 +23,11 @@ concurrency:
 
 on:
   schedule:
-    - cron: '30 10 * 9-12,1,2 2'   # Tuesdays 10:30 UTC, Sep-Feb (after Monday night)
+    # Tuesdays 20:00 UTC, Sep-Feb: AFTER nfl-raw's daily scrape (11:45 cron; GitHub starts it
+    # 14:48-17:12 UTC and it pushes minutes later). The old 10:30 slot actually started ~15:07
+    # and lost that race on 2026-09-15 and 09-22, so Monday night shipped a week late -- the
+    # same move nfl_pbp_cron.yml already made.
+    - cron: '0 20 * 9-12,1,2 2'
   workflow_dispatch:
     inputs:
       start_year:

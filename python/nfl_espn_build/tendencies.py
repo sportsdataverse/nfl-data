@@ -10,11 +10,24 @@ the installed sdv-py defines every metric:
   model, plus the ``def_*`` twin (what the team's defense allowed).
 * ``coach_tendencies`` -- the same row per (season, team, head coach). The
   head coach of each game comes from the nflverse schedule
-  (``home_coach`` / ``away_coach``, complete since 1999, keyed by ESPN event
-  id), so a midseason change splits the season between the two coaches and
-  an interim coach gets their own row.
+  (``home_coach`` / ``away_coach``, complete since 1999), so a midseason
+  change splits the season between the two coaches and an interim coach
+  gets their own row.
+* both tendencies datasets carry the game-context splits (``games_{c}``,
+  ``wins_{c}`` ...; ``c`` = ``home``, ``away``, ``neutral_site``,
+  ``after_bye``, ``opener``, ``one_score_game``) from the same schedule row:
+  a neutral site is both teams' and then neither is home or away; after a
+  bye = a regular-season game after the team's ``*_rest >= 12`` days; the
+  opener = its first regular-season game; one score = final margin <= 8; a
+  win = more points than the opponent (a tie is not). There is no NFL
+  ``vs_ranked``.
 * ``coach_careers`` -- every ``coach_tendencies`` season present in the output
   root summed per coach with the rates recomputed (one season-less file).
+
+A play finds its schedule row by the crosswalk's ``nflverse_game_id``, and
+by its ESPN event id only when it has none: nflverse repeats ``espn`` ids
+(11 of them in 2003-2010, one listed for three games), so a repeated id is
+never used.
 
 Preseason snaps are excluded everywhere: they describe a depth chart, not a
 coach. Coordinators are not attributed -- no public source names the OC / DC
@@ -45,7 +58,34 @@ FRANCHISE_TEAM_IDS = frozenset(range(1, 31)) | {33, 34}
 TEAM_GROUP = ("season", "pos_team")
 COACH_GROUP = ("season", "pos_team", "coach")
 COACH_DEF_GROUP = ("season", "def_pos_team", "def_coach")
-COACH_SCHEMA = {"game_id": pl.Int64, "home_coach": pl.Utf8, "away_coach": pl.Utf8}
+#: per-side game context, ``home_{c}`` / ``away_{c}`` in the schedule frame
+SIDE_CONTEXT = ("after_bye", "opener", "win")
+#: the game's own context, shared by both sides
+GAME_CONTEXT = ("neutral_site", "one_score_game")
+#: the schedule frame, one row per nflverse game: its keys (``game_id`` is the ESPN
+#: id nflverse lists, the fallback key), the sidelines and the game context
+COACH_SCHEMA = {
+    "nflverse_game_id": pl.Utf8,
+    "game_id": pl.Int64,
+    "home_coach": pl.Utf8,
+    "away_coach": pl.Utf8,
+    **{c: pl.Boolean for c in GAME_CONTEXT},
+    **{f"{s}_{c}": pl.Boolean for s in ("home", "away") for c in SIDE_CONTEXT},
+}
+#: the nflverse schedule columns coach attribution needs
+COACH_COLS = {"game_id", "espn", "home_coach", "away_coach"}
+#: and the ones the game context needs on top
+CONTEXT_COLS = {
+    "game_type",
+    "week",
+    "location",
+    "home_team",
+    "away_team",
+    "home_score",
+    "away_score",
+    "home_rest",
+    "away_rest",
+}
 
 
 def season_plays(finals: list[dict[str, Any]]) -> pl.DataFrame:
@@ -71,10 +111,12 @@ def exclude_exhibitions(df: pl.DataFrame) -> pl.DataFrame:
 
 
 def coach_games(season: int) -> pl.DataFrame:
-    """``(game_id, home_coach, away_coach)`` per ESPN event id from the nflverse schedule.
+    """Sidelines and game context per nflverse game from the nflverse schedule.
 
     Empty (with the schema) when the schedule cannot be read, so the coach
-    datasets come out empty for the season rather than wrong.
+    datasets come out empty for the season and neither tendencies dataset
+    carries context splits, rather than either being wrong. A schedule
+    lacking only the context inputs still attributes the coaches.
     """
     try:
         from sportsdataverse.nfl import load_nfl_schedule
@@ -82,23 +124,101 @@ def coach_games(season: int) -> pl.DataFrame:
         sched = load_nfl_schedule(seasons=[int(season)])
     except Exception as exc:  # noqa: BLE001 -- network / release availability
         log.warning(
-            "season %s: nflverse schedule unavailable (%r); no coach attribution", season, exc
+            "season %s: nflverse schedule unavailable (%r); no coach attribution or game context",
+            season,
+            exc,
         )
         return pl.DataFrame(schema=COACH_SCHEMA)
-    if not {"espn", "home_coach", "away_coach"} <= set(sched.columns):
+    missing = sorted(COACH_COLS - set(sched.columns))
+    if missing:
         log.warning(
-            "season %s: nflverse schedule has no coach columns; no coach attribution", season
+            "season %s: nflverse schedule lacks %s; no coach attribution or game context",
+            season,
+            missing,
         )
         return pl.DataFrame(schema=COACH_SCHEMA)
+    missing = sorted(CONTEXT_COLS - set(sched.columns))
+    if missing:
+        log.warning("season %s: nflverse schedule lacks %s; no game context", season, missing)
+    return schedule_context(sched)
+
+
+def schedule_context(sched: pl.DataFrame) -> pl.DataFrame:
+    """The :data:`COACH_SCHEMA` frame from nflverse schedule rows (see the module doc).
+
+    Without the :data:`CONTEXT_COLS` it carries only the keys and the sidelines.
+    """
+    keys = [
+        pl.col("game_id").cast(pl.Utf8).alias("nflverse_game_id"),
+        pl.col("espn").cast(pl.Int64, strict=False).alias("game_id"),
+        pl.col("home_coach").cast(pl.Utf8),
+        pl.col("away_coach").cast(pl.Utf8),
+    ]
+    if not CONTEXT_COLS <= set(sched.columns):
+        return sched.select(keys).drop_nulls("nflverse_game_id")
+    reg = pl.col("game_type") == "REG"
+    first_week = (
+        sched.filter(reg)
+        .select("week", team=pl.concat_list("home_team", "away_team"))
+        .explode("team")
+        .group_by("team")
+        .agg(pl.col("week").min())
+    )
+    for side in ("home", "away"):
+        sched = sched.join(
+            first_week.rename({"team": f"{side}_team", "week": f"{side}_first_week"}),
+            on=f"{side}_team",
+            how="left",
+        )
+    home, away = pl.col("home_score"), pl.col("away_score")
     return (
         sched.select(
-            pl.col("espn").cast(pl.Int64, strict=False).alias("game_id"),
-            pl.col("home_coach").cast(pl.Utf8),
-            pl.col("away_coach").cast(pl.Utf8),
+            *keys,
+            neutral_site=pl.col("location") == "Neutral",
+            one_score_game=(home - away).abs() <= 8,
+            **{f"{s}_after_bye": reg & (pl.col(f"{s}_rest") >= 12) for s in ("home", "away")},
+            **{
+                f"{s}_opener": reg & (pl.col("week") == pl.col(f"{s}_first_week"))
+                for s in ("home", "away")
+            },
+            home_win=home > away,
+            away_win=away > home,
         )
-        .drop_nulls("game_id")
-        .unique(subset=["game_id"], keep="first")
+        .drop_nulls("nflverse_game_id")
+        .cast(COACH_SCHEMA)
     )
+
+
+#: the play's offense is the home team (null when either side is unknown)
+_IS_HOME = pl.col("pos_team").cast(pl.Int64, strict=False) == pl.col("homeTeamId").cast(
+    pl.Int64, strict=False
+)
+
+
+def _join_schedule(plays: pl.DataFrame, sched: pl.DataFrame, cols: list[str]) -> pl.DataFrame:
+    """``cols`` of the schedule frame on every play, prefixed ``_sched_`` (see the module doc).
+
+    Prefixed so a same-named pbp column can never shadow the schedule's;
+    ``_sched_hit`` is true on the plays that found their row. A schedule
+    repeating an nflverse game id raises rather than picking one.
+    """
+    df = plays.with_columns(pl.col("game_id").cast(pl.Int64))
+    by_espn = sched.filter(
+        pl.col("game_id").is_not_null() & ~pl.col("game_id").is_duplicated()
+    ).select(pl.col("game_id").cast(pl.Int64), _sched_key=pl.col("nflverse_game_id"))
+    assert df.schema["game_id"] == by_espn.schema["game_id"]
+    df = df.join(by_espn, on="game_id", how="left", validate="m:1")
+    if "nflverse_game_id" in df.columns:
+        df = df.with_columns(
+            _sched_key=pl.coalesce(pl.col("nflverse_game_id").cast(pl.Utf8), "_sched_key")
+        )
+    rows = sched.select(
+        pl.col("nflverse_game_id").cast(pl.Utf8).alias("_sched_key"),
+        pl.col(cols).name.prefix("_sched_"),
+        _sched_hit=pl.lit(True),
+    )
+    assert df.schema["_sched_key"] == rows.schema["_sched_key"]
+    return df.join(rows, on="_sched_key", how="left", validate="m:1")
 
 
 def attach_coaches(plays: pl.DataFrame, coaches: pl.DataFrame) -> pl.DataFrame:
@@ -111,36 +231,68 @@ def attach_coaches(plays: pl.DataFrame, coaches: pl.DataFrame) -> pl.DataFrame:
         # built from a schema, not with_columns(lit): a literal on a frame with
         # no columns broadcasts to ONE row, which would then be a "play"
         return pl.DataFrame(schema={**plays.schema, "coach": pl.Utf8, "def_coach": pl.Utf8})
-    coaches = coaches.select(
-        pl.col("game_id").cast(pl.Int64),
-        pl.col("home_coach").cast(pl.Utf8),
-        pl.col("away_coach").cast(pl.Utf8),
-    )
-    df = plays.with_columns(pl.col("game_id").cast(pl.Int64))
-    assert df.schema["game_id"] == coaches.schema["game_id"]
-    df = df.join(coaches, on="game_id", how="left")
-    home = pl.col("pos_team").cast(pl.Int64, strict=False) == pl.col("homeTeamId").cast(
-        pl.Int64, strict=False
-    )
+    df = _join_schedule(plays, coaches, ["home_coach", "away_coach"])
+    home, away = pl.col("_sched_home_coach"), pl.col("_sched_away_coach")
     df = df.with_columns(
-        coach=pl.when(home).then(pl.col("home_coach")).otherwise(pl.col("away_coach")),
-        def_coach=pl.when(home).then(pl.col("away_coach")).otherwise(pl.col("home_coach")),
-    ).drop("home_coach", "away_coach")
+        coach=pl.when(_IS_HOME).then(home).otherwise(away),
+        def_coach=pl.when(_IS_HOME).then(away).otherwise(home),
+    ).select(pl.exclude("^_sched_.*$"))
     return df.filter(pl.col("coach").is_not_null() & pl.col("def_coach").is_not_null())
 
 
-def team_tendencies(plays: pl.DataFrame) -> pl.DataFrame:
-    """One row per (season, team)."""
+def attach_context(plays: pl.DataFrame, games: pl.DataFrame) -> pl.DataFrame:
+    """Boolean ``ctx_*`` (the offense's game context) and ``def_ctx_*`` (the defense's).
+
+    ``games`` is :func:`coach_games`' frame. When it is empty (schedule
+    unavailable) or has no context columns, the plays come back without any
+    ``ctx_*`` column, so ``tendencies`` emits no context split. A game missing
+    from the schedule keeps its plays with null (never true) context, and so
+    does the side of a snap whose offense or home team is unknown.
+    """
+    if plays.height == 0 or games.height == 0:
+        return plays
+    ctx_cols = [*GAME_CONTEXT, *(f"{s}_{c}" for s in ("home", "away") for c in SIDE_CONTEXT)]
+    missing = [c for c in ctx_cols if c not in games.columns]
+    if missing:
+        log.warning("schedule frame lacks %s; no game-context splits", missing)
+        return plays
+    df = _join_schedule(plays, games, ctx_cols)
+    unmatched = df.filter(pl.col("_sched_hit").is_null())["game_id"].n_unique()
+    if unmatched:
+        log.warning("%d game(s) not in the nflverse schedule; no game context", unmatched)
+    neutral = pl.col("_sched_neutral_site")
+
+    def side(prefix: str, is_home: pl.Expr) -> dict[str, pl.Expr]:
+        return {
+            f"{prefix}home": is_home & ~neutral,
+            f"{prefix}away": ~is_home & ~neutral,
+            **{f"{prefix}{c}": pl.col(f"_sched_{c}") for c in GAME_CONTEXT},
+            **{
+                f"{prefix}{c}": pl.when(is_home)
+                .then(pl.col(f"_sched_home_{c}"))
+                .when(~is_home)
+                .then(pl.col(f"_sched_away_{c}"))
+                for c in SIDE_CONTEXT
+            },
+        }
+
+    return df.with_columns(**side("ctx_", _IS_HOME), **side("def_ctx_", ~_IS_HOME)).select(
+        pl.exclude("^_sched_.*$")
+    )
+
+
+def team_tendencies(plays: pl.DataFrame, games: pl.DataFrame) -> pl.DataFrame:
+    """One row per (season, team); ``games`` is :func:`coach_games`' frame."""
     if plays.height == 0:
         return pl.DataFrame()
     from sportsdataverse.football.tendencies import tendencies
 
-    return tendencies(plays, league=LEAGUE, group_cols=TEAM_GROUP)
+    return tendencies(attach_context(plays, games), league=LEAGUE, group_cols=TEAM_GROUP)
 
 
 def coach_tendencies(plays: pl.DataFrame, coaches: pl.DataFrame) -> pl.DataFrame:
     """One row per (season, team, head coach), ``role`` = ``"HC"``."""
-    df = attach_coaches(plays, coaches)
+    df = attach_context(attach_coaches(plays, coaches), coaches)
     if df.height == 0:
         return pl.DataFrame()
     from sportsdataverse.football.tendencies import tendencies

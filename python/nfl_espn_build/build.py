@@ -118,7 +118,7 @@ class UsageCache:
 
     ``create_usage_box`` per final (eleven usage datasets, one computation),
     the season's reshaped plays (both tendencies datasets) and the season's
-    coach-per-game lookup.
+    per-game schedule lookup (coaches + game context).
     """
 
     def __init__(self, league: str = "nfl") -> None:
@@ -161,10 +161,10 @@ def dataset_frame(
     usage = usage or UsageCache()
     if spec.tendencies in ("team", "coach"):
         plays = usage.plays(finals)
+        season = int(plays["season"][0]) if plays.height else 0
         if spec.tendencies == "team":
-            df = team_tendencies(plays)
+            df = team_tendencies(plays, usage.coaches(season))
         else:
-            season = int(plays["season"][0]) if plays.height else 0
             df = coach_tendencies(plays, usage.coaches(season))
         return resolve_team_names(df, team_names(finals))
     if spec.tendencies == "careers":

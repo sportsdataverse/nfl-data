@@ -984,7 +984,7 @@ def _five_factor_rows() -> dict[str, dict]:
     assert (pbp["interception"] == 1).sum() == 3  # BUF throws two, KC one: uneven on purpose
     plays = add_derived_metrics(prepare_plays(pbp, 2025, schedule_fn=_schedule))
     team = _prepare_for_write(
-        _side_pair(plays)
+        _side_pair(plays, whole_team=True)
         .join(_drives_table(plays), on="pos_team_id", how="left")
         .join(_turnovers(pbp), on="pos_team_id", how="left"),
         2025,

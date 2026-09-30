@@ -223,6 +223,35 @@ table: for a **low-is-good** metric (`pass_int`, `sacked`, `fumbles`) the row at
 a LOW count — so a bar drawn from these thresholds agrees with the player's own
 `_pct` instead of contradicting it.
 
+## Team opponent splits
+
+`nfl_team_opponent_splits` is one row per team per regular-season game, so every
+game has two rows. It feeds the vs-opponent bars on team-season pages, and its
+columns match the college twin's `cfb_team_opponent_splits`. `epa_per_play`,
+`success_rate` and `plays` come from the same scrimmage frame as
+`team_summaries.EPAplay_off`: weight a team's rows by `plays` and you get its
+season `EPAplay_off` back. The points are the game's final score. A game with
+no scrimmage snap has no rows: the 2022 BUF-CIN no-contest carries a 7-3
+"score" but was never played. From 2002 on, a played game with no ESPN event
+id in nfl-raw's crosswalk fails this table's build. The seven other tags
+still build and publish, and the run exits 1.
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| season | Int64 | Season year (e.g. 2025). |
+| team_id | Int64 | ESPN team id (vendored crosswalk). |
+| opponent_id | Int64 | ESPN team id of the opponent. |
+| game_id | Int64 | ESPN event id, from nfl-raw's `crosswalk/games.json`. Null before 2002, where ESPN has no library. |
+| epa_per_play | Float64 | Mean EPA over the team's scrimmage plays in the game. |
+| success_rate | Float64 | Share of those plays with EPA > 0. |
+| points_for | Int64 | Team's final score. |
+| points_against | Int64 | Opponent's final score. |
+| plays | Int64 | Scrimmage plays behind `epa_per_play`. |
+| is_home | Boolean | Team is the designated home team (true at a neutral site too). |
+| week | Int64 | Week of the season. |
+| season_type | Int64 | ESPN season-type code (2 = regular season). |
+| nflverse_game_id | Utf8 | nflverse game id (e.g. `2025_01_KC_LAC`). |
+
 ## League averages
 
 `nfl_league_averages` is the mean / median / sd / n baseline behind every
@@ -262,7 +291,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_03_pbp_publish.py`
 - `python/nfl_data_04_rosters_players.py`
 - `python/nfl_data_05_ratings_weekly.py`
-- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles + league baselines (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`, `nfl_league_averages`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
+- `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles + league baselines (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`, `nfl_league_averages`, `nfl_team_opponent_splits`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

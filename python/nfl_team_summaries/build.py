@@ -835,10 +835,132 @@ def _prepare_for_write(df: pl.DataFrame, yr: int) -> pl.DataFrame:
     return out.select(lead + rest)
 
 
+#: nflverse season_type -> ESPN's code, the one espn_nfl_* and the college table carry
+_SEASON_TYPE_CODE = {"PRE": 1, "REG": 2, "POST": 3}
+#: first season of ESPN's NFL library (nfl-raw ``nfl/espn/``): from here on every
+#: played game must carry an ESPN event id
+ESPN_FIRST_SEASON = 2002
+#: team_opponent_splits column order: the F7 contract, then the nflverse key
+SPLITS_COLUMNS = [
+    "season",
+    "team_id",
+    "opponent_id",
+    "game_id",
+    "epa_per_play",
+    "success_rate",
+    "points_for",
+    "points_against",
+    "plays",
+    "is_home",
+    "week",
+    "season_type",
+    "nflverse_game_id",
+]
+
+
+def _team_off(plays: pl.DataFrame) -> pl.DataFrame:
+    """The scrimmage frame every offensive rate aggregates (EPA and success both known)."""
+    return plays.filter(pl.col("EPA").is_not_null() & pl.col("epa_success").is_not_null())
+
+
+def build_team_opponent_splits(
+    plays: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int, espn_game_ids: pl.DataFrame
+) -> pl.DataFrame:
+    """One row per team-game: the opponent, EPA/play, success rate and final points.
+
+    ``epa_per_play`` / ``success_rate`` / ``plays`` aggregate the SAME scrimmage
+    frame the grid's ``EPAplay_off`` does (:func:`_team_off`), per ``(game_id,
+    pos_team_id, def_pos_team_id)``, so a team's plays-weighted mean over its games
+    is its season ``EPAplay_off``. Points are the final ``home_score`` /
+    ``away_score`` nflfastR carries on every row of a game. A side with no
+    scrimmage play is dropped, which removes a game that was never played
+    (``2022_17_BUF_CIN``, the no-contest, carries only two placeholder rows and a
+    7-3 "score"). ``team_id`` / ``opponent_id`` are ESPN ids; ``game_id`` is the
+    ESPN event id from nfl-raw's crosswalk, with ``nflverse_game_id`` alongside.
+
+    Args:
+        plays: :func:`nfl_team_summaries.input.prepare_plays` output.
+        raw_pbp: the same season's ``model_pbp``, filtered to the same season types.
+        yr: season.
+        espn_game_ids: :func:`nfl_team_summaries.crosswalk.load_espn_game_ids`.
+
+    Raises:
+        ValueError: if a game's context is not unique, or if, from
+            :data:`ESPN_FIRST_SEASON` on, a played game has no ESPN event id --
+            a missing or stale crosswalk must fail, not publish null ids.
+            Earlier seasons have no ESPN library: their ``game_id`` is null.
+    """
+    games = raw_pbp.select(
+        "game_id", "week", "season_type", "home_team", "away_team", "home_score", "away_score"
+    ).unique()
+    dup = games.filter(pl.col("game_id").is_duplicated())["game_id"].unique().to_list()
+    if dup:
+        raise ValueError(f"team_opponent_splits {yr}: game context not unique for {dup[:5]}")
+
+    def side(us: str, them: str, is_home: bool) -> pl.DataFrame:
+        return games.select(
+            pl.col("game_id").alias("nflverse_game_id"),
+            "week",
+            "season_type",
+            pl.col(f"{us}_team").alias("team"),
+            pl.col(f"{them}_team").alias("opponent"),
+            pl.col(f"{us}_score").cast(pl.Int64).alias("points_for"),
+            pl.col(f"{them}_score").cast(pl.Int64).alias("points_against"),
+            is_home=pl.lit(is_home),
+        )
+
+    sides = pl.concat([side("home", "away", True), side("away", "home", False)])
+    sides = attach_team_ids(attach_team_ids(sides, "team", "team"), "opponent", "opponent")
+    sides = sides.with_columns(pl.col("team_id", "opponent_id").cast(pl.Int64))
+    per_game = (
+        _team_off(plays)
+        .group_by("game_id", "pos_team_id", "def_pos_team_id")
+        .agg(
+            epa_per_play=pl.col("EPA").mean(),
+            success_rate=pl.col("epa_success").mean(),
+            plays=pl.len().cast(pl.Int64),
+        )
+        .select(
+            pl.col("game_id").alias("nflverse_game_id"),
+            pl.col("pos_team_id").cast(pl.Int64).alias("team_id"),
+            pl.col("def_pos_team_id").cast(pl.Int64).alias("opponent_id"),
+            "epa_per_play",
+            "success_rate",
+            "plays",
+        )
+    )
+    keys = ["nflverse_game_id", "team_id", "opponent_id"]
+    for k in keys:
+        assert sides.schema[k] == per_game.schema[k], (k, sides.schema[k], per_game.schema[k])
+    assert sides.schema["nflverse_game_id"] == espn_game_ids.schema["nflverse_game_id"]
+    # inner: a side that never took a snap is not a game played
+    out = sides.join(per_game, on=keys, how="inner", validate="1:1").join(
+        espn_game_ids, on="nflverse_game_id", how="left", validate="m:1"
+    )
+    unmatched = sorted(out.filter(pl.col("game_id").is_null())["nflverse_game_id"].unique())
+    if unmatched and yr >= ESPN_FIRST_SEASON:
+        raise ValueError(
+            f"team_opponent_splits {yr}: {len(unmatched)} played game(s) have no ESPN event id "
+            f"in nfl-raw's crosswalk (missing or stale?): {unmatched[:5]}"
+        )
+    return (
+        out.with_columns(
+            season=pl.lit(int(yr), dtype=pl.Int64),
+            week=pl.col("week").cast(pl.Int64),
+            season_type=pl.col("season_type").replace_strict(
+                _SEASON_TYPE_CODE, return_dtype=pl.Int64
+            ),
+        )
+        .select(SPLITS_COLUMNS)
+        .sort("week", "nflverse_game_id", "is_home")
+    )
+
+
 def build_team_summaries(
     plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int
 ) -> dict[str, pl.DataFrame]:
-    """Build the seven tables.
+    """Build the seven tables (``team_opponent_splits`` is built on its own, see
+    :func:`build_team_opponent_splits`).
 
     Args:
         plays_input: :func:`nfl_team_summaries.input.prepare_plays` output.
@@ -848,7 +970,7 @@ def build_team_summaries(
         yr: season.
     """
     plays = add_derived_metrics(plays_input)
-    team_off = plays.filter(pl.col("EPA").is_not_null() & pl.col("epa_success").is_not_null())
+    team_off = _team_off(plays)
 
     pctls = team_off.with_columns(
         GEI=(pl.col("wpa").abs().sum().over("game_id")) * (_GEI_NORM / pl.len().over("game_id"))

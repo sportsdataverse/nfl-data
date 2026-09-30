@@ -122,4 +122,4 @@ data_pipelines:
     stage: python/nfl_data_06_team_summaries.py
     wraps: nfl_team_summaries
     workflow: nfl_pbp_cron.yml
-    release_tag: nfl_team_summaries (+ nfl_passing, nfl_rushing, nfl_receiving, nfl_percentiles, nfl_player_percentiles, nfl_league_averages)
+    release_tag: nfl_team_summaries (+ nfl_passing, nfl_rushing, nfl_receiving, nfl_percentiles, nfl_player_percentiles, nfl_league_averages, nfl_team_opponent_splits)

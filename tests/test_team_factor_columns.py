@@ -8,6 +8,7 @@ from __future__ import annotations
 import polars as pl
 import pytest
 from nfl_team_summaries.build import (
+    _add_turnover_luck,
     _drives_table,
     _field_position_ep,
     _havoc_and_expected_turnovers,
@@ -118,6 +119,31 @@ def test_havoc_epa_per_game_and_expected_turnover_margin():
     # INT share 1/3; fumbles cancel; A's passes defended twice in 2 games, B's once
     assert a["expected_turnover_margin"] == pytest.approx(-1 / 6)
     assert b["expected_turnover_margin"] == pytest.approx(1 / 6)
+    # the two sides: A expects 7/12 giveaways and 5/12 takeaways a game
+    assert a["expected_turnovers_off"] == pytest.approx(7 / 12)
+    assert a["expected_turnovers_def"] == pytest.approx(5 / 12)
+    assert (b["expected_turnovers_off_rank"], a["expected_turnovers_off_rank"]) == (1.0, 2.0)
+    assert (b["expected_turnovers_def_rank"], a["expected_turnovers_def_rank"]) == (1.0, 2.0)
     assert (b["havoc_EPAgame_off_rank"], a["havoc_EPAgame_off_rank"]) == (1.0, 2.0)
     assert (b["havoc_EPAgame_def_rank"], a["havoc_EPAgame_def_rank"]) == (1.0, 2.0)
     assert (b["expected_turnover_margin_rank"], a["expected_turnover_margin_rank"]) == (1.0, 2.0)
+
+
+def test_turnover_luck_per_side_sums_to_the_margin():
+    t = pl.DataFrame(
+        {
+            "pos_team_id": ["X", "Y"],
+            "turnovers_off": [0.5, 1.5],
+            "turnovers_def": [2.0, 0.5],
+            "expected_turnovers_off": [1.0, 1.0],
+            "expected_turnovers_def": [1.2, 1.0],
+        }
+    ).with_columns(
+        turnover_margin=pl.col("turnovers_def") - pl.col("turnovers_off"),
+        expected_turnover_margin=pl.col("expected_turnovers_def") - pl.col("expected_turnovers_off"),
+    )
+    out = _add_turnover_luck(t).sort("pos_team_id")
+    x, y = out.row(0, named=True), out.row(1, named=True)
+    assert (x["turnover_luck_off"], x["turnover_luck_def"], x["turnover_luck"]) == pytest.approx((2.5, 4.0, 6.5))
+    assert y["turnover_luck"] == pytest.approx(y["turnover_luck_off"] + y["turnover_luck_def"])
+    assert (x["turnover_luck_rank"], y["turnover_luck_rank"]) == (1.0, 2.0)

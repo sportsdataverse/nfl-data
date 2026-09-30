@@ -1275,3 +1275,36 @@ def test_cli_publishes_the_seven_even_when_the_splits_fail(tmp_path, monkeypatch
         assert rc == 0 and uploaded == [*seven, cli.SPLITS[0]] and splits_file.exists()
     else:
         assert rc == 1 and uploaded == seven and not splits_file.exists()
+
+
+def test_turnover_luck_reconciles_through_the_whole_build(tables):
+    """The assembled table, not the helper: turnover_luck = 5 x (turnover_margin -
+    expected_turnover_margin) for every team, so a wrong sign, a wrong scale or a team
+    join that misses (a null) cannot pass. turnover_margin comes from _turnovers(raw)
+    and the expectation from the scrimmage frame, joined on pos_team_id."""
+    _, out = tables
+    ts = out["team_summaries"]
+    assert ts.height > 0
+    cols = (
+        "turnover_margin",
+        "expected_turnover_margin",
+        "turnover_luck",
+        "turnover_luck_rank",
+        "turnover_luck_off",
+        "turnover_luck_def",
+    )
+    for c in cols:
+        assert ts[c].null_count() == 0, c
+    gap = ts.select(
+        (5.0 * (pl.col("turnover_margin") - pl.col("expected_turnover_margin")) - pl.col("turnover_luck")).abs().max()
+    ).item()
+    assert gap < 1e-9
+    # the two sides sum to the margin, and each rests on the actual per-side counts
+    sides = ts.select(
+        (pl.col("turnover_luck_off") + pl.col("turnover_luck_def") - pl.col("turnover_luck")).abs().max(),
+        (5.0 * (pl.col("expected_turnovers_off") - pl.col("turnovers_off")) - pl.col("turnover_luck_off")).abs().max(),
+    ).row(0)
+    assert max(sides) < 1e-9
+    # rank 1 is the luckiest: luck never rises as the rank number does
+    by_rank = ts.sort("turnover_luck_rank")["turnover_luck"].to_list()
+    assert all(a >= b - 1e-12 for a, b in zip(by_rank, by_rank[1:]))

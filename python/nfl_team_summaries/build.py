@@ -15,6 +15,8 @@ denominator -- see ``_rank`` / ``_pct``.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import polars as pl
 from sportsdataverse.cfb import cfb_adjusted_epa
@@ -23,6 +25,8 @@ from .checks import assert_adjustment_is_real, assert_finite, assert_passer_iden
 from .crosswalk import attach_team_ids, load_crosswalk
 from .league_averages import build_league_averages
 from .rbsdm import passer_extras, team_extras
+
+log = logging.getLogger(__name__)
 
 # Explosive-play EPA thresholds (shared with the college grid).
 _EXPLOSIVE_PASS_EPA = 2.4
@@ -835,10 +839,103 @@ def _prepare_for_write(df: pl.DataFrame, yr: int) -> pl.DataFrame:
     return out.select(lead + rest)
 
 
+#: nflverse season_type -> ESPN's code, the one espn_nfl_* and the college table carry
+_SEASON_TYPE_CODE = {"PRE": 1, "REG": 2, "POST": 3}
+#: team_opponent_splits column order: the F7 contract, then the nflverse key
+SPLITS_COLUMNS = [
+    "season",
+    "team_id",
+    "opponent_id",
+    "game_id",
+    "epa_per_play",
+    "success_rate",
+    "points_for",
+    "points_against",
+    "plays",
+    "is_home",
+    "week",
+    "season_type",
+    "nflverse_game_id",
+]
+
+
+def build_team_opponent_splits(
+    team_off: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int, espn_game_ids: pl.DataFrame
+) -> pl.DataFrame:
+    """One row per team-game: the opponent, EPA/play, success rate and final points.
+
+    ``epa_per_play`` / ``success_rate`` / ``plays`` aggregate the SAME scrimmage
+    frame the grid's ``EPAplay_off`` does, per ``(game_id, pos_team_id,
+    def_pos_team_id)``, so a team's plays-weighted mean over its games is its
+    season ``EPAplay_off``. Points are the final ``home_score`` / ``away_score``
+    nflfastR carries on every row of a game; both sides come from the raw frame,
+    so each game has exactly two rows. ``team_id`` / ``opponent_id`` are ESPN
+    ids; ``game_id`` is the ESPN event id from nfl-raw's crosswalk (null before
+    2002, where ESPN has no library), with ``nflverse_game_id`` alongside.
+    """
+    games = raw_pbp.select(
+        "game_id", "week", "season_type", "home_team", "away_team", "home_score", "away_score"
+    ).unique()
+    dup = games.filter(pl.col("game_id").is_duplicated())["game_id"].unique().to_list()
+    if dup:
+        raise ValueError(f"team_opponent_splits {yr}: game context not unique for {dup[:5]}")
+
+    def side(us: str, them: str, is_home: bool) -> pl.DataFrame:
+        return games.select(
+            pl.col("game_id").alias("nflverse_game_id"),
+            "week",
+            "season_type",
+            pl.col(f"{us}_team").alias("team"),
+            pl.col(f"{them}_team").alias("opponent"),
+            pl.col(f"{us}_score").cast(pl.Int64).alias("points_for"),
+            pl.col(f"{them}_score").cast(pl.Int64).alias("points_against"),
+            is_home=pl.lit(is_home),
+        )
+
+    sides = pl.concat([side("home", "away", True), side("away", "home", False)])
+    sides = attach_team_ids(attach_team_ids(sides, "team", "team"), "opponent", "opponent")
+    sides = sides.with_columns(pl.col("team_id", "opponent_id").cast(pl.Int64))
+    per_game = team_off.group_by("game_id", "pos_team_id", "def_pos_team_id").agg(
+        epa_per_play=pl.col("EPA").mean(),
+        success_rate=pl.col("epa_success").mean(),
+        plays=pl.len().cast(pl.Int64),
+    )
+    per_game = per_game.select(
+        pl.col("game_id").alias("nflverse_game_id"),
+        pl.col("pos_team_id").cast(pl.Int64).alias("team_id"),
+        pl.col("def_pos_team_id").cast(pl.Int64).alias("opponent_id"),
+        "epa_per_play",
+        "success_rate",
+        "plays",
+    )
+    keys = ["nflverse_game_id", "team_id", "opponent_id"]
+    for k in keys:
+        assert sides.schema[k] == per_game.schema[k], (k, sides.schema[k], per_game.schema[k])
+    assert sides.schema["nflverse_game_id"] == espn_game_ids.schema["nflverse_game_id"]
+    out = sides.join(per_game, on=keys, how="left").join(
+        espn_game_ids, on="nflverse_game_id", how="left"
+    )
+    n_unmatched = out.filter(pl.col("game_id").is_null())["nflverse_game_id"].n_unique()
+    if n_unmatched:
+        log.warning("team_opponent_splits %s: %d game(s) have no ESPN event id", yr, n_unmatched)
+    return (
+        out.with_columns(
+            season=pl.lit(int(yr), dtype=pl.Int64),
+            plays=pl.col("plays").fill_null(0),
+            week=pl.col("week").cast(pl.Int64),
+            season_type=pl.col("season_type").replace_strict(
+                _SEASON_TYPE_CODE, return_dtype=pl.Int64
+            ),
+        )
+        .select(SPLITS_COLUMNS)
+        .sort("week", "nflverse_game_id", "is_home")
+    )
+
+
 def build_team_summaries(
-    plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int
+    plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int, *, espn_game_ids: pl.DataFrame
 ) -> dict[str, pl.DataFrame]:
-    """Build the seven tables.
+    """Build the eight tables.
 
     Args:
         plays_input: :func:`nfl_team_summaries.input.prepare_plays` output.
@@ -846,6 +943,8 @@ def build_team_summaries(
             types -- the fourth-down and special-teams extras need plays the
             scrimmage frame drops.
         yr: season.
+        espn_game_ids: :func:`nfl_team_summaries.crosswalk.load_espn_game_ids`
+            (nflverse game id -> ESPN event id) for ``team_opponent_splits``.
     """
     plays = add_derived_metrics(plays_input)
     team_off = plays.filter(pl.col("EPA").is_not_null() & pl.col("epa_success").is_not_null())
@@ -934,5 +1033,8 @@ def build_team_summaries(
     }
     tables["league_averages"] = build_league_averages(
         {**tables, "team_game": per_game}, yr, levels=LEVELS, qualifiers=PLAYER_QUALIFIERS
+    )
+    tables["team_opponent_splits"] = build_team_opponent_splits(
+        team_off, raw_pbp, yr, espn_game_ids
     )
     return tables

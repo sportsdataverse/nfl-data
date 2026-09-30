@@ -44,6 +44,22 @@ GAMES = [
     ("2025_02_KC_PHI", "PHI", "KC"),
     ("2025_02_BUF_DAL", "DAL", "BUF"),
 ]
+#: final (home, away) score per game -- distinct, so a for/against swap shows
+SCORES = {
+    "2025_01_BUF_KC": (27, 20),
+    "2025_01_DAL_PHI": (31, 17),
+    "2025_02_KC_PHI": (13, 23),
+    "2025_02_BUF_DAL": (10, 16),
+}
+#: nflverse game_id -> ESPN event id (stands in for nfl-raw's crosswalk)
+ESPN_EVENTS = {g: 401772500 + i for i, (g, _, _) in enumerate(GAMES)}
+
+
+def _espn_game_ids() -> pl.DataFrame:
+    return pl.DataFrame(
+        {"nflverse_game_id": list(ESPN_EVENTS), "game_id": list(ESPN_EVENTS.values())},
+        schema={"nflverse_game_id": pl.Utf8, "game_id": pl.Int64},
+    )
 
 
 def _contract(name: str) -> list[str]:
@@ -185,6 +201,9 @@ def _fake_pbp(seed: int = 7) -> pl.DataFrame:
         fumbled_1_team=pl.when((pl.col("play_type") == "run") & (pl.col("play_id") == 6))
         .then(pl.col("posteam"))
         .otherwise(pl.col("fumbled_1_team")),
+        # nflfastR carries the FINAL score on every row of the game
+        home_score=pl.col("game_id").replace_strict({g: h for g, (h, _) in SCORES.items()}),
+        away_score=pl.col("game_id").replace_strict({g: a for g, (_, a) in SCORES.items()}),
     )
     return df
 
@@ -302,7 +321,9 @@ def _schedule(seasons):
 def tables():
     pbp = _fake_pbp()
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    return plays, build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)
+    return plays, build_team_summaries(
+        plays, filter_season_types(pbp, ("REG",)), 2025, espn_game_ids=_espn_game_ids()
+    )
 
 
 # --- crosswalk -----------------------------------------------------------------
@@ -504,7 +525,9 @@ def test_series_columns_survive_an_asset_without_series():
     # so the published table schema does not depend on the asset vintage
     pbp = _fake_pbp().drop("series", "series_success", "series_result")
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
+    ts = build_team_summaries(
+        plays, filter_season_types(pbp, ("REG",)), 2025, espn_game_ids=_espn_game_ids()
+    )["team_summaries"]
     assert "series_conv_off" in ts.columns and "series_conv_def_rank" in ts.columns
     assert ts["series_conv_off"].is_null().all()
     # and nobody is ranked on a metric nobody has (sequential ranks over nulls would look like data)
@@ -1029,10 +1052,102 @@ def test_no_drive_results_means_no_points_per_trip():
     """
     pbp = _fake_pbp().drop("fixed_drive_result")
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
+    ts = build_team_summaries(
+        plays, filter_season_types(pbp, ("REG",)), 2025, espn_game_ids=_espn_game_ids()
+    )["team_summaries"]
     for c in ("pts_per_opp_off", "pts_per_opp_def", "pts_per_opp_margin"):
         assert ts[c].is_null().all(), c
         assert ts[f"{c}_rank"].is_null().all(), c
     assert (ts["pts_per_opp_off_n"] > 0).all() and (ts["pts_per_opp_def_n"] > 0).all()
     for c in ("explosive_margin", "turnovers_off", "turnovers_def", "turnover_margin"):
         assert ts[c].null_count() == 0 and ts[f"{c}_rank"].null_count() == 0, c
+
+
+# --- team_opponent_splits (F7) --------------------------------------------------------
+
+#: the published contract (plan F7 "Interfaces"); nflverse_game_id rides along
+#: because the ESPN event id is null before 2002
+SPLITS_SCHEMA = {
+    "season": pl.Int64,
+    "team_id": pl.Int64,
+    "opponent_id": pl.Int64,
+    "game_id": pl.Int64,
+    "epa_per_play": pl.Float64,
+    "success_rate": pl.Float64,
+    "points_for": pl.Int64,
+    "points_against": pl.Int64,
+    "plays": pl.Int64,
+    "is_home": pl.Boolean,
+    "week": pl.Int64,
+    "season_type": pl.Int64,
+    "nflverse_game_id": pl.Utf8,
+}
+
+
+def test_opponent_splits_carry_espn_int64_ids(tables):
+    s = tables[1]["team_opponent_splits"]
+    assert dict(s.schema) == SPLITS_SCHEMA
+    assert set(s["team_id"]) == set(s["opponent_id"]) == {12, 2, 21, 6}  # KC, BUF, PHI, DAL
+    assert dict(zip(s["nflverse_game_id"], s["game_id"])) == ESPN_EVENTS
+    assert (s["season"] == 2025).all() and (s["season_type"] == 2).all()
+    assert set(s["week"]) == {1, 2}
+
+
+def test_opponent_splits_two_rows_per_game(tables):
+    s = tables[1]["team_opponent_splits"]
+    per_game = s.group_by("game_id").agg(
+        n=pl.len(), teams=pl.col("team_id").n_unique(), home=pl.col("is_home").sum()
+    )
+    assert per_game.height == len(GAMES)
+    assert (per_game["n"] == 2).all() and (per_game["teams"] == 2).all()
+    assert (per_game["home"] == 1).all()
+    assert (s["team_id"] != s["opponent_id"]).all()
+
+
+def test_opponent_splits_points_mirror_across_the_game(tables):
+    """Side A's points_for is side B's points_against -- anchored to the final
+    score, so a for/against swap made on both sides at once still fails."""
+    s = tables[1]["team_opponent_splits"]
+    pair = s.join(
+        s, left_on=["game_id", "team_id"], right_on=["game_id", "opponent_id"], suffix="_b"
+    )
+    assert pair.height == s.height
+    assert (pair["points_for"] == pair["points_against_b"]).all()
+    assert (pair["points_against"] == pair["points_for_b"]).all()
+    home = s.filter(pl.col("is_home") == True)  # noqa: E712
+    got = {
+        g: (pf, pa)
+        for g, pf, pa in home.select("nflverse_game_id", "points_for", "points_against").iter_rows()
+    }
+    assert got == SCORES
+
+
+def test_opponent_splits_reconcile_with_season_epa(tables):
+    """Plays-weighted EPA/play over a team's games IS its season EPAplay_off."""
+    _, out = tables
+    s = out["team_opponent_splits"]
+    ts = out["team_summaries"].select("team_id", "EPAplay_off", "plays_off")
+    w = s.group_by("team_id").agg(
+        epa=(pl.col("epa_per_play") * pl.col("plays")).sum() / pl.col("plays").sum(),
+        plays=pl.col("plays").sum(),
+    )
+    assert w.schema["team_id"] == ts.schema["team_id"]
+    j = ts.join(w, on="team_id", how="inner")
+    assert j.height == 4
+    for r in j.iter_rows(named=True):
+        assert abs(r["epa"] - r["EPAplay_off"]) <= 1e-9, r
+        assert r["plays"] == r["plays_off"], r
+
+
+def test_load_espn_game_ids_reads_the_nfl_raw_crosswalk(tmp_path):
+    from nfl_team_summaries.crosswalk import load_espn_game_ids
+
+    d = tmp_path / "crosswalk"
+    d.mkdir()
+    (d / "games.json").write_text(
+        '[{"espn_event_id": 401772500, "game_id": "2025_01_BUF_KC"},'
+        ' {"espn_event_id": 401772999, "game_id": null}]'
+    )
+    ids = load_espn_game_ids(str(tmp_path))
+    assert dict(ids.schema) == {"nflverse_game_id": pl.Utf8, "game_id": pl.Int64}
+    assert ids.rows() == [("2025_01_BUF_KC", 401772500)]

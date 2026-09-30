@@ -19,6 +19,7 @@ from pathlib import Path
 import polars as pl
 
 from nfl_team_summaries.build import build_team_summaries
+from nfl_team_summaries.crosswalk import load_espn_game_ids
 from nfl_team_summaries.input import (
     DEFAULT_SEASON_TYPES,
     filter_season_types,
@@ -39,6 +40,8 @@ TABLES = {
     # table is already a published contract the site reads.
     "player_percentiles": ("nfl_player_percentiles", "player_percentiles"),
     "league_averages": ("nfl_league_averages", "league_averages"),
+    # one row per team-game (regular season): opponent, EPA/play, success, points
+    "team_opponent_splits": ("nfl_team_opponent_splits", "team_opponent_splits"),
 }
 
 
@@ -58,7 +61,12 @@ def build_season(
     plays = prepare_plays(pbp, season, season_types=season_types)
     if plays.height == 0:
         return {}
-    return build_team_summaries(plays, filter_season_types(pbp, season_types), season)
+    return build_team_summaries(
+        plays,
+        filter_season_types(pbp, season_types),
+        season,
+        espn_game_ids=load_espn_game_ids(),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

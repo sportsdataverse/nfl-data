@@ -11,6 +11,7 @@ old seasons resolve to the current club, matching nflverse's own
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import polars as pl
@@ -55,3 +56,23 @@ def attach_team_ids(df: pl.DataFrame, abbr_col: str, prefix: str) -> pl.DataFram
             f"no ESPN team id for abbreviation(s) {sorted(missing)} in column {abbr_col!r}"
         )
     return out.drop("__abbr")
+
+
+@lru_cache(maxsize=None)
+def load_espn_game_ids(raw_dir: str | None = None) -> pl.DataFrame:
+    """nflverse ``game_id`` -> ESPN event id, from nfl-raw's ``crosswalk/games.json``.
+
+    The same crosswalk the ``espn_nfl_*`` family keys on (a local nfl-raw checkout,
+    ``$NFL_RAW_DIR``, else raw.githubusercontent.com -- see
+    :func:`nfl_espn_build.ingest.resolve_raw_root`). ESPN's library starts in 2002,
+    so earlier nflverse games have no row. Columns: ``nflverse_game_id`` (Utf8),
+    ``game_id`` (Int64, the ESPN event id).
+    """
+    from nfl_espn_build.ingest import EspnStore, resolve_raw_root
+
+    rows = EspnStore(resolve_raw_root(raw_dir)).crosswalk_games()
+    return pl.DataFrame(
+        [(r["game_id"], r["espn_event_id"]) for r in rows if r.get("game_id")],
+        schema={"nflverse_game_id": pl.Utf8, "game_id": pl.Int64},
+        orient="row",
+    )

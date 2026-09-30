@@ -29,6 +29,7 @@ from nfl_team_summaries.build import (
     _side_pair,
     _turnovers,
     add_derived_metrics,
+    build_team_opponent_splits,
     build_team_summaries,
     prepare_player_percentiles,
 )
@@ -321,9 +322,14 @@ def _schedule(seasons):
 def tables():
     pbp = _fake_pbp()
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    return plays, build_team_summaries(
-        plays, filter_season_types(pbp, ("REG",)), 2025, espn_game_ids=_espn_game_ids()
-    )
+    return plays, build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)
+
+
+@pytest.fixture(scope="module")
+def splits(tables):
+    plays, _ = tables
+    raw = filter_season_types(_fake_pbp(), ("REG",))
+    return build_team_opponent_splits(plays, raw, 2025, _espn_game_ids())
 
 
 # --- crosswalk -----------------------------------------------------------------
@@ -525,9 +531,7 @@ def test_series_columns_survive_an_asset_without_series():
     # so the published table schema does not depend on the asset vintage
     pbp = _fake_pbp().drop("series", "series_success", "series_result")
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    ts = build_team_summaries(
-        plays, filter_season_types(pbp, ("REG",)), 2025, espn_game_ids=_espn_game_ids()
-    )["team_summaries"]
+    ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
     assert "series_conv_off" in ts.columns and "series_conv_def_rank" in ts.columns
     assert ts["series_conv_off"].is_null().all()
     # and nobody is ranked on a metric nobody has (sequential ranks over nulls would look like data)
@@ -1052,9 +1056,7 @@ def test_no_drive_results_means_no_points_per_trip():
     """
     pbp = _fake_pbp().drop("fixed_drive_result")
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    ts = build_team_summaries(
-        plays, filter_season_types(pbp, ("REG",)), 2025, espn_game_ids=_espn_game_ids()
-    )["team_summaries"]
+    ts = build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)["team_summaries"]
     for c in ("pts_per_opp_off", "pts_per_opp_def", "pts_per_opp_margin"):
         assert ts[c].is_null().all(), c
         assert ts[f"{c}_rank"].is_null().all(), c
@@ -1084,8 +1086,8 @@ SPLITS_SCHEMA = {
 }
 
 
-def test_opponent_splits_carry_espn_int64_ids(tables):
-    s = tables[1]["team_opponent_splits"]
+def test_opponent_splits_carry_espn_int64_ids(splits):
+    s = splits
     assert dict(s.schema) == SPLITS_SCHEMA
     assert set(s["team_id"]) == set(s["opponent_id"]) == {12, 2, 21, 6}  # KC, BUF, PHI, DAL
     assert dict(zip(s["nflverse_game_id"], s["game_id"])) == ESPN_EVENTS
@@ -1093,23 +1095,26 @@ def test_opponent_splits_carry_espn_int64_ids(tables):
     assert set(s["week"]) == {1, 2}
 
 
-def test_opponent_splits_two_rows_per_game(tables):
-    s = tables[1]["team_opponent_splits"]
-    per_game = s.group_by("game_id").agg(
+def test_opponent_splits_two_rows_per_game(splits):
+    # grouped on the nflverse id: the ESPN game_id is null before 2002
+    per_game = splits.group_by("nflverse_game_id").agg(
         n=pl.len(), teams=pl.col("team_id").n_unique(), home=pl.col("is_home").sum()
     )
     assert per_game.height == len(GAMES)
     assert (per_game["n"] == 2).all() and (per_game["teams"] == 2).all()
     assert (per_game["home"] == 1).all()
-    assert (s["team_id"] != s["opponent_id"]).all()
+    assert (splits["team_id"] != splits["opponent_id"]).all()
 
 
-def test_opponent_splits_points_mirror_across_the_game(tables):
+def test_opponent_splits_points_mirror_across_the_game(splits):
     """Side A's points_for is side B's points_against -- anchored to the final
     score, so a for/against swap made on both sides at once still fails."""
-    s = tables[1]["team_opponent_splits"]
+    s = splits
     pair = s.join(
-        s, left_on=["game_id", "team_id"], right_on=["game_id", "opponent_id"], suffix="_b"
+        s,
+        left_on=["nflverse_game_id", "team_id"],
+        right_on=["nflverse_game_id", "opponent_id"],
+        suffix="_b",
     )
     assert pair.height == s.height
     assert (pair["points_for"] == pair["points_against_b"]).all()
@@ -1122,12 +1127,10 @@ def test_opponent_splits_points_mirror_across_the_game(tables):
     assert got == SCORES
 
 
-def test_opponent_splits_reconcile_with_season_epa(tables):
+def test_opponent_splits_reconcile_with_season_epa(tables, splits):
     """Plays-weighted EPA/play over a team's games IS its season EPAplay_off."""
-    _, out = tables
-    s = out["team_opponent_splits"]
-    ts = out["team_summaries"].select("team_id", "EPAplay_off", "plays_off")
-    w = s.group_by("team_id").agg(
+    ts = tables[1]["team_summaries"].select("team_id", "EPAplay_off", "plays_off")
+    w = splits.group_by("team_id").agg(
         epa=(pl.col("epa_per_play") * pl.col("plays")).sum() / pl.col("plays").sum(),
         plays=pl.col("plays").sum(),
     )
@@ -1139,15 +1142,136 @@ def test_opponent_splits_reconcile_with_season_epa(tables):
         assert r["plays"] == r["plays_off"], r
 
 
+def _splits_with(raw_extra: pl.DataFrame | None = None, ids=None, yr: int = 2025):
+    pbp = _fake_pbp()
+    plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
+    raw = filter_season_types(pbp, ("REG",))
+    if raw_extra is not None:
+        raw = pl.concat([raw, raw_extra], how="diagonal_relaxed")
+    return build_team_opponent_splits(plays, raw, yr, _espn_game_ids() if ids is None else ids)
+
+
+def test_a_game_with_no_scrimmage_play_is_dropped():
+    """The 2022 BUF-CIN no-contest: two placeholder rows (GAME, "cancelled")
+    and a 7-3 score, but not one snap. It is not a game either team played."""
+    gid = "2025_03_KC_DAL"
+    no_contest = pl.DataFrame(
+        {
+            "season_type": ["REG", "REG"],
+            "season": [2025, 2025],
+            "game_id": [gid, gid],
+            "play_id": [1, 653],
+            "week": [3, 3],
+            "home_team": ["DAL", "DAL"],
+            "away_team": ["KC", "KC"],
+            "home_score": [7, 7],
+            "away_score": [3, 3],
+            "posteam": [None, None],
+            "play_type": [None, None],
+        }
+    )
+    ids = pl.concat([_espn_game_ids(), pl.DataFrame({"nflverse_game_id": [gid], "game_id": [1]})])
+    s = _splits_with(no_contest, ids)
+    assert gid not in s["nflverse_game_id"].to_list()
+    assert s.height == 2 * len(GAMES)
+    assert (s["plays"] > 0).all()
+
+
+def test_an_unmatched_game_keeps_its_row_before_the_espn_library():
+    """Before 2002 ESPN has no library: the game_id is null and the row stays."""
+    ids = _espn_game_ids().filter(pl.col("nflverse_game_id") != "2025_01_BUF_KC")
+    s = _splits_with(ids=ids, yr=1999)
+    assert s.height == 2 * len(GAMES)
+    miss = s.filter(pl.col("nflverse_game_id") == "2025_01_BUF_KC")
+    assert miss.height == 2 and miss["game_id"].is_null().all()
+    assert s.filter(pl.col("nflverse_game_id") != "2025_01_BUF_KC")["game_id"].null_count() == 0
+
+
+def test_an_unmatched_played_game_raises_in_the_espn_era():
+    ids = _espn_game_ids().filter(pl.col("nflverse_game_id") != "2025_01_BUF_KC")
+    with pytest.raises(ValueError, match="no ESPN event id"):
+        _splits_with(ids=ids, yr=2025)
+
+
+def test_a_duplicated_crosswalk_row_raises():
+    ids = _espn_game_ids()
+    ids = pl.concat([ids, ids.head(1).with_columns(game_id=pl.lit(999, dtype=pl.Int64))])
+    with pytest.raises(pl.exceptions.ComputeError, match="m:1"):
+        _splits_with(ids=ids)
+
+
+def _write_crosswalk(root: Path, body: str | None) -> str:
+    d = root / "crosswalk"
+    d.mkdir()
+    if body is not None:
+        (d / "games.json").write_text(body)
+    return str(root)
+
+
 def test_load_espn_game_ids_reads_the_nfl_raw_crosswalk(tmp_path):
     from nfl_team_summaries.crosswalk import load_espn_game_ids
 
-    d = tmp_path / "crosswalk"
-    d.mkdir()
-    (d / "games.json").write_text(
+    root = _write_crosswalk(
+        tmp_path,
         '[{"espn_event_id": 401772500, "game_id": "2025_01_BUF_KC"},'
-        ' {"espn_event_id": 401772999, "game_id": null}]'
+        ' {"espn_event_id": 401772999, "game_id": null}]',
     )
-    ids = load_espn_game_ids(str(tmp_path))
+    ids = load_espn_game_ids(root)
     assert dict(ids.schema) == {"nflverse_game_id": pl.Utf8, "game_id": pl.Int64}
     assert ids.rows() == [("2025_01_BUF_KC", 401772500)]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        None,  # file absent
+        '{"games": [{"espn_event_id": 401772500, "game_id": "2025_01_BUF_KC"}]}',  # wrapped
+        "[]",  # empty
+    ],
+    ids=["missing", "wrapped", "empty"],
+)
+def test_load_espn_game_ids_refuses_an_unusable_crosswalk(tmp_path, body):
+    from nfl_team_summaries.crosswalk import load_espn_game_ids
+
+    with pytest.raises(ValueError, match="crosswalk/games.json"):
+        load_espn_game_ids(_write_crosswalk(tmp_path, body))
+
+
+@pytest.mark.parametrize("crosswalk_ok", [True, False], ids=["crosswalk_ok", "crosswalk_down"])
+def test_cli_publishes_the_seven_even_when_the_splits_fail(tmp_path, monkeypatch, crosswalk_ok):
+    """A crosswalk failure skips ONE tag and fails the run; the seven still publish."""
+    import nfl_model_publish.artifacts as artifacts
+    from nfl_team_summaries import __main__ as cli
+
+    _fake_pbp().write_parquet(tmp_path / "model_pbp_2025.parquet")
+    monkeypatch.setattr(
+        cli,
+        "prepare_plays",
+        lambda pbp, season, season_types: prepare_plays(
+            pbp, season, season_types=season_types, schedule_fn=_schedule
+        ),
+    )
+
+    def crosswalk():
+        if not crosswalk_ok:
+            raise ValueError("crosswalk/games.json is missing")
+        return _espn_game_ids()
+
+    monkeypatch.setattr(cli, "load_espn_game_ids", crosswalk)
+    uploaded: list[str] = []
+    monkeypatch.setattr(
+        artifacts,
+        "upload_artifacts",
+        lambda d, tag, repo, pattern, dry_run: uploaded.append(tag) or {"uploaded": 1},
+    )
+    out = tmp_path / "out"
+    rc = cli.main(["--seasons", "2025", "--pbp-dir", str(tmp_path), "--out", str(out), "--publish"])
+
+    seven = [tag for tag, _ in cli.TABLES.values()]
+    splits_file = out / cli.SPLITS[0] / f"{cli.SPLITS[1]}_2025.parquet"
+    for tag, stem in cli.TABLES.values():
+        assert (out / tag / f"{stem}_2025.parquet").exists(), tag
+    if crosswalk_ok:
+        assert rc == 0 and uploaded == [*seven, cli.SPLITS[0]] and splits_file.exists()
+    else:
+        assert rc == 1 and uploaded == seven and not splits_file.exists()

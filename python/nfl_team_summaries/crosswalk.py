@@ -67,12 +67,25 @@ def load_espn_game_ids(raw_dir: str | None = None) -> pl.DataFrame:
     :func:`nfl_espn_build.ingest.resolve_raw_root`). ESPN's library starts in 2002,
     so earlier nflverse games have no row. Columns: ``nflverse_game_id`` (Utf8),
     ``game_id`` (Int64, the ESPN event id).
+
+    Raises:
+        ValueError: if the file is absent, is not a list of games, or maps no
+            game -- an empty map would publish every ``game_id`` as null.
     """
     from nfl_espn_build.ingest import EspnStore, resolve_raw_root
 
-    rows = EspnStore(resolve_raw_root(raw_dir)).crosswalk_games()
+    root = resolve_raw_root(raw_dir)
+    rows = EspnStore(root).crosswalk_games()  # [] for a 404 or a non-list body
+    pairs = [
+        (r.get("game_id"), r.get("espn_event_id"))
+        for r in rows
+        if isinstance(r, dict) and r.get("game_id") and r.get("espn_event_id")
+    ]
+    if not pairs:
+        raise ValueError(
+            f"{root}/crosswalk/games.json is missing, not a list of games, or maps no "
+            "nflverse game_id to an espn_event_id"
+        )
     return pl.DataFrame(
-        [(r["game_id"], r["espn_event_id"]) for r in rows if r.get("game_id")],
-        schema={"nflverse_game_id": pl.Utf8, "game_id": pl.Int64},
-        orient="row",
+        pairs, schema={"nflverse_game_id": pl.Utf8, "game_id": pl.Int64}, orient="row"
     )

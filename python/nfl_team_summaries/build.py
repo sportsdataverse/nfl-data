@@ -15,8 +15,6 @@ denominator -- see ``_rank`` / ``_pct``.
 
 from __future__ import annotations
 
-import logging
-
 import numpy as np
 import polars as pl
 from sportsdataverse.cfb import cfb_adjusted_epa
@@ -25,8 +23,6 @@ from .checks import assert_adjustment_is_real, assert_finite, assert_passer_iden
 from .crosswalk import attach_team_ids, load_crosswalk
 from .league_averages import build_league_averages
 from .rbsdm import passer_extras, team_extras
-
-log = logging.getLogger(__name__)
 
 # Explosive-play EPA thresholds (shared with the college grid).
 _EXPLOSIVE_PASS_EPA = 2.4
@@ -841,6 +837,9 @@ def _prepare_for_write(df: pl.DataFrame, yr: int) -> pl.DataFrame:
 
 #: nflverse season_type -> ESPN's code, the one espn_nfl_* and the college table carry
 _SEASON_TYPE_CODE = {"PRE": 1, "REG": 2, "POST": 3}
+#: first season of ESPN's NFL library (nfl-raw ``nfl/espn/``): from here on every
+#: played game must carry an ESPN event id
+ESPN_FIRST_SEASON = 2002
 #: team_opponent_splits column order: the F7 contract, then the nflverse key
 SPLITS_COLUMNS = [
     "season",
@@ -859,19 +858,37 @@ SPLITS_COLUMNS = [
 ]
 
 
+def _team_off(plays: pl.DataFrame) -> pl.DataFrame:
+    """The scrimmage frame every offensive rate aggregates (EPA and success both known)."""
+    return plays.filter(pl.col("EPA").is_not_null() & pl.col("epa_success").is_not_null())
+
+
 def build_team_opponent_splits(
-    team_off: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int, espn_game_ids: pl.DataFrame
+    plays: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int, espn_game_ids: pl.DataFrame
 ) -> pl.DataFrame:
     """One row per team-game: the opponent, EPA/play, success rate and final points.
 
     ``epa_per_play`` / ``success_rate`` / ``plays`` aggregate the SAME scrimmage
-    frame the grid's ``EPAplay_off`` does, per ``(game_id, pos_team_id,
-    def_pos_team_id)``, so a team's plays-weighted mean over its games is its
-    season ``EPAplay_off``. Points are the final ``home_score`` / ``away_score``
-    nflfastR carries on every row of a game; both sides come from the raw frame,
-    so each game has exactly two rows. ``team_id`` / ``opponent_id`` are ESPN
-    ids; ``game_id`` is the ESPN event id from nfl-raw's crosswalk (null before
-    2002, where ESPN has no library), with ``nflverse_game_id`` alongside.
+    frame the grid's ``EPAplay_off`` does (:func:`_team_off`), per ``(game_id,
+    pos_team_id, def_pos_team_id)``, so a team's plays-weighted mean over its games
+    is its season ``EPAplay_off``. Points are the final ``home_score`` /
+    ``away_score`` nflfastR carries on every row of a game. A side with no
+    scrimmage play is dropped, which removes a game that was never played
+    (``2022_17_BUF_CIN``, the no-contest, carries only two placeholder rows and a
+    7-3 "score"). ``team_id`` / ``opponent_id`` are ESPN ids; ``game_id`` is the
+    ESPN event id from nfl-raw's crosswalk, with ``nflverse_game_id`` alongside.
+
+    Args:
+        plays: :func:`nfl_team_summaries.input.prepare_plays` output.
+        raw_pbp: the same season's ``model_pbp``, filtered to the same season types.
+        yr: season.
+        espn_game_ids: :func:`nfl_team_summaries.crosswalk.load_espn_game_ids`.
+
+    Raises:
+        ValueError: if a game's context is not unique, or if, from
+            :data:`ESPN_FIRST_SEASON` on, a played game has no ESPN event id --
+            a missing or stale crosswalk must fail, not publish null ids.
+            Earlier seasons have no ESPN library: their ``game_id`` is null.
     """
     games = raw_pbp.select(
         "game_id", "week", "season_type", "home_team", "away_team", "home_score", "away_score"
@@ -895,33 +912,40 @@ def build_team_opponent_splits(
     sides = pl.concat([side("home", "away", True), side("away", "home", False)])
     sides = attach_team_ids(attach_team_ids(sides, "team", "team"), "opponent", "opponent")
     sides = sides.with_columns(pl.col("team_id", "opponent_id").cast(pl.Int64))
-    per_game = team_off.group_by("game_id", "pos_team_id", "def_pos_team_id").agg(
-        epa_per_play=pl.col("EPA").mean(),
-        success_rate=pl.col("epa_success").mean(),
-        plays=pl.len().cast(pl.Int64),
-    )
-    per_game = per_game.select(
-        pl.col("game_id").alias("nflverse_game_id"),
-        pl.col("pos_team_id").cast(pl.Int64).alias("team_id"),
-        pl.col("def_pos_team_id").cast(pl.Int64).alias("opponent_id"),
-        "epa_per_play",
-        "success_rate",
-        "plays",
+    per_game = (
+        _team_off(plays)
+        .group_by("game_id", "pos_team_id", "def_pos_team_id")
+        .agg(
+            epa_per_play=pl.col("EPA").mean(),
+            success_rate=pl.col("epa_success").mean(),
+            plays=pl.len().cast(pl.Int64),
+        )
+        .select(
+            pl.col("game_id").alias("nflverse_game_id"),
+            pl.col("pos_team_id").cast(pl.Int64).alias("team_id"),
+            pl.col("def_pos_team_id").cast(pl.Int64).alias("opponent_id"),
+            "epa_per_play",
+            "success_rate",
+            "plays",
+        )
     )
     keys = ["nflverse_game_id", "team_id", "opponent_id"]
     for k in keys:
         assert sides.schema[k] == per_game.schema[k], (k, sides.schema[k], per_game.schema[k])
     assert sides.schema["nflverse_game_id"] == espn_game_ids.schema["nflverse_game_id"]
-    out = sides.join(per_game, on=keys, how="left").join(
-        espn_game_ids, on="nflverse_game_id", how="left"
+    # inner: a side that never took a snap is not a game played
+    out = sides.join(per_game, on=keys, how="inner", validate="1:1").join(
+        espn_game_ids, on="nflverse_game_id", how="left", validate="m:1"
     )
-    n_unmatched = out.filter(pl.col("game_id").is_null())["nflverse_game_id"].n_unique()
-    if n_unmatched:
-        log.warning("team_opponent_splits %s: %d game(s) have no ESPN event id", yr, n_unmatched)
+    unmatched = sorted(out.filter(pl.col("game_id").is_null())["nflverse_game_id"].unique())
+    if unmatched and yr >= ESPN_FIRST_SEASON:
+        raise ValueError(
+            f"team_opponent_splits {yr}: {len(unmatched)} played game(s) have no ESPN event id "
+            f"in nfl-raw's crosswalk (missing or stale?): {unmatched[:5]}"
+        )
     return (
         out.with_columns(
             season=pl.lit(int(yr), dtype=pl.Int64),
-            plays=pl.col("plays").fill_null(0),
             week=pl.col("week").cast(pl.Int64),
             season_type=pl.col("season_type").replace_strict(
                 _SEASON_TYPE_CODE, return_dtype=pl.Int64
@@ -933,9 +957,10 @@ def build_team_opponent_splits(
 
 
 def build_team_summaries(
-    plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int, *, espn_game_ids: pl.DataFrame
+    plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int
 ) -> dict[str, pl.DataFrame]:
-    """Build the eight tables.
+    """Build the seven tables (``team_opponent_splits`` is built on its own, see
+    :func:`build_team_opponent_splits`).
 
     Args:
         plays_input: :func:`nfl_team_summaries.input.prepare_plays` output.
@@ -943,11 +968,9 @@ def build_team_summaries(
             types -- the fourth-down and special-teams extras need plays the
             scrimmage frame drops.
         yr: season.
-        espn_game_ids: :func:`nfl_team_summaries.crosswalk.load_espn_game_ids`
-            (nflverse game id -> ESPN event id) for ``team_opponent_splits``.
     """
     plays = add_derived_metrics(plays_input)
-    team_off = plays.filter(pl.col("EPA").is_not_null() & pl.col("epa_success").is_not_null())
+    team_off = _team_off(plays)
 
     pctls = team_off.with_columns(
         GEI=(pl.col("wpa").abs().sum().over("game_id")) * (_GEI_NORM / pl.len().over("game_id"))
@@ -1033,8 +1056,5 @@ def build_team_summaries(
     }
     tables["league_averages"] = build_league_averages(
         {**tables, "team_game": per_game}, yr, levels=LEVELS, qualifiers=PLAYER_QUALIFIERS
-    )
-    tables["team_opponent_splits"] = build_team_opponent_splits(
-        team_off, raw_pbp, yr, espn_game_ids
     )
     return tables

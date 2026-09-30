@@ -230,7 +230,11 @@ game has two rows. It feeds the vs-opponent bars on team-season pages, and its
 columns match the college twin's `cfb_team_opponent_splits`. `epa_per_play`,
 `success_rate` and `plays` come from the same scrimmage frame as
 `team_summaries.EPAplay_off`: weight a team's rows by `plays` and you get its
-season `EPAplay_off` back. The points are the game's final score.
+season `EPAplay_off` back. The points are the game's final score. A game with
+no scrimmage snap has no rows: the 2022 BUF-CIN no-contest carries a 7-3
+"score" but was never played. From 2002 on, a played game with no ESPN event
+id in nfl-raw's crosswalk fails this table's build. The seven other tags
+still build and publish, and the run exits 1.
 
 | col_name | col_type | col_description |
 | --- | --- | --- |

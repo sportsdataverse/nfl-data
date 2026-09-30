@@ -7,6 +7,11 @@ Usage:
 
 Each table publishes to its own release tag on sportsdataverse-data, one
 parquet per season (``{stem}_{season}.parquet``), mirroring ``nfl_model_pbp``.
+
+``team_opponent_splits`` is built after the seven :data:`TABLES` and isolated
+from them: it also needs nfl-raw's ESPN crosswalk, and a crosswalk failure
+must not hold back a week of the other tags. If it fails for any season its
+tag is skipped, the seven still publish, and the run exits 1.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from pathlib import Path
 
 import polars as pl
 
-from nfl_team_summaries.build import build_team_summaries
+from nfl_team_summaries.build import build_team_opponent_splits, build_team_summaries
 from nfl_team_summaries.crosswalk import load_espn_game_ids
 from nfl_team_summaries.input import (
     DEFAULT_SEASON_TYPES,
@@ -40,9 +45,9 @@ TABLES = {
     # table is already a published contract the site reads.
     "player_percentiles": ("nfl_player_percentiles", "player_percentiles"),
     "league_averages": ("nfl_league_averages", "league_averages"),
-    # one row per team-game (regular season): opponent, EPA/play, success, points
-    "team_opponent_splits": ("nfl_team_opponent_splits", "team_opponent_splits"),
 }
+#: one row per team-game (regular season): opponent, EPA/play, success, points
+SPLITS = ("nfl_team_opponent_splits", "team_opponent_splits")
 
 
 def _parse_seasons(value: str) -> list[int]:
@@ -54,19 +59,13 @@ def _parse_seasons(value: str) -> list[int]:
     return [int(value)]
 
 
-def build_season(
-    season: int, *, pbp_dir: str | None, season_types=DEFAULT_SEASON_TYPES
-) -> dict[str, pl.DataFrame]:
-    pbp = load_model_pbp(season, pbp_dir)
-    plays = prepare_plays(pbp, season, season_types=season_types)
-    if plays.height == 0:
-        return {}
-    return build_team_summaries(
-        plays,
-        filter_season_types(pbp, season_types),
-        season,
-        espn_game_ids=load_espn_game_ids(),
-    )
+def _write(df: pl.DataFrame, out: Path, tag: str, stem: str, season: int) -> Path:
+    d = out / tag
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{stem}_{season}.parquet"
+    df.write_parquet(path)
+    logging.info("wrote %s (%d rows x %d cols)", path, df.height, df.width)
+    return path
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -102,30 +101,42 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(args.out)
     season_types = tuple(s.strip() for s in args.season_types.split(",") if s.strip())
     written: dict[str, list[Path]] = {k: [] for k in TABLES}
+    splits_written: list[Path] = []
+    splits_failed: list[int] = []
     for season in _parse_seasons(args.seasons):
-        tables = build_season(season, pbp_dir=args.pbp_dir, season_types=season_types)
-        if not tables:
+        pbp = load_model_pbp(season, args.pbp_dir)
+        plays = prepare_plays(pbp, season, season_types=season_types)
+        if plays.height == 0:
             logging.warning("season %s: no scrimmage plays; nothing written", season)
             continue
+        raw = filter_season_types(pbp, season_types)
+        tables = build_team_summaries(plays, raw, season)
         for key, (tag, stem) in TABLES.items():
-            df = tables[key]
-            d = out / tag
-            d.mkdir(parents=True, exist_ok=True)
-            path = d / f"{stem}_{season}.parquet"
-            df.write_parquet(path)
-            written[key].append(path)
-            logging.info("wrote %s (%d rows x %d cols)", path, df.height, df.width)
+            written[key].append(_write(tables[key], out, tag, stem, season))
+        try:
+            splits = build_team_opponent_splits(plays, raw, season, load_espn_game_ids())
+        except Exception:
+            logging.exception(
+                "season %s: team_opponent_splits failed; %s skipped", season, SPLITS[0]
+            )
+            splits_failed.append(season)
+        else:
+            splits_written.append(_write(splits, out, *SPLITS, season))
 
     if args.publish:
         from nfl_model_publish.artifacts import upload_artifacts
 
-        for key, (tag, stem) in TABLES.items():
-            if not written[key]:
-                continue
+        publish = [(tag, stem) for key, (tag, stem) in TABLES.items() if written[key]]
+        if splits_written and not splits_failed:
+            publish.append(SPLITS)
+        for tag, stem in publish:
             result = upload_artifacts(
                 out / tag, tag, REPO, pattern=f"{stem}_*.parquet", dry_run=args.dry_run
             )
             logging.info("published %d asset(s) to %s@%s", result["uploaded"], REPO, tag)
+    if splits_failed:
+        logging.error("%s NOT built for season(s) %s (see above)", SPLITS[0], splits_failed)
+        return 1
     return 0
 
 

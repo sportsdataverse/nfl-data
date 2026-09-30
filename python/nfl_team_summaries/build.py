@@ -398,8 +398,12 @@ def _mutate_summary_margins(df: pl.DataFrame, *, whole_team: bool = False) -> pl
     if whole_team:  # the overall pair only; field position is per drive (_drives_table)
         out = out.with_columns(
             explosive_margin=pl.col("explosive_off") - pl.col("explosive_def"),
+            # havoc rate created minus allowed (shares of plays): havoc is bad for an
+            # offense, so def - off, positive is good
+            havoc_margin=pl.col("havoc_def") - pl.col("havoc_off"),
         ).with_columns(
             explosive_margin_rank=_rank("explosive_margin", descending=True),
+            havoc_margin_rank=_rank("havoc_margin", descending=True),
         )
     return out
 

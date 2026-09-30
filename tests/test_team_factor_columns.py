@@ -64,18 +64,21 @@ def test_field_position_averages_drives_not_plays():
     assert kc["start_position_margin_rank"] == 1.0 and kc["drive_start_ep_margin_rank"] == 1.0
 
 
-def test_explosive_margin_is_whole_team_only():
+def test_whole_team_margins_explosive_and_havoc():
     # before 2026-09-29 the whole-team margins keyed off start_position_off, which the
     # splits dropped; field position left the per-play grid, so the flag is explicit now
+    bases = ("TEPA", "EPAplay", "EPAdrive", "EPAgame", "success", "yardsplay", "explosive")
     df = pl.DataFrame(
-        {
-            f"{b}_{s}": [0.5]
-            for b in ("TEPA", "EPAplay", "EPAdrive", "EPAgame", "success", "yardsplay", "explosive")
-            for s in ("off", "def")
-        }
+        {f"{b}_{s}": [0.5, 0.5] for b in bases for s in ("off", "def")}
+        | {"havoc_off": [0.10, 0.18], "havoc_def": [0.16, 0.12]}
     )
-    assert "explosive_margin" in _mutate_summary_margins(df, whole_team=True).columns
-    assert "explosive_margin" not in _mutate_summary_margins(df).columns
+    whole = _mutate_summary_margins(df, whole_team=True)
+    assert "explosive_margin" in whole.columns
+    # havoc rate created minus allowed: def - off, positive is good
+    assert whole["havoc_margin"].to_list() == pytest.approx([0.06, -0.06])
+    assert whole["havoc_margin_rank"].to_list() == [1.0, 2.0]
+    split = _mutate_summary_margins(df)
+    assert "explosive_margin" not in split.columns and "havoc_margin" not in split.columns
 
 
 # scrimmage snaps: (game, offense, defense, EPA, havoc, int, pass, pass breakup, fumble)

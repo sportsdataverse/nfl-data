@@ -17,15 +17,20 @@ import polars as pl
 import pytest
 from nfl_team_summaries import checks
 from nfl_team_summaries.build import (
+    MIN_COHORT_PLAYERS,
+    MIN_COHORT_TEAMS,
     PLAYER_PERCENTILE_METRICS,
     PLAYER_RANK_SPECS,
     QB_MIN_DROPBACKS_PER_GAME,
     QB_QUALIFIES,
     RB_QUALIFIES,
     WR_QUALIFIES,
+    _attach_cohort_percentiles,
     _attach_leader_ranks,
+    _attach_position_cohorts,
     _drives_table,
     _prepare_for_write,
+    _rank,
     _side_pair,
     _turnovers,
     add_derived_metrics,
@@ -318,11 +323,24 @@ def _schedule(seasons):
     )
 
 
+#: fixture player id suffix -> roster position (FB folds into RB; WR2 is a TE here)
+_ROSTER_POSITIONS = {"QB1": "QB", "RB1": "RB", "RB2": "FB", "WR1": "WR", "WR2": "TE"}
+
+
+def _roster() -> pl.DataFrame:
+    """A ``load_nfl_rosters``-shaped roster for the fixture's players, KC-WR2 left off."""
+    rows = [(f"{t}-{k}", v) for t in TEAMS for k, v in _ROSTER_POSITIONS.items()]
+    rows = [r for r in rows if r[0] != "KC-WR2"]
+    return pl.DataFrame(rows, schema=["gsis_id", "position"], orient="row")
+
+
 @pytest.fixture(scope="module")
 def tables():
     pbp = _fake_pbp()
     plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
-    return plays, build_team_summaries(plays, filter_season_types(pbp, ("REG",)), 2025)
+    return plays, build_team_summaries(
+        plays, filter_season_types(pbp, ("REG",)), 2025, rosters=_roster()
+    )
 
 
 @pytest.fixture(scope="module")
@@ -1308,3 +1326,114 @@ def test_turnover_luck_reconciles_through_the_whole_build(tables):
     # rank 1 is the luckiest: luck never rises as the rank number does
     by_rank = ts.sort("turnover_luck_rank")["turnover_luck"].to_list()
     assert all(a >= b - 1e-12 for a, b in zip(by_rank, by_rank[1:]))
+
+
+# --- cohort percentiles (F5): _conf_pct by AFC/NFC, _pos_pct by position group ---------
+
+
+def test_every_pct_has_pos_pct_and_every_team_rank_conf_pct(tables):
+    _, out = tables
+    ts = out["team_summaries"]
+    ranks = [c for c in ts.columns if c.endswith("_rank")]
+    assert any(c[: -len("_rank")] in RBSDM_RANKED for c in ranks)  # rbsdm ranks are in
+    for c in ranks:
+        assert f"{c[: -len('_rank')]}_conf_pct" in ts.columns, c
+    assert set(ts["conference"].to_list()) == {"AFC", "NFC"}
+    for name in ("passing", "rushing", "receiving"):
+        df = out[name]
+        for c in (c for c in df.columns if c.endswith("_rank")):
+            assert f"{c[: -len('_rank')]}_pos_pct" in df.columns, f"{name}.{c}"
+        assert df.schema["position_group"] == pl.Utf8
+
+
+def test_position_group_values_are_the_five_groups_or_null(tables):
+    _, out = tables
+    for name in ("passing", "rushing", "receiving"):
+        groups = set(out[name]["position_group"].to_list())
+        assert groups <= {"QB", "RB", "WR", "TE", "other", None}, name
+    rec = {r["player_id"]: r["position_group"] for r in out["receiving"].iter_rows(named=True)}
+    assert rec["BUF-WR2"] == "TE" and rec["KC-WR2"] is None  # off the roster
+    rush = {r["player_id"]: r["position_group"] for r in out["rushing"].iter_rows(named=True)}
+    assert rush["BUF-RB2"] == "RB"  # FB folds into RB
+
+
+def _league() -> pl.DataFrame:
+    """All 32 teams with their real conferences, one metric, league-wide ranks."""
+    xw = load_crosswalk().sort("nflverse_abbr")
+    rng = random.Random(11)
+    return pl.DataFrame(
+        {
+            "pos_team": xw["nflverse_abbr"],
+            "conference": xw["conference"],
+            "EPAplay_off": [rng.uniform(-0.2, 0.2) for _ in range(xw.height)],
+            "havoc_off": [rng.uniform(0.05, 0.25) for _ in range(xw.height)],
+        }
+    ).with_columns(
+        EPAplay_off_rank=_rank("EPAplay_off", descending=True),
+        havoc_off_rank=_rank("havoc_off", descending=False),  # low is good
+    )
+
+
+def test_conf_pct_is_weibull_within_each_conference():
+    out = _attach_cohort_percentiles(
+        _league(),
+        cohort="conference",
+        rank_cols=["EPAplay_off_rank", "havoc_off_rank"],
+        suffix="_conf_pct",
+        min_cohort=MIN_COHORT_TEAMS,
+    )
+    for conf in ("AFC", "NFC"):
+        c = out.filter(pl.col("conference") == conf)
+        assert c.height == 16 >= MIN_COHORT_TEAMS
+        for m in ("EPAplay_off", "havoc_off"):
+            # non-decreasing in 100 - rank order, and exactly Weibull over n = 16
+            pct = c.sort(100 - pl.col(f"{m}_rank"))[f"{m}_conf_pct"].to_list()
+            assert pct == sorted(pct), (conf, m)
+            assert pct == pytest.approx([100 * k / 17 for k in range(1, 17)]), (conf, m)
+
+
+def test_three_te_qualifiers_get_a_null_pos_pct():
+    wrs = [f"WR{i}" for i in range(11)]
+    tes = ["TE0", "TE1", "TE2"]
+    ids = wrs + tes
+    rng = random.Random(3)
+    rec = pl.DataFrame(
+        {
+            "pos_team_id": list(range(len(ids))),
+            "player_id": ids,
+            "plays": [40] * len(ids),
+            "EPAplay": [rng.uniform(-0.3, 0.6) for _ in ids],
+        }
+    )
+    rec = _attach_leader_ranks(
+        rec, keys=["pos_team_id", "player_id"], min_expr=pl.col("plays") >= 5, rank_cols=["EPAplay"]
+    )
+    roster = pl.DataFrame({"gsis_id": ids, "position": ["WR"] * 11 + ["TE"] * 3})
+    out = _attach_position_cohorts(rec, roster)
+
+    assert len(tes) < MIN_COHORT_PLAYERS <= len(wrs)
+    te = out.filter(pl.col("position_group") == "TE")
+    assert te.height == 3 and te["EPAplay_pos_pct"].null_count() == 3
+    wr = out.filter(pl.col("position_group") == "WR").sort("EPAplay")
+    assert wr["EPAplay_pos_pct"].to_list() == pytest.approx([100 * k / 12 for k in range(1, 12)])
+
+
+def test_a_roster_listed_twice_never_fans_out_a_row():
+    roster = pl.DataFrame(
+        {"gsis_id": ["a", "a", "b", "b", None], "position": ["QB", "QB", "QB", "WR", "TE"]}
+    )
+    out = _attach_position_cohorts(pl.DataFrame({"player_id": ["a", "b"]}), roster)
+    # same group twice counts once; two groups are ambiguous and stay null
+    assert out.sort("player_id")["position_group"].to_list() == ["QB", None]
+
+
+@pytest.mark.parametrize(
+    "roster_dtype,board_dtype", [(pl.Float64, pl.Utf8), (pl.Int64, pl.Float64)]
+)
+def test_a_float_id_raises_before_the_join(roster_dtype, board_dtype):
+    roster = pl.DataFrame({"gsis_id": [1, 2], "position": ["QB", "WR"]}).with_columns(
+        pl.col("gsis_id").cast(roster_dtype)
+    )
+    board = pl.DataFrame({"player_id": [1, 2]}).with_columns(pl.col("player_id").cast(board_dtype))
+    with pytest.raises(TypeError, match="never a float"):
+        _attach_position_cohorts(board, roster)

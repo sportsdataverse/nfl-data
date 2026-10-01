@@ -105,6 +105,7 @@ nfl-data/
 │   ├── nfl_data_04_rosters_players.py
 │   ├── nfl_data_05_ratings_weekly.py
 │   ├── nfl_data_06_team_summaries.py
+│   ├── nfl_data_07_metric_curves.py
 │   ├── nfl_model_01_ep.py
 │   ├── nfl_model_02_wp_spread.py
 │   └── … 9 more
@@ -292,6 +293,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_04_rosters_players.py`
 - `python/nfl_data_05_ratings_weekly.py`
 - `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles + league baselines (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`, `nfl_league_averages`, `nfl_team_opponent_splits`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
+- `python/nfl_data_07_metric_curves.py` — league / team / player rate curves along a continuous axis (`nfl_metric_curves`: FG% by kick distance, completion% and EPA by air-yards bucket, 4th-down conversion by yards to go, success by down × distance; sdv-py `metric_curves` over `nfl_model_pbp`, REG + POST). Team ids are the ESPN team id as in stage 06; player `entity_id` is the ESPN athlete id re-keyed from nflfastR through sdv-py's players master with `gsis_id` kept alongside (no match → `entity_id = gsis_id`, `id_source = "gsis"`). Unlike stage 06, `--publish` uploads only the season files the run wrote
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

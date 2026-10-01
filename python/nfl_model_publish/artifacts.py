@@ -25,6 +25,7 @@ GH_TIMEOUT_SECONDS = 300
 PKG_FUNCTION: dict[str, str] = {
     "nfl_4th_down_models": "python/nfl_model_publish/decision_models_artifacts.py",
     "nfl_espn_qbr": "sportsdataverse.nfl.load_nfl_espn_qbr()",
+    "nfl_metric_curves": "python/nfl_data_07_metric_curves.py",
     "nfl_model_artifacts": "python/nfl_model_publish/artifacts.py",
     "nfl_model_pbp": 'sportsdataverse.nfl.load_nfl_pbp(source="sdv")',
     "nfl_player_stats": 'sportsdataverse.nfl.load_nfl_player_stats(source="sdv")',
@@ -56,6 +57,18 @@ _RELEASE_BODY = {
         "SDV-native ESPN Total QBR -- qualified-passer leaderboard (season + week; "
         "ESPN fitt/v3 isqualified=true; values byte-match nflverse espn_data's "
         "qualified rows). Python-built."
+    ),
+    "nfl_metric_curves": (
+        "NFL rate curves along a continuous axis, one file per season: FG% by kick "
+        "distance, completion% and EPA by air-yards bucket, 4th-down conversion by "
+        "yards to go and success by down x distance, each bucket with attempts, "
+        "successes, rate and EPA per attempt, for the league, every team and every "
+        "credited kicker / passer (regular season + postseason). Built by stage 07 from "
+        "nfl_model_pbp, so it spans the same seasons; a season whose pbp carries no "
+        "air yards has no air-yards rows. Ids: team entity_id / team_id are the ESPN "
+        "team id; player entity_id is the ESPN athlete id re-keyed from nflfastR via the "
+        "players master, with gsis_id kept alongside -- a player with no ESPN match "
+        "keeps entity_id = gsis_id and id_source = gsis."
     ),
 }
 

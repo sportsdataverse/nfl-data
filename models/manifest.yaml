@@ -123,3 +123,8 @@ data_pipelines:
     wraps: nfl_team_summaries
     workflow: nfl_pbp_cron.yml
     release_tag: nfl_team_summaries (+ nfl_passing, nfl_rushing, nfl_receiving, nfl_percentiles, nfl_player_percentiles, nfl_league_averages, nfl_team_opponent_splits)
+  metric_curves:
+    stage: python/nfl_data_07_metric_curves.py
+    wraps: nfl_team_summaries.curves
+    workflow: nfl_pbp_cron.yml
+    release_tag: nfl_metric_curves

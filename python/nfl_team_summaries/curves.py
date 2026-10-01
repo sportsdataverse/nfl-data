@@ -78,7 +78,8 @@ def gsis_to_espn() -> pl.DataFrame:
     )
     if xw.height == 0:
         raise ValueError("players master has no gsis_id -> espn_id rows (load failed?)")
-    bad = xw.filter(~pl.col("espn_id").str.contains(r"^\d+$"))["espn_id"].head(5).to_list()
+    not_int = pl.col("espn_id").str.contains(r"^\d+$") == False  # noqa: E712 -- explicit mask, repo convention
+    bad = xw.filter(not_int)["espn_id"].head(5).to_list()
     if bad:
         raise ValueError(f"players master espn_id is not an integer string: {bad}")
     return xw
@@ -100,7 +101,8 @@ def build_metric_curves(
         the pbp yields no attempt.
     """
     curves = metric_curves(
-        nflfastr_attempts(pbp.select([c for c in NFLFASTR_ATTEMPT_COLUMNS if c in pbp.columns])),
+        # the model_pbp schema is uniform across seasons; a missing column fails here, at the boundary
+        nflfastr_attempts(pbp.select(NFLFASTR_ATTEMPT_COLUMNS)),
         "nfl",
     )
     if curves.height == 0:

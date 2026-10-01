@@ -135,6 +135,7 @@ jobs:
       # {cache}/{season}/*.json — the shape native_pbp expects).
       # Output parquets are written to nfl-data/python/out/model_pbp/.
       - name: Build model_pbp parquets
+        id: model_pbp
         working-directory: nfl-data/python
         run: |
           # Track B: fetch per-game JSON over HTTP (read-through cache, fail-soft)
@@ -186,6 +187,8 @@ jobs:
       # Same model_pbp parquets; publishes nfl_metric_curves. Uploads only the
       # season files this run wrote (never the whole --out directory).
       - name: Build + publish metric curves
+        # needs the model_pbp parquets, not stage 06: a stage-06 crosswalk failure must not skip the curves
+        if: ${{ !cancelled() && steps.model_pbp.outcome == 'success' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}

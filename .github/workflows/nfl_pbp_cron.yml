@@ -181,3 +181,18 @@ jobs:
             --pbp-dir out/model_pbp \
             --out out/nfl_team_summaries \
             --publish
+
+      # ── 13. Metric curves (FG% by distance, cmp%/EPA by air yards, 4th-down, down x distance) ──
+      # Same model_pbp parquets; publishes nfl_metric_curves. Uploads only the
+      # season files this run wrote (never the whole --out directory).
+      - name: Build + publish metric curves
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+          SEASONS: ${{ steps.seasons.outputs.seasons }}
+        run: |
+          uv run --no-sync python -m nfl_data_07_metric_curves \
+            --seasons "$SEASONS" \
+            --pbp-dir out/model_pbp \
+            --out out/nfl_metric_curves \
+            --publish

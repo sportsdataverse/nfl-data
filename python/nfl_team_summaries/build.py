@@ -832,6 +832,90 @@ def _attach_leader_ranks(
     return data.join(out, on=keys, how="left")
 
 
+#: Cohort floors, as in the college twin (owner decision D-F5, 2026-09-26): a
+#: conference or position group with fewer rows that have the metric gets a null
+#: cohort percentile, not a percentile of two.
+MIN_COHORT_TEAMS = 5
+MIN_COHORT_PLAYERS = 10
+
+#: roster ``position`` -> ``position_group``; any other listed position is ``other``
+_POSITION_GROUPS = {"QB": "QB", "RB": "RB", "FB": "RB", "WR": "WR", "TE": "TE"}
+
+
+def _attach_cohort_percentiles(
+    df: pl.DataFrame, *, cohort: str, rank_cols: list[str], suffix: str, min_cohort: int
+) -> pl.DataFrame:
+    """Add ``<m>{suffix}``, the Weibull percentile of each ``<m>_rank`` within ``cohort``.
+
+    The college twin's formula. The cohort rank ``r`` is the rank of ``<m>_rank``
+    ascending within the cohort, over the rows whose ``<m>`` and ``<m>_rank`` are
+    both non-null (a null ``_rank`` is a non-qualifier or an unranked rbsdm extra;
+    a null ``<m>`` carries R's trailing na.last rank, which is not a placing).
+    ``_rank`` already encodes direction, so ascending is best-first. Ties take
+    ``_rank``'s own ``average`` method. The value is ``100 * (n + 1 - r) / (n + 1)``
+    with ``n`` those rows in the cohort, and null when ``<m>`` or the cohort key is
+    null or ``n < min_cohort``.
+    """
+    exprs = []
+    for rc in rank_cols:
+        m = rc.removesuffix("_rank")
+        has = pl.col(m).is_not_null() & pl.col(rc).is_not_null() & pl.col(cohort).is_not_null()
+        n = has.sum().over(cohort)
+        r = pl.when(has).then(pl.col(rc)).rank(method="average").over(cohort)
+        exprs.append(
+            pl.when(has & (n >= min_cohort))
+            .then(100 * (n + 1 - r) / (n + 1))
+            .cast(pl.Float64)
+            .alias(f"{m}{suffix}")
+        )
+    return df.with_columns(exprs)
+
+
+def _attach_position_cohorts(df: pl.DataFrame, rosters: pl.DataFrame | None) -> pl.DataFrame:
+    """Join the roster ``position_group`` onto a player table, then its ``_pos_pct``.
+
+    ``rosters`` is the season's ``load_nfl_rosters`` frame (``gsis_id``,
+    ``position``); None or empty leaves ``position_group`` null. A player listed
+    twice under one group counts once; one listed under two different groups is
+    ambiguous and stays null. ``gsis_id`` is pinned to the leaderboard ``player_id``
+    dtype by an integer or string parse; a float on either side raises rather than
+    joining through ``"123.0"``.
+    """
+    key = df.schema["player_id"]
+    if rosters is None or rosters.is_empty():
+        df = df.with_columns(position_group=pl.lit(None, dtype=pl.Utf8))
+    else:
+        src = rosters.schema["gsis_id"]
+        if not all(d.is_integer() or d == pl.Utf8 for d in (src, key)):
+            raise TypeError(
+                f"roster gsis_id is {src}, leaderboard player_id is {key}: "
+                "ids join through an integer or string parse, never a float"
+            )
+        pos = pl.col("position")
+        groups = (
+            rosters.select(
+                player_id=pl.col("gsis_id").cast(key),
+                position_group=pl.when(pos.is_not_null()).then(
+                    pos.replace_strict(_POSITION_GROUPS, default="other")
+                ),
+            )
+            .drop_nulls()
+            .unique()
+            .filter(pl.col("player_id").is_unique())
+        )
+        assert df.schema["player_id"] == groups.schema["player_id"], (
+            f"player_id {df.schema['player_id']} != roster {groups.schema['player_id']}"
+        )
+        df = df.join(groups, on="player_id", how="left", validate="m:1")
+    return _attach_cohort_percentiles(
+        df,
+        cohort="position_group",
+        rank_cols=[c for c in df.columns if c.endswith("_rank")],
+        suffix="_pos_pct",
+        min_cohort=MIN_COHORT_PLAYERS,
+    )
+
+
 def per_game_metrics(df: pl.DataFrame) -> pl.DataFrame:
     """One row per (game_id, pos_team): the team-game metrics both the percentile
     ladder and the ``team_game`` league baselines are cut over.
@@ -1098,7 +1182,11 @@ def build_team_opponent_splits(
 
 
 def build_team_summaries(
-    plays_input: pl.DataFrame, raw_pbp: pl.DataFrame, yr: int
+    plays_input: pl.DataFrame,
+    raw_pbp: pl.DataFrame,
+    yr: int,
+    *,
+    rosters: pl.DataFrame | None = None,
 ) -> dict[str, pl.DataFrame]:
     """Build the seven tables (``team_opponent_splits`` is built on its own, see
     :func:`build_team_opponent_splits`).
@@ -1109,6 +1197,8 @@ def build_team_summaries(
             types -- the fourth-down and special-teams extras need plays the
             scrimmage frame drops.
         yr: season.
+        rosters: the season's ``load_nfl_rosters`` frame the player tables'
+            ``position_group`` comes from (``None`` leaves it and ``_pos_pct`` null).
     """
     plays = add_derived_metrics(plays_input)
     team_off = _team_off(plays)
@@ -1187,14 +1277,30 @@ def build_team_summaries(
         label=f"team_summaries {yr}",
     )
     assert_passer_identity(qb, label=str(yr))
+    # grid + rbsdm ranks alike, cohort AFC / NFC
+    team_out = _attach_cohort_percentiles(
+        team_out,
+        cohort="conference",
+        rank_cols=[c for c in team_out.columns if c.endswith("_rank")],
+        suffix="_conf_pct",
+        min_cohort=MIN_COHORT_TEAMS,
+    )
+    players = {
+        name: _attach_position_cohorts(
+            _prepare_for_write(df, yr).rename({id_col: "player_id"}), rosters
+        )
+        for name, df, id_col in (
+            ("passing", qb, "passer_player_id"),
+            ("rushing", rb, "rusher_player_id"),
+            ("receiving", wr, "receiver_player_id"),
+        )
+    }
 
     tables = {
         "percentiles": percentiles,
         "player_percentiles": player_percentiles,
         "team_summaries": team_out,
-        "passing": _prepare_for_write(qb, yr).rename({"passer_player_id": "player_id"}),
-        "rushing": _prepare_for_write(rb, yr).rename({"rusher_player_id": "player_id"}),
-        "receiving": _prepare_for_write(wr, yr).rename({"receiver_player_id": "player_id"}),
+        **players,
     }
     tables["league_averages"] = build_league_averages(
         {**tables, "team_game": per_game}, yr, levels=LEVELS, qualifiers=PLAYER_QUALIFIERS

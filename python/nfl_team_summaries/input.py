@@ -50,6 +50,15 @@ def load_model_pbp(season: int, source_dir: Optional[str | Path] = None) -> pl.D
     return pl.read_parquet(io.BytesIO(resp.content))
 
 
+def load_rosters(season: int) -> pl.DataFrame:
+    """The season's nflverse roster (``gsis_id``, ``position``): the player tables'
+    ``position_group`` source. A download failure raises, so a build never
+    publishes a ``_pos_pct`` nulled by a network blip."""
+    from sportsdataverse.nfl import load_nfl_rosters
+
+    return load_nfl_rosters(seasons=[season])
+
+
 def _flag(col: str) -> pl.Expr:
     return pl.col(col).fill_null(0).cast(pl.Int64)
 

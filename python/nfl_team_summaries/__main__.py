@@ -29,6 +29,7 @@ from nfl_team_summaries.input import (
     DEFAULT_SEASON_TYPES,
     filter_season_types,
     load_model_pbp,
+    load_rosters,
     prepare_plays,
 )
 
@@ -110,7 +111,7 @@ def main(argv: list[str] | None = None) -> int:
             logging.warning("season %s: no scrimmage plays; nothing written", season)
             continue
         raw = filter_season_types(pbp, season_types)
-        tables = build_team_summaries(plays, raw, season)
+        tables = build_team_summaries(plays, raw, season, rosters=load_rosters(season))
         for key, (tag, stem) in TABLES.items():
             written[key].append(_write(tables[key], out, tag, stem, season))
         try:

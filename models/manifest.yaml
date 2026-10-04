@@ -128,3 +128,8 @@ data_pipelines:
     wraps: nfl_team_summaries.curves
     workflow: nfl_pbp_cron.yml
     release_tag: nfl_metric_curves
+  defense_vs_position:
+    stage: python/nfl_data_08_defense_vs_position.py
+    wraps: nfl_team_summaries.defense_vs_position
+    workflow: nfl_pbp_cron.yml
+    release_tag: nfl_defense_vs_position

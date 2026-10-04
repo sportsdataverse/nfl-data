@@ -215,14 +215,52 @@ carries the thresholds behind them. Five things a reader will otherwise get wron
    Expected, not a bug.
 
 `nfl_player_percentiles` (release tag of the same name, one file per season) is
-the player twin of `nfl_percentiles`: 297 rows × 27 columns — `position_group`
+the player twin of `nfl_percentiles`: 297 rows × 29 columns — `position_group`
 (`passing` / `rushing` / `receiving`) × `pctile` (0.01 … 0.99), one Float64
 column per ranked metric (the union of the three tables' metrics; a metric a
 group does not rank is null there), plus `season`. Direction is handled in the
-table: for a **low-is-good** metric (`pass_int`, `sacked`, `fumbles`) the row at
-`pctile = 0.90` holds the value a player with `{metric}_pct = 90` actually has —
-a LOW count — so a bar drawn from these thresholds agrees with the player's own
-`_pct` instead of contradicting it.
+table: for a **low-is-good** metric (`pass_int`, `sacked`, `fumbles`,
+`stuff_rate`) the row at `pctile = 0.90` holds the value a player with
+`{metric}_pct = 90` actually has — a LOW count — so a bar drawn from these
+thresholds agrees with the player's own `_pct` instead of contradicting it.
+
+## Player dispersion and rushing tiers
+
+`nfl_passing` / `nfl_rushing` / `nfl_receiving` carry the spread of a player's
+per-game EPA/play, and `nfl_rushing` the yardage tiers of his carries. The
+definitions, thresholds, names and null rules are the college twin's
+(`espn_cfb_passing` / `espn_cfb_rushing` / `espn_cfb_receiving`), so the two
+leagues read alike.
+
+A game's EPA/play is its EPA sum over the plays the table credits the player
+with, divided by those plays: a passer's dropbacks (throws and sacks, the plays
+`TEPA` and `dropbacks` sum), a rusher's carries, a receiver's targets.
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| dispersion_games | Int64 | Games with at least one such play: the n behind the five columns below (equal to `games` in this league). |
+| EPAplay_sd | Float64 | Population sd of the per-game EPA/play. Null under 3 games. |
+| EPAplay_p10, EPAplay_p90 | Float64 | Floor and ceiling: 10th / 90th percentile of the per-game EPA/play (linear interpolation, R type 7). Null under 3 games. |
+| boom_rate, bust_rate | Float64 | Share of the player's games more than one sd above / below his own per-game mean (the unweighted mean of those games, not the play-weighted `EPAplay`). Strict, so a player whose games are all equal is neither. Null under 3 games. |
+
+`nfl_rushing` only:
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| line_yards_share, second_level_share, open_field_share | Float64 | Share of carries that gained 4 or fewer yards (losses included), 5-10, and 11 or more: Football Outsiders' line / second-level / open-field cut-points. The three sum to 1. |
+| stuff_rate | Float64 | Share of carries for 0 or fewer yards. |
+| EPAplay_one_score, EPAplay_not_one_score | Float64 | EPA per carry with the score within 8 points at the snap, and otherwise. Null with no such carries. |
+| EPAplay_one_score_n, EPAplay_not_one_score_n | Int64 | Carries behind each side of the split. |
+
+Only `boom_rate` (every table) and `stuff_rate` (low is good) are leaderboard
+metrics: each has its `_rank`, `_pct` and `_pos_pct` and a threshold column in
+`nfl_player_percentiles`. The other columns are descriptive and carry none.
+`dispersion_games` is a count, so `nfl_league_averages` has no row for it.
+
+Where this league's play-by-play names differ from the college frame's: a
+carry's yards are `rushing_yards` (the `yards` the table already sums), and the
+margin at the snap is nflfastR's `score_differential`, the offense's score minus
+the defense's before the play.
 
 ## Team opponent splits
 

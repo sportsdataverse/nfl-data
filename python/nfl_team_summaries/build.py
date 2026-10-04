@@ -112,7 +112,9 @@ PERCENTILE_METRICS: list[str] = [
 
 #: table -> (ranked metrics, the subset ranked LOW-is-good). Every entry gets a
 #: ``{metric}_rank`` and a ``{metric}_pct`` on the player table and a threshold
-#: column in ``player_percentiles``.
+#: column in ``player_percentiles``. Of the TFD-5d columns only ``boom_rate`` and
+#: ``stuff_rate`` are leaderboard metrics; the sd, floor, ceiling, bust rate, tier
+#: shares and one-score split are descriptive and stay unranked.
 PLAYER_RANK_SPECS: dict[str, tuple[list[str], list[str]]] = {
     "passing": (
         [
@@ -134,6 +136,7 @@ PLAYER_RANK_SPECS: dict[str, tuple[list[str], list[str]]] = {
             "cpoe",
             "qb_epa_play",
             "epa_cpoe_composite",
+            "boom_rate",
         ],
         ["pass_int", "sacked"],
     ),
@@ -149,8 +152,10 @@ PLAYER_RANK_SPECS: dict[str, tuple[list[str], list[str]]] = {
             "fumbles",
             "yardsplay",
             "yardsgame",
+            "boom_rate",
+            "stuff_rate",
         ],
-        ["fumbles"],
+        ["fumbles", "stuff_rate"],
     ),
     "receiving": (
         [
@@ -166,6 +171,7 @@ PLAYER_RANK_SPECS: dict[str, tuple[list[str], list[str]]] = {
             "fumbles",
             "yardsplay",
             "yardsgame",
+            "boom_rate",
         ],
         ["fumbles"],
     ),
@@ -762,6 +768,92 @@ def summarize_receiver(df: pl.DataFrame) -> pl.DataFrame:
     return _per_game_rates(g)
 
 
+#: below this many games with a play, every dispersion column is null: a spread, a
+#: floor and a ceiling over one or two games describe those games, not the player
+DISPERSION_MIN_GAMES = 3
+_DISPERSION_COLS = ("EPAplay_sd", "EPAplay_p10", "EPAplay_p90", "boom_rate", "bust_rate")
+
+
+def player_dispersion(rows: pl.DataFrame, keys: list[str]) -> pl.DataFrame:
+    """Spread of a player's per-game EPA/play, one row per ``keys`` (the college twin's).
+
+    ``rows`` is one row per play the player's table credits him with (the table's
+    own play filter), carrying ``keys``, ``game_id`` and ``EPA``. A game's EPA/play
+    is ``sum(EPA) / plays``, the form of the published ``EPAplay``, taken over every
+    game with at least one such play (``dispersion_games``). Over those games:
+
+    * ``EPAplay_sd``: population sd (ddof=0);
+    * ``EPAplay_p10`` / ``EPAplay_p90``: floor and ceiling, linear interpolation
+      (R type 7, the method :func:`_quantiles` uses);
+    * ``boom_rate`` / ``bust_rate``: the share of games MORE than one sd above /
+      below the player's own per-game mean. That mean is the unweighted mean of
+      the games, the centre the sd is taken around, not the play-weighted
+      ``EPAplay``. Strict, so a player whose games are all equal (sd 0) is neither
+      rather than both.
+
+    All five are null when ``dispersion_games < DISPERSION_MIN_GAMES``.
+
+    The games are SORTED before they are reduced (as ``league_averages.summarize``
+    does): the per-game frame leaves its group_by in no fixed order and float sums
+    are not associative, so an unsorted mean / sd moves the last bit between two
+    identical builds (every rerun of the 2025 rushers did).
+    """
+    x = pl.col("game_epa").sort()
+    mean, sd = x.mean(), x.std(ddof=0)
+    out = (
+        rows.group_by([*keys, "game_id"])
+        .agg(game_epa=pl.col("EPA").sum() / pl.len())
+        .group_by(keys)
+        .agg(
+            dispersion_games=pl.len().cast(pl.Int64),
+            EPAplay_sd=sd,
+            EPAplay_p10=x.quantile(0.1, interpolation="linear"),
+            EPAplay_p90=x.quantile(0.9, interpolation="linear"),
+            boom_rate=(x > mean + sd).mean(),
+            bust_rate=(x < mean - sd).mean(),
+        )
+    )
+    enough = pl.col("dispersion_games") >= DISPERSION_MIN_GAMES
+    return out.with_columns([pl.when(enough).then(pl.col(c)).alias(c) for c in _DISPERSION_COLS])
+
+
+#: Football Outsiders' cut-points on a carry's own yards (``yds_rushed``): the line
+#: takes 4 or fewer, losses included; the second level 5-10; the open field 11 or
+#: more. The same cuts ``line_yards`` / ``second_level_yards`` / ``open_field_yards``
+#: split on in add_derived_metrics.
+_LINE_MAX_YARDS = 4
+_SECOND_LEVEL_MAX_YARDS = 10
+#: a one-score margin: a touchdown and a two-point try (the college twin's constant,
+#: and the ``one_score_game`` margin in nfl_espn_build.tendencies)
+ONE_SCORE_MARGIN = 8
+
+
+def rusher_tiers(rows: pl.DataFrame, keys: list[str]) -> pl.DataFrame:
+    """Per-rusher yardage tiers, stuff rate and one-score split, one row per ``keys``.
+
+    The three tier shares and ``stuff_rate`` (carries for 0 or fewer yards) are over
+    carries with a ``yds_rushed`` (a missing value is not a 0; every carry had one in
+    1999, 2001, 2024 and 2025), so the shares sum to 1. ``EPAplay_one_score`` is EPA
+    per carry with the score within ``ONE_SCORE_MARGIN`` at the snap
+    (``pos_score_diff_start``, the offense's margin before the play) and
+    ``EPAplay_not_one_score`` the rest. Each has its ``_n`` carries; with none the
+    rate is null.
+    """
+    y = pl.col("yds_rushed")
+    close = pl.col("pos_score_diff_start").abs() <= ONE_SCORE_MARGIN
+    epa = pl.col("EPA")
+    return rows.group_by(keys).agg(
+        line_yards_share=(y <= _LINE_MAX_YARDS).mean(),
+        second_level_share=((y > _LINE_MAX_YARDS) & (y <= _SECOND_LEVEL_MAX_YARDS)).mean(),
+        open_field_share=(y > _SECOND_LEVEL_MAX_YARDS).mean(),
+        stuff_rate=(y <= 0).mean(),
+        EPAplay_one_score=epa.filter(close).mean(),
+        EPAplay_one_score_n=close.sum().cast(pl.Int64),
+        EPAplay_not_one_score=epa.filter(~close).mean(),
+        EPAplay_not_one_score_n=(~close).sum().cast(pl.Int64),
+    )
+
+
 _PER_GAME_N = {m: pl.col("games") for m in ("EPAgame", "yardsgame", "playsgame")}
 #: player rate -> the count it is a rate over (transcribed from summarize_* above)
 PLAYER_SAMPLE_SIZES: dict[str, dict[str, pl.Expr]] = {
@@ -1221,34 +1313,36 @@ def build_team_summaries(
         .pipe(_add_turnover_luck)
     )
 
-    # leaderboards
-    qb = summarize_passer(
-        team_off.filter((pl.col("pass") == 1) & pl.col("passer_player_id").is_not_null()).pipe(
-            _add_team_games
-        )
-    )
-    qb = passer_extras(qb, team_off, min_expr=QB_QUALIFIES)
-    qb = _attach_leader_ranks(
-        qb, keys=["pos_team_id", "passer_player_id"], min_expr=QB_QUALIFIES, spec="passing"
-    )
+    # leaderboards. Each table's per-game dispersion is cut over the rows its summary
+    # reads: the passer's dropbacks (throws and sacks, the plays TEPA sums), carries,
+    # targets
+    qb_keys = ["pos_team_id", "passer_player_id"]
+    qb_rows = team_off.filter(
+        (pl.col("pass") == 1) & pl.col("passer_player_id").is_not_null()
+    ).pipe(_add_team_games)
+    qb = passer_extras(summarize_passer(qb_rows), team_off, min_expr=QB_QUALIFIES)
+    qb = qb.join(player_dispersion(qb_rows, qb_keys), on=qb_keys, how="left", validate="1:1")
+    qb = _attach_leader_ranks(qb, keys=qb_keys, min_expr=QB_QUALIFIES, spec="passing")
     qb = _attach_sample_sizes(qb, PLAYER_SAMPLE_SIZES["passing"])
-    rb = summarize_rusher(
-        team_off.filter((pl.col("rush") == 1) & pl.col("rusher_player_id").is_not_null()).pipe(
-            _add_team_games
-        )
+    rb_keys = ["pos_team_id", "rusher_player_id"]
+    rb_rows = team_off.filter(
+        (pl.col("rush") == 1) & pl.col("rusher_player_id").is_not_null()
+    ).pipe(_add_team_games)
+    rb = (
+        summarize_rusher(rb_rows)
+        .join(player_dispersion(rb_rows, rb_keys), on=rb_keys, how="left", validate="1:1")
+        .join(rusher_tiers(rb_rows, rb_keys), on=rb_keys, how="left", validate="1:1")
     )
-    rb = _attach_leader_ranks(
-        rb, keys=["pos_team_id", "rusher_player_id"], min_expr=RB_QUALIFIES, spec="rushing"
-    )
+    rb = _attach_leader_ranks(rb, keys=rb_keys, min_expr=RB_QUALIFIES, spec="rushing")
     rb = _attach_sample_sizes(rb, PLAYER_SAMPLE_SIZES["rushing"])
-    wr = summarize_receiver(
-        team_off.filter(
-            (pl.col("pass_attempt") == 1) & pl.col("receiver_player_id").is_not_null()
-        ).pipe(_add_team_games)
+    wr_keys = ["pos_team_id", "receiver_player_id"]
+    wr_rows = team_off.filter(
+        (pl.col("pass_attempt") == 1) & pl.col("receiver_player_id").is_not_null()
+    ).pipe(_add_team_games)
+    wr = summarize_receiver(wr_rows).join(
+        player_dispersion(wr_rows, wr_keys), on=wr_keys, how="left", validate="1:1"
     )
-    wr = _attach_leader_ranks(
-        wr, keys=["pos_team_id", "receiver_player_id"], min_expr=WR_QUALIFIES, spec="receiving"
-    )
+    wr = _attach_leader_ranks(wr, keys=wr_keys, min_expr=WR_QUALIFIES, spec="receiving")
     wr = _attach_sample_sizes(wr, PLAYER_SAMPLE_SIZES["receiving"])
     # thresholds over exactly the frames that were ranked above
     player_percentiles = prepare_player_percentiles(

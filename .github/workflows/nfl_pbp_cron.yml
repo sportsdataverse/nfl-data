@@ -199,3 +199,20 @@ jobs:
             --pbp-dir out/model_pbp \
             --out out/nfl_metric_curves \
             --publish
+
+      # ── 14. Defense vs position (what each defense allowed to QB / RB / WR / TE) ──
+      # Same model_pbp parquets plus the season roster; publishes
+      # nfl_defense_vs_position. Uploads only the season files this run wrote.
+      - name: Build + publish defense vs position
+        # needs the model_pbp parquets only, like the curves: a stage-06 or curves failure must not skip it
+        if: ${{ !cancelled() && steps.model_pbp.outcome == 'success' }}
+        working-directory: nfl-data/python
+        env:
+          GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
+          SEASONS: ${{ steps.seasons.outputs.seasons }}
+        run: |
+          uv run --no-sync python -m nfl_data_08_defense_vs_position \
+            --seasons "$SEASONS" \
+            --pbp-dir out/model_pbp \
+            --out out/nfl_defense_vs_position \
+            --publish

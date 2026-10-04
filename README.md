@@ -106,6 +106,7 @@ nfl-data/
 │   ├── nfl_data_05_ratings_weekly.py
 │   ├── nfl_data_06_team_summaries.py
 │   ├── nfl_data_07_metric_curves.py
+│   ├── nfl_data_08_defense_vs_position.py
 │   ├── nfl_model_01_ep.py
 │   ├── nfl_model_02_wp_spread.py
 │   └── … 9 more
@@ -314,6 +315,90 @@ split in a single-tier league):
 | n | Int64 | Count of finite, qualifying rows the statistics are computed over — **the same denominator as the matching `{metric}_pct` column**, since a baseline is never taken over a different population than the percentile beside it. A null or non-finite metric value is skipped and does not count toward `n`. |
 | qualifier_min | Float64 | The per-team-game leaderboard gate applied before summarizing a player category (14.0 dropbacks for `passing`, 6.25 carries for `rushing`, 1.875 targets for `receiving`); **null on the team categories** (`team_summaries`, `team_game`), which have no qualifier. |
 
+## Defense vs position
+
+`nfl_defense_vs_position` is one row per `(season, team_id, position_group)` for the
+DEFENSE: what it allowed to quarterbacks, running backs (RB + FB), wide receivers and
+tight ends. It is the NFL twin of the college `cfb_defense_vs_position`. Stage 08 passes
+sdv-py's `defense_vs_position(pbp, rosters, "nfl")` through unchanged over one season of
+`nfl_model_pbp`, regular season and postseason (stage 07's population; stage 06's
+tables are regular season only). Position groups come from the nflverse season roster
+(`load_nfl_rosters`, the roster stage 06 reads), matched on the gsis id.
+
+Every dropback (pass attempt, sack or scramble) is a QB play. A carry goes to the
+rusher's roster group and a target to the receiver's, so a completion to a tight end
+counts once for QB and once for TE. A carrier or receiver with no roster row, another
+position, or two different groups in the season counts in no group.
+
+The table starts in 1999, the first `nfl_model_pbp` season (31 teams until 2002). The
+roster is not what sets that floor: in every season 1999–2025 at least 99.8% of carries
+and of named targets join a roster position. An earlier season is not built and no
+empty file is written.
+
+**Percentiles.** Each rate has a `_pct`: its percentile among the defenses with 3+
+games in that position group (`qualified`), within the season, over the whole league.
+It is the F5 cohort helper's Weibull position, `100 * (n + 1 - rank) / (n + 1)`, and
+it always reads the same way: **higher is the better defense**.
+
+| metric | better defense | a high `_pct` means |
+| --- | --- | --- |
+| `epa_per_play_allowed` | lower | allowed less EPA per play |
+| `success_rate_allowed` | lower | allowed fewer successes |
+| `explosive_rate_allowed` | lower | allowed fewer explosives |
+| `rush_yards_per_carry_allowed` (RB) | lower | allowed fewer yards per carry |
+| `yards_per_target_allowed` (WR, TE) | lower | allowed fewer yards per target |
+| `sack_rate_allowed` (QB) | **higher** | sacked the quarterback more often |
+
+A non-qualifier, a null metric and a position group with fewer than 5 qualifiers get a
+null `_pct`, so in the current season every `_pct` is null until five defenses have
+played three games.
+
+**Targets that name no receiver.** A throw with no receiver id reaches the QB row and no
+WR or TE row, so the WR and TE rates are on targets naming a receiver.
+`unattributed_target_share` says how many throws that leaves out, per defense-season.
+Measured on the released seasons (2026-10-04):
+
+| seasons | league share | what is missing |
+| --- | --- | --- |
+| 2009–2025 | 1–4% (2024: 4.1%, defenses 2.4–6.1%; 2025: 4.4%, defenses 2.8–6.3%) | throwaways, a handful of interceptions |
+| 1999–2001 | 2–4% | some incompletions and interceptions |
+| 2002 | 9% | the same, more of them |
+| 2003–2008 | 38–41% (defenses 29–50%) | **every** incompletion and interception |
+
+In 2003–2008 the play-by-play carries no receiver id on an incomplete or intercepted
+pass, so a WR or TE row of those six seasons is completions only: its success rate and
+yards per target read high. Compare those rows within their own season, where every
+defense is measured the same way. Nothing is imputed.
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| season | Int64 | Season year (e.g. 2025). |
+| team_id | Int64 | ESPN team id of the defense (vendored crosswalk), the key stage 06's tables carry. |
+| pos_team | Utf8 | nflverse abbreviation of the defense (current franchise, e.g. `LV` in 1999). |
+| team_name | Utf8 | Team name. |
+| division | Utf8 | Division (e.g. `AFC West`). |
+| conference | Utf8 | `AFC` or `NFC`. |
+| position_group | Utf8 | `QB`, `RB` (RB + FB), `WR` or `TE`: the offensive group the row is about. |
+| plays | Int64 | Scrimmage plays on a numbered down counted for the group. |
+| games | Int64 | Games with at least one of those plays. |
+| epa_per_play_allowed | Float64 | Mean EPA of those plays. |
+| success_rate_allowed | Float64 | Share of those plays with EPA > 0. |
+| explosive_rate_allowed | Float64 | Share that are explosive: a dropback with EPA >= 2.4 or a carry with EPA >= 1.8. |
+| dropbacks | Int64 | Dropbacks faced (pass attempts, sacks, scrambles). QB rows only. |
+| sack_rate_allowed | Float64 | Sacks per dropback: the rate at which the defense got sacks. QB rows only. |
+| carries | Int64 | Carries by the group. RB rows only. |
+| rush_yards_per_carry_allowed | Float64 | Rushing yards per carry. RB rows only. |
+| targets | Int64 | Targets naming a receiver of the group. WR and TE rows only. |
+| yards_per_target_allowed | Float64 | Receiving yards per target naming a receiver (0 on an incompletion or interception). WR and TE rows only. |
+| qualified | Boolean | `games >= 3`. Only qualifiers get a `_pct`. |
+| unattributed_target_share | Float64 | Share of the passes thrown against the defense (dropbacks that are neither sacks nor scrambles) that name no receiver. Per defense-season, repeated on its WR and TE rows; null on QB and RB. |
+| epa_per_play_allowed_pct | Float64 | Percentile of `epa_per_play_allowed` among qualifiers of the position group; higher = allowed less. |
+| success_rate_allowed_pct | Float64 | Percentile of `success_rate_allowed`; higher = allowed fewer successes. |
+| explosive_rate_allowed_pct | Float64 | Percentile of `explosive_rate_allowed`; higher = allowed fewer explosives. |
+| sack_rate_allowed_pct | Float64 | Percentile of `sack_rate_allowed`; higher = sacked the quarterback MORE often (the one reversed column). QB rows only. |
+| rush_yards_per_carry_allowed_pct | Float64 | Percentile of `rush_yards_per_carry_allowed`; higher = allowed fewer yards per carry. RB rows only. |
+| yards_per_target_allowed_pct | Float64 | Percentile of `yards_per_target_allowed`, on targets naming a receiver; higher = allowed fewer yards per target. WR and TE rows only. |
+
 ## Consumers
 
 The packages that read what this repo produces:
@@ -332,6 +417,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_05_ratings_weekly.py`
 - `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles + league baselines (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`, `nfl_league_averages`, `nfl_team_opponent_splits`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
 - `python/nfl_data_07_metric_curves.py` — league / team / player rate curves along a continuous axis (`nfl_metric_curves`: FG% by kick distance, completion% and EPA by air-yards bucket, 4th-down conversion by yards to go, success by down × distance; sdv-py `metric_curves` over `nfl_model_pbp`, REG + POST). Team ids are the ESPN team id as in stage 06; player `entity_id` is the ESPN athlete id re-keyed from nflfastR through sdv-py's players master with `gsis_id` kept alongside (no match → `entity_id = gsis_id`, `id_source = "gsis"`). Unlike stage 06, `--publish` uploads only the season files the run wrote
+- `python/nfl_data_08_defense_vs_position.py` — what each defense allowed to QBs, RBs, WRs and TEs (`nfl_defense_vs_position`: EPA/play, success and explosive rate, sack rate, yards per carry, yards per target, each with a percentile among qualifiers where higher is the better defense; sdv-py `defense_vs_position` over `nfl_model_pbp` + the season roster, REG + POST, 1999–). See "Defense vs position". Like stage 07, `--publish` uploads only the season files the run wrote
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

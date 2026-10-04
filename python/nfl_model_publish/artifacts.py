@@ -24,6 +24,7 @@ GH_TIMEOUT_SECONDS = 300
 #: its timestamp re-stamped; it just ships no package_function.
 PKG_FUNCTION: dict[str, str] = {
     "nfl_4th_down_models": "python/nfl_model_publish/decision_models_artifacts.py",
+    "nfl_defense_vs_position": "python/nfl_data_08_defense_vs_position.py",
     "nfl_espn_qbr": "sportsdataverse.nfl.load_nfl_espn_qbr()",
     "nfl_metric_curves": "python/nfl_data_07_metric_curves.py",
     "nfl_model_artifacts": "python/nfl_model_publish/artifacts.py",
@@ -69,6 +70,22 @@ _RELEASE_BODY = {
         "team id; player entity_id is the ESPN athlete id re-keyed from nflfastR via the "
         "players master, with gsis_id kept alongside -- a player with no ESPN match "
         "keeps entity_id = gsis_id and id_source = gsis."
+    ),
+    "nfl_defense_vs_position": (
+        "What each NFL defense allowed to quarterbacks, running backs, wide receivers "
+        "and tight ends, one file per season from 1999 (the first nfl_model_pbp season): "
+        "one row per (season, team_id, position_group), regular season + postseason. "
+        "EPA per play, success rate and explosive rate allowed, plus sack rate (QB), "
+        "rushing yards per carry (RB) and receiving yards per target (WR, TE), each "
+        "with a 0-100 percentile among the defenses with 3+ games in that position "
+        "group, where higher is always the better defense. team_id is the ESPN team "
+        "id; position groups come from the nflverse season roster on the gsis id. WR "
+        "and TE rates are on targets naming a receiver: unattributed_target_share is "
+        "the share of passes thrown against the defense that name none (about 4% in "
+        "2024, throwaways; about 40% in 2003-2008, when the play-by-play names no "
+        "receiver on any incompletion or interception, so those six seasons' WR and "
+        "TE rows are completions only). Built by stage 08 with sdv-py "
+        "defense_vs_position."
     ),
 }
 

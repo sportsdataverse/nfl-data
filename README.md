@@ -399,6 +399,89 @@ defense is measured the same way. Nothing is imputed.
 | rush_yards_per_carry_allowed_pct | Float64 | Percentile of `rush_yards_per_carry_allowed`; higher = allowed fewer yards per carry. RB rows only. |
 | yards_per_target_allowed_pct | Float64 | Percentile of `yards_per_target_allowed`, on targets naming a receiver; higher = allowed fewer yards per target. WR and TE rows only. |
 
+## Paper Index: deserved wins and luck
+
+`nfl_paper_index_games` is one row per team per scored game: `paper_share`, the team's
+deserved-win probability under Game on Paper's Paper Index, built from eight performance
+margins (success rate, explosive-play rate, explosiveness, scoring-opportunity
+conversion, points per opportunity, starting field position, havoc, turnovers). The two
+shares of a game sum to 1. It is the NFL twin of the college `cfb_paper_index_games`.
+Stage 09 passes sdv-py's `paper_index_games(pbp, "nfl")` through unchanged and adds
+`paper_index_span`. Nothing is fitted in this repo: the weights are
+`sportsdataverse.paper_index`'s.
+
+**Input.** The Paper Index reads ESPN-shape columns that `nfl_model_pbp` does not carry,
+so unlike stages 06–08 this stage reads `espn_nfl_pbp` (2002–). It runs from
+`scripts/espn_nfl_data.sh` after the ESPN family build, on the pbp that run just wrote.
+
+**Which games.** A game is scored when it is completed, has a winner and both sides ran
+20 or more scrimmage snaps; the Pro Bowl is out. **A tie has no row**: it is not a game,
+a win or a loss anywhere downstream, and never half a win. Preseason (`season_type` 1,
+in ESPN's library from 2026), regular season (2) and postseason (3) are all in the
+per-game table, so filter `season_type` before summing; ESPN numbers postseason weeks
+from 1 again. Where ESPN's library is thin the table is too: 2005 holds 17 games (the
+rest of that season's plays carry no text), and the truncated 2002–2004 and 2007 feeds
+are not scored.
+
+**In-sample label.** `paper_index_span` says where the season sits against the fit. The
+seasons are read from sdv-py's `TRAIN_SEASONS` / `HOLDOUT_SEASONS` at build time (at the
+locked sdv-py: train 2016–2021, holdout 2022–2025):
+
+| `paper_index_span` | meaning |
+| --- | --- |
+| `train` | That season's games were part of the fit: its shares, deserved wins and luck are **in-sample**. |
+| `holdout` | Scored out of sample at fit time, though not fully clean: the EP model behind the EPA, success and explosiveness inputs and the field-position curve were trained on spans that include these seasons. |
+| `out_of_span` | Never seen by the fit and never evaluated (before 2016, after 2025). |
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| game_id | Int64 | ESPN event id. |
+| team_id | Int64 | ESPN team id (the key stage 06's tables carry). |
+| season | Int64 | Season year. |
+| season_type | Int64 | ESPN season-type code: 1 preseason, 2 regular season, 3 postseason. |
+| week | Int64 | Week within the season type (postseason restarts at 1). |
+| won | Boolean | The team outscored its opponent. |
+| paper_share | Float64 | The team's deserved-win probability, 0–1. |
+| opp_share | Float64 | The opponent's (`1 - paper_share`). |
+| success_margin | Float64 | Success rate, team minus opponent. Every margin is signed so that positive favors the team. |
+| explosive_margin | Float64 | Explosive-play rate, team minus opponent. |
+| explosive_epa_margin | Float64 | EPA per successful play, team minus opponent. |
+| opp_conversion_margin | Float64 | Share of scoring-opportunity drives that scored, team minus opponent. |
+| pts_per_opp_margin | Float64 | Points per scoring opportunity (made field goals counted), team minus opponent. |
+| field_position_margin | Float64 | Expected points of the average drive start, team minus opponent. |
+| havoc_margin | Float64 | Havoc rate the team's defense created minus the rate it allowed. |
+| turnovers_margin | Float64 | Opponent's turnovers minus the team's. |
+| paper_index_span | Utf8 | `train` (that season's games were part of the fit), `holdout` or `out_of_span`: see above. |
+
+**Season columns on `nfl_team_summaries`.** Stage 06 sums the same shares with sdv-py's
+`deserved_wins()` and appends seven columns. They cover exactly the games the table's
+play metrics cover: the shares are cut by the game ids of the plays stage 06 aggregates
+(`espn_nfl_pbp` carries each game's `nflverse_game_id`), so by default the regular
+season only. A playoff game's share is in `nfl_paper_index_games` and in no
+regular-season column. This repo has no weekly summaries table; a to-date season file is
+the running snapshot, and an as-of-week sum can be taken from the per-game table.
+
+| col_name | col_type | col_description |
+| --- | --- | --- |
+| deserved_wins | Float64 | Sum of the team's `paper_share` over its scored games. |
+| luck_wins | Float64 | Wins minus `deserved_wins`, over the same games. Positive = won more than deserved. |
+| luck_z | Float64 | `luck_wins` in standard deviations: divided by `sqrt(sum(p * (1 - p)))` over the team's shares. |
+| luck_wins_rank | Float64 | Rank of `luck_wins` among the season's teams that have one, 1 = luckiest. Null when the team has no scored game. |
+| luck_z_rank | Float64 | Rank of `luck_z`, same population and direction. |
+| paper_index_games_n | Int64 | Games that entered the sums. Ties, games the Paper Index cannot score and games `espn_nfl_pbp` does not hold yet are not counted, so it can be below the team's games played. 0 with null luck before 2002. |
+| paper_index_span | Utf8 | `train` (that season's games were part of the fit: in-sample), `holdout` or `out_of_span`, as above. |
+
+Read them with care. `luck_wins + deserved_wins` is the team's wins over
+`paper_index_games_n` games, not its official record. Luck includes home field (the
+share has no intercept; sdv-py's `deserved_wins` docstring has the measured size).
+`espn_nfl_pbp` is published by a different workflow than `nfl_model_pbp`: when it is a
+week behind, the luck columns sum the games it holds and `paper_index_games_n` shows it.
+
+**Not model features.** All seven columns are derived from game outcomes. They are
+attached after the conference percentiles and `nfl_league_averages` are built, and
+`league_averages` excludes them by name; no trainer or feature set in this repo reads
+the summaries tables.
+
 ## Consumers
 
 The packages that read what this repo produces:
@@ -418,6 +501,7 @@ Every numbered pipeline stage in `python/` (auto-listed; run subsets with the `s
 - `python/nfl_data_06_team_summaries.py` — season team grid + passing/rushing/receiving leaderboards + percentiles + league baselines (`nfl_team_summaries`, `nfl_passing`, `nfl_rushing`, `nfl_receiving`, `nfl_percentiles`, `nfl_player_percentiles`, `nfl_league_averages`, `nfl_team_opponent_splits`); the NFL twin of the college `team_summaries` family that gameonpaper.com's NFL pages read
 - `python/nfl_data_07_metric_curves.py` — league / team / player rate curves along a continuous axis (`nfl_metric_curves`: FG% by kick distance, completion% and EPA by air-yards bucket, 4th-down conversion by yards to go, success by down × distance; sdv-py `metric_curves` over `nfl_model_pbp`, REG + POST). Team ids are the ESPN team id as in stage 06; player `entity_id` is the ESPN athlete id re-keyed from nflfastR through sdv-py's players master with `gsis_id` kept alongside (no match → `entity_id = gsis_id`, `id_source = "gsis"`). Unlike stage 06, `--publish` uploads only the season files the run wrote
 - `python/nfl_data_08_defense_vs_position.py` — what each defense allowed to QBs, RBs, WRs and TEs (`nfl_defense_vs_position`: EPA/play, success and explosive rate, sack rate, yards per carry, yards per target, each with a percentile among qualifiers where higher is the better defense; sdv-py `defense_vs_position` over `nfl_model_pbp` + the season roster, REG + POST, 1999–). See "Defense vs position". Like stage 07, `--publish` uploads only the season files the run wrote
+- `python/nfl_data_09_paper_index_games.py` — each team's deserved-win share in every scored game (`nfl_paper_index_games`: sdv-py `paper_index_games` over `espn_nfl_pbp`, preseason + REG + POST, 2002–, with `paper_index_span` labelling the seasons inside the fit). Run by `scripts/espn_nfl_data.sh` after the ESPN family build, not by `nfl_pbp_cron.yml`; stage 06 sums the same shares into `deserved_wins` / `luck_wins` / `luck_z` on `nfl_team_summaries`. See "Paper Index: deserved wins and luck". `--publish` uploads only the season files the run wrote
 - `python/nfl_model_01_ep.py`
 - `python/nfl_model_02_wp_spread.py`
 - `python/nfl_model_03_wp_naive.py`

@@ -34,7 +34,23 @@ SCHEMA: dict[str, pl.DataType] = {
 
 #: numeric columns that identify a row or count its context rather than measure it
 _NOT_METRICS = frozenset(
-    {"season", "team_id", "player_id", "games", "team_games", "valid_games", "dispersion_games"}
+    {
+        "season",
+        "team_id",
+        "player_id",
+        "games",
+        "team_games",
+        "valid_games",
+        "dispersion_games",
+        # Paper Index (paper_index.LUCK_COLUMNS): a game count, and season sums
+        # derived from game OUTCOMES. A league mean of luck is ~0 by construction
+        # and none of them is a play metric. They are attached after this module
+        # runs; the names are here so that moving the attach cannot average them.
+        "paper_index_games_n",
+        "deserved_wins",
+        "luck_wins",
+        "luck_z",
+    }
 )
 #: a rank, a percentile (incl. cohort ``_pos_pct`` / ``_conf_pct``) or a sample size
 #: is derived from a metric, never a metric of its own

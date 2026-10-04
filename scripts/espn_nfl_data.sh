@@ -43,17 +43,30 @@ END_YEAR=${END_YEAR:-$START_YEAR}
 mkdir -p logs
 LOG="logs/espn_nfl_data_$(date -u +%Y%m%d).log"
 export PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8
+OUT="${ESPN_NFL_OUT:-out/espn_nfl}"
 ARGS=(--dataset "$DATASET" -s "$START_YEAR" -e "$END_YEAR"
       --workers "${ESPN_NFL_WORKERS:-2}"
       --cache-dir "${ESPN_NFL_CACHE:-.cache/nfl_espn_final}"
-      --out "${ESPN_NFL_OUT:-out/espn_nfl}")
+      --out "$OUT")
 [ -n "${NFL_RAW_DIR:-}" ] && ARGS+=(--raw-dir "$NFL_RAW_DIR")
 [ "${PUBLISH:-0}" = "1" ] && ARGS+=(--publish)
+# Stage 09 (nfl_paper_index_games) reads espn_nfl_pbp, so it runs here, on the pbp
+# this run just wrote, and after the family: its failure cannot hold their publish back.
+PI=(--pbp-dir "${OUT}/pbp" --out "${OUT}/paper_index_games")
+[ "${PUBLISH:-0}" = "1" ] && PI+=(--publish)
 {
   echo "[$(date -u '+%F %T')Z] espn_nfl_data start: ${START_YEAR}-${END_YEAR} dataset=${DATASET} publish=${PUBLISH:-0}"
   PYTHONPATH=python "$PY" -m nfl_espn_build "${ARGS[@]}"
   rc=$?
   echo "[$(date -u '+%F %T')Z] espn_nfl_data done rc=$rc"
+  if [ "$rc" -eq 0 ] && { [ "$DATASET" = "all" ] || [ "$DATASET" = "pbp" ]; }; then
+    for season in $(seq "$START_YEAR" "$END_YEAR"); do
+      # only a season whose pbp is on disk: without the file the stage would read the tag
+      [ -f "${OUT}/pbp/play_by_play_${season}.parquet" ] || continue
+      PYTHONPATH=python "$PY" -m nfl_data_09_paper_index_games --seasons "$season" "${PI[@]}" || rc=$?
+    done
+    echo "[$(date -u '+%F %T')Z] paper_index_games done rc=$rc"
+  fi
   echo "EXIT=$rc"
   exit "$rc"
 } 2>&1 | tee -a "$LOG"

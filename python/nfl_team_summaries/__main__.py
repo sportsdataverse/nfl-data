@@ -32,6 +32,7 @@ from nfl_team_summaries.input import (
     load_rosters,
     prepare_plays,
 )
+from nfl_team_summaries.paper_index import attach_luck, season_games
 
 REPO = "sportsdataverse/sportsdataverse-data"
 #: table key -> (release tag, file stem)
@@ -83,6 +84,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory holding model_pbp_{season}.parquet (else the release asset).",
     )
     parser.add_argument(
+        "--espn-pbp-dir",
+        default=None,
+        help="Directory holding espn_nfl_pbp's play_by_play_{season}.parquet (else the "
+        "release asset): the input of team_summaries' Paper Index luck columns.",
+    )
+    parser.add_argument(
         "--season-types",
         default=",".join(DEFAULT_SEASON_TYPES),
         help="Comma list of season_type values to include (default REG).",
@@ -112,6 +119,15 @@ def main(argv: list[str] | None = None) -> int:
             continue
         raw = filter_season_types(pbp, season_types)
         tables = build_team_summaries(plays, raw, season, rosters=load_rosters(season))
+        # Paper Index deserved wins and luck. Attached after the build, so the
+        # conference percentiles and league_averages in there never see these
+        # outcome-derived columns; and cut by the plays' own game ids, so they
+        # cover the games the play metrics cover (no playoff game by default).
+        tables["team_summaries"] = attach_luck(
+            tables["team_summaries"],
+            season_games(season, plays["game_id"], args.espn_pbp_dir),
+            season,
+        )
         for key, (tag, stem) in TABLES.items():
             written[key].append(_write(tables[key], out, tag, stem, season))
         try:

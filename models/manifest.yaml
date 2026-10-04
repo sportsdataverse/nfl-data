@@ -133,3 +133,8 @@ data_pipelines:
     wraps: nfl_team_summaries.defense_vs_position
     workflow: nfl_pbp_cron.yml
     release_tag: nfl_defense_vs_position
+  paper_index_games:
+    stage: python/nfl_data_09_paper_index_games.py
+    wraps: nfl_team_summaries.paper_index
+    workflow: espn_nfl_cron.yml
+    release_tag: nfl_paper_index_games

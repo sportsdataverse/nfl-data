@@ -46,7 +46,7 @@ else
       fi
     done
     if [ -z "${hit}" ]; then
-      echo "FATAL: unknown stage '${want}' (numbers 01-08 or stage names)" >&2
+      echo "FATAL: unknown stage '${want}' (numbers 01-09 or stage names)" >&2
       exit 1
     fi
   done

@@ -1268,6 +1268,7 @@ def test_cli_publishes_the_seven_even_when_the_splits_fail(tmp_path, monkeypatch
     """A crosswalk failure skips ONE tag and fails the run; the seven still publish."""
     import nfl_model_publish.artifacts as artifacts
     from nfl_team_summaries import __main__ as cli
+    from nfl_team_summaries.paper_index import _NO_GAMES
 
     _fake_pbp().write_parquet(tmp_path / "model_pbp_2025.parquet")
     monkeypatch.setattr(
@@ -1284,6 +1285,9 @@ def test_cli_publishes_the_seven_even_when_the_splits_fail(tmp_path, monkeypatch
         return _espn_game_ids()
 
     monkeypatch.setattr(cli, "load_espn_game_ids", crosswalk)
+    # the luck columns read espn_nfl_pbp, a release download: none offline, and their
+    # own tests are tests/test_paper_index.py
+    monkeypatch.setattr(cli, "season_games", lambda season, game_ids, pbp_dir: _NO_GAMES)
     uploaded: list[str] = []
     monkeypatch.setattr(
         artifacts,

@@ -29,6 +29,7 @@ PKG_FUNCTION: dict[str, str] = {
     "nfl_metric_curves": "python/nfl_data_07_metric_curves.py",
     "nfl_model_artifacts": "python/nfl_model_publish/artifacts.py",
     "nfl_model_pbp": 'sportsdataverse.nfl.load_nfl_pbp(source="sdv")',
+    "nfl_paper_index_games": "python/nfl_data_09_paper_index_games.py",
     "nfl_player_stats": 'sportsdataverse.nfl.load_nfl_player_stats(source="sdv")',
     "nfl_players": 'sportsdataverse.nfl.load_nfl_players(source="sdv")',
     "nfl_ratings_weekly": "sportsdataverse.nfl.load_nfl_ratings_weekly()",
@@ -86,6 +87,27 @@ _RELEASE_BODY = {
         "receiver on any incompletion or interception, so those six seasons' WR and "
         "TE rows are completions only). Built by stage 08 with sdv-py "
         "defense_vs_position."
+    ),
+    # No fit years here on purpose: they live in sportsdataverse.paper_index, and
+    # importing it in this module would stop every publish stage on an sdv-py older
+    # than the port (cfbfastR-cfb-data hit exactly that, e3e4a4e8).
+    "nfl_paper_index_games": (
+        "Game on Paper's Paper Index for the NFL, one file per season from 2002 (the "
+        "first espn_nfl_pbp season): one row per team per scored game with paper_share, "
+        "the team's deserved-win probability from eight performance margins (success, "
+        "explosive plays, explosiveness, scoring-opportunity conversion, points per "
+        "opportunity, field position, havoc, turnovers), the opponent's share, the "
+        "eight margins and whether the team won. A game is scored when it is completed, "
+        "has a winner (a tie has no row) and both sides ran 20+ scrimmage snaps; the Pro "
+        "Bowl is out. Preseason (season_type 1, from 2026), regular season (2) and "
+        "postseason (3) are all in: filter season_type before summing. game_id and "
+        "team_id are the ESPN ids. paper_index_span says where the season sits against "
+        "the fit: train = that season's games were part of the fit, so its shares are "
+        "in-sample; holdout = scored out of sample at fit time; out_of_span = never seen "
+        "by the fit and never evaluated (the spans are sportsdataverse.paper_index's "
+        "TRAIN_SEASONS and HOLDOUT_SEASONS). The regular-season sums are the "
+        "deserved_wins / luck_wins / luck_z columns of nfl_team_summaries. Built by "
+        "stage 09 with sdv-py paper_index_games from espn_nfl_pbp."
     ),
 }
 

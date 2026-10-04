@@ -309,6 +309,44 @@ def test_the_last_regular_week_is_in_and_the_playoff_game_is_not(tmp_path, games
     )
 
 
+def test_stage_06_still_writes_its_tables_when_the_luck_input_fails(tmp_path, monkeypatch, caplog):
+    """espn_nfl_pbp is published by ANOTHER workflow. Its being absent (week 1 of a new
+    season), late or broken must not take the seven play tables down with it: they are
+    written with the luck columns null, and the run fails at the end so the cron is red,
+    as it already does for the opponent splits."""
+    from nfl_team_summaries import __main__ as cli
+
+    from tests.test_team_summaries import _espn_game_ids, _fake_pbp, _roster, _schedule
+
+    _fake_pbp().write_parquet(tmp_path / "model_pbp_2025.parquet")
+    monkeypatch.setattr(
+        cli,
+        "prepare_plays",
+        lambda pbp, season, season_types: prepare_plays(
+            pbp, season, season_types=season_types, schedule_fn=_schedule
+        ),
+    )
+    monkeypatch.setattr(cli, "load_rosters", lambda season: _roster())
+    monkeypatch.setattr(cli, "load_espn_game_ids", _espn_game_ids)
+
+    def no_asset(season, game_ids, pbp_dir):
+        raise RuntimeError("404 Client Error: Not Found for url: .../play_by_play_2025.parquet")
+
+    monkeypatch.setattr(cli, "season_games", no_asset)
+    out = tmp_path / "out"
+    with caplog.at_level(logging.ERROR):
+        rc = cli.main(["--seasons", "2025", "--pbp-dir", str(tmp_path), "--out", str(out)])
+
+    assert rc == 1  # red, not a silent null
+    assert "luck" in caplog.text and "2025" in caplog.text
+    for tag, stem in TABLES.values():  # every play table is still there
+        assert (out / tag / f"{stem}_2025.parquet").exists(), tag
+    written = pl.read_parquet(out / "nfl_team_summaries" / "team_summaries_2025.parquet")
+    assert written.columns[-len(LUCK_COLUMNS) :] == list(LUCK_COLUMNS)  # the schema holds
+    assert written["deserved_wins"].null_count() == written.height
+    assert written["paper_index_games_n"].to_list() == [0] * written.height
+
+
 def test_stage_06_hands_the_shares_the_plays_own_game_ids(tmp_path, monkeypatch):
     """Through the stage-06 CLI: the ids that cut the shares are exactly the game ids of
     the plays the tables aggregate (a playoff game in the pbp is in neither), and the luck

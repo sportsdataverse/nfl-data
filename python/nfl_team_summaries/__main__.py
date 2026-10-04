@@ -32,7 +32,7 @@ from nfl_team_summaries.input import (
     load_rosters,
     prepare_plays,
 )
-from nfl_team_summaries.paper_index import attach_luck, season_games
+from nfl_team_summaries.paper_index import _NO_GAMES, attach_luck, season_games
 
 REPO = "sportsdataverse/sportsdataverse-data"
 #: table key -> (release tag, file stem)
@@ -111,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     written: dict[str, list[Path]] = {k: [] for k in TABLES}
     splits_written: list[Path] = []
     splits_failed: list[int] = []
+    luck_failed: list[int] = []
     for season in _parse_seasons(args.seasons):
         pbp = load_model_pbp(season, args.pbp_dir)
         plays = prepare_plays(pbp, season, season_types=season_types)
@@ -123,11 +124,21 @@ def main(argv: list[str] | None = None) -> int:
         # conference percentiles and league_averages in there never see these
         # outcome-derived columns; and cut by the plays' own game ids, so they
         # cover the games the play metrics cover (no playoff game by default).
-        tables["team_summaries"] = attach_luck(
-            tables["team_summaries"],
-            season_games(season, plays["game_id"], args.espn_pbp_dir),
-            season,
-        )
+        try:
+            games = season_games(season, plays["game_id"], args.espn_pbp_dir)
+        except Exception:
+            # espn_nfl_pbp is another workflow's asset. Its being absent (week 1 of a
+            # new season), late or broken must not take the seven play tables down
+            # with it: they are written with the luck columns null, and the run
+            # fails at the end, as for the splits below.
+            logging.exception(
+                "season %s: Paper Index luck failed; team_summaries written with the "
+                "luck columns null",
+                season,
+            )
+            luck_failed.append(season)
+            games = _NO_GAMES
+        tables["team_summaries"] = attach_luck(tables["team_summaries"], games, season)
         for key, (tag, stem) in TABLES.items():
             written[key].append(_write(tables[key], out, tag, stem, season))
         try:
@@ -151,10 +162,14 @@ def main(argv: list[str] | None = None) -> int:
                 out / tag, tag, REPO, pattern=f"{stem}_*.parquet", dry_run=args.dry_run
             )
             logging.info("published %d asset(s) to %s@%s", result["uploaded"], REPO, tag)
+    if luck_failed:
+        logging.error(
+            "Paper Index luck columns NOT built for season(s) %s: written null (see above)",
+            luck_failed,
+        )
     if splits_failed:
         logging.error("%s NOT built for season(s) %s (see above)", SPLITS[0], splits_failed)
-        return 1
-    return 0
+    return 1 if (luck_failed or splits_failed) else 0
 
 
 if __name__ == "__main__":

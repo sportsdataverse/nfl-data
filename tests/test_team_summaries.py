@@ -270,6 +270,9 @@ def _play(
         "wpa": round(epa / 20, 4),
         "wp": round(rng.uniform(0.25, 0.75), 3),
         "qtr": qtr,
+        # the offense's margin at the snap: level in the first half, two scores up in
+        # the second, so both sides of the rushing one-score split have carries
+        "score_differential": 0 if qtr < 3 else 10,
         "half_seconds_remaining": rng.randint(200, 1700),
         "pass_attempt": 1 if kind in ("pass", "sack") else 0,
         "sack": 1 if kind == "sack" else 0,
@@ -750,6 +753,8 @@ def test_attach_leader_ranks_gates_rank_and_pct_on_the_same_rows():
             "fumbles": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
             "yardsplay": [1.0] * 6,
             "yardsgame": [1.0] * 6,
+            "boom_rate": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "stuff_rate": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
         }
     )
     out = _attach_leader_ranks(df, keys=["k"], min_expr=RB_QUALIFIES, spec="rushing")
@@ -763,6 +768,9 @@ def test_attach_leader_ranks_gates_rank_and_pct_on_the_same_rows():
     assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_pct"][0] is None
     # fumbles rank low-is-good: the cleanest back tops the percentile
     assert hit.sort("fumbles")["fumbles_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]
+    # so does stuff_rate; a boom is good (TFD-5d, both directions read from the spec)
+    assert hit.sort("stuff_rate")["stuff_rate_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]
+    assert hit.sort("boom_rate")["boom_rate_pct"].to_list() == [20.0, 40.0, 60.0, 80.0]
 
 
 # --- sample sizes -----------------------------------------------------------------
@@ -1437,3 +1445,91 @@ def test_a_float_id_raises_before_the_join(roster_dtype, board_dtype):
     board = pl.DataFrame({"player_id": [1, 2]}).with_columns(pl.col("player_id").cast(board_dtype))
     with pytest.raises(TypeError, match="never a float"):
         _attach_position_cohorts(board, roster)
+
+
+# --- per-game dispersion and rushing tiers (TFD-5d): the wiring into the tables -------
+# (the math is hand-checked on real carries in test_player_dispersion.py)
+
+_SPREAD = ("EPAplay_sd", "EPAplay_p10", "EPAplay_p90", "boom_rate", "bust_rate")
+_TIERS = ("line_yards_share", "second_level_share", "open_field_share")
+_SPLIT = ("EPAplay_one_score", "EPAplay_not_one_score")
+
+
+@pytest.fixture(scope="module")
+def four_game_tables():
+    """The synthetic season with each half as its own game: four games a team, enough
+    to clear the 3-game dispersion floor the two-game season sits under."""
+    pbp = _fake_pbp().with_columns(game_id=pl.format("{}_h{}", "game_id", "qtr"))
+    plays = prepare_plays(pbp, 2025, schedule_fn=_schedule)
+    return plays, build_team_summaries(
+        plays, filter_season_types(pbp, ("REG",)), 2025, rosters=_roster()
+    )
+
+
+def test_only_boom_and_stuff_rates_are_ranked(tables):
+    _, out = tables
+    for name in ("passing", "rushing", "receiving"):
+        df = out[name]
+        described = ["dispersion_games", *_SPREAD]
+        if name == "rushing":
+            described += [*_TIERS, "stuff_rate", *_SPLIT, *(f"{c}_n" for c in _SPLIT)]
+        else:
+            assert not {*_TIERS, "stuff_rate", *_SPLIT} & set(df.columns), name
+        ranked = {"boom_rate", "stuff_rate"} & set(described)
+        for c in described:
+            assert c in df.columns, f"{name}.{c}"
+            for suffix in ("_rank", "_pct", "_pos_pct"):
+                assert (f"{c}{suffix}" in df.columns) == (c in ranked), f"{name}.{c}{suffix}"
+        # under three games (two here) every spread column is null, the n is not
+        assert df["dispersion_games"].to_list() == df["games"].to_list()
+        assert all(df[c].null_count() == df.height for c in _SPREAD)
+    # a ranked rate has its threshold column; the n is a count, not a league-average metric
+    assert {"boom_rate", "stuff_rate"} <= set(out["player_percentiles"].columns)
+    assert "dispersion_games" not in out["league_averages"]["metric"].to_list()
+
+
+@pytest.mark.parametrize("table", ["passing", "rushing", "receiving"])
+def test_dispersion_reaches_every_player_table(four_game_tables, table):
+    _, out = four_game_tables
+    df = out[table]
+    # cut over the table's own plays, so its n is the games column row for row
+    assert df.schema["dispersion_games"] == pl.Int64
+    assert df["dispersion_games"].to_list() == df["games"].to_list()
+    enough = pl.col("dispersion_games") >= 3
+    assert df.filter(enough).height > 0
+    for c in _SPREAD:
+        assert df.filter(enough)[c].null_count() == 0, c
+        assert df.filter(~enough)[c].null_count() == df.filter(~enough).height, c
+    assert (df.filter(enough)["EPAplay_p10"] <= df.filter(enough)["EPAplay_p90"]).all()
+
+
+def test_passer_dispersion_is_over_his_dropbacks(four_game_tables):
+    """Sacks are in: the spread is over the plays ``TEPA`` and ``dropbacks`` sum."""
+    plays, out = four_game_tables
+    kc = plays.filter((pl.col("pass") == 1) & (pl.col("passer_player_id") == "KC-QB1"))
+    assert kc["sack_vec"].sum() > 0
+    by_game: dict[str, list[float]] = {}
+    for g, epa in kc.select("game_id", "EPA").iter_rows():
+        by_game.setdefault(g, []).append(epa)
+    per_game = [sum(v) / len(v) for v in by_game.values()]
+    mean = sum(per_game) / len(per_game)
+    sd = (sum((v - mean) ** 2 for v in per_game) / len(per_game)) ** 0.5
+    row = out["passing"].filter(pl.col("player_id") == "KC-QB1").row(0, named=True)
+    assert row["dispersion_games"] == len(per_game) == 4
+    assert row["dropbacks"] == kc.height
+    assert row["EPAplay_sd"] == pytest.approx(sd)
+    assert row["boom_rate"] == sum(v > mean + sd for v in per_game) / 4
+    assert row["bust_rate"] == sum(v < mean - sd for v in per_game) / 4
+
+
+def test_rushing_tiers_reach_the_table(tables):
+    _, out = tables
+    rb = out["rushing"]
+    assert rb.height > 0
+    shares = rb.select(pl.sum_horizontal(_TIERS).alias("s"))["s"].to_list()
+    assert shares == pytest.approx([1.0] * rb.height)
+    assert (rb["stuff_rate"] <= rb["line_yards_share"]).all()
+    # every carry is on one side of the split, and the synthetic season has both
+    both = rb["EPAplay_one_score_n"] + rb["EPAplay_not_one_score_n"]
+    assert both.to_list() == rb["plays"].to_list()
+    assert rb["EPAplay_one_score_n"].sum() > 0 and rb["EPAplay_not_one_score_n"].sum() > 0

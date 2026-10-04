@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
-from nfl_team_summaries.league_averages import SCHEMA, build_league_averages, summarize
+from nfl_team_summaries.league_averages import (
+    SCHEMA,
+    build_league_averages,
+    metric_columns,
+    summarize,
+)
 from polars.testing import assert_frame_equal
 
 QUALIFIERS = {"passing": (pl.col("dropbacks") >= 14.0 * pl.col("team_games"), 14.0)}
@@ -28,6 +33,23 @@ def test_summarize_counts_only_finite_metric_values():
     assert out["metric"].to_list() == ["EPAplay", "yardsplay"]
     epa = out.row(0, named=True)
     assert epa["mean"] == pytest.approx(0.2) and epa["sd"] == pytest.approx(0.1) and epa["n"] == 3
+
+
+def test_dispersion_games_is_a_count_not_a_metric():
+    # TFD-5d: the n behind the dispersion columns is context, like games; the split's
+    # carries end in _n; the rates themselves are metrics
+    df = pl.DataFrame(
+        {
+            "team_id": [1],
+            "games": [17],
+            "dispersion_games": [17],
+            "boom_rate": [0.2],
+            "boom_rate_pos_pct": [50.0],
+            "EPAplay_one_score": [0.1],
+            "EPAplay_one_score_n": [80],
+        }
+    )
+    assert metric_columns(df) == ["boom_rate", "EPAplay_one_score"]
 
 
 def test_players_are_gated_to_qualifiers():

@@ -144,11 +144,21 @@ def defense_vs_position_table(pbp: pl.DataFrame, rosters: pl.DataFrame) -> pl.Da
     """The published table for ONE season's ``nfl_model_pbp`` and roster.
 
     Raises ``TypeError`` on a float team, game or player id (pbp or roster) and
-    ``ValueError`` on a defense abbreviation the crosswalk does not know.
+    ``ValueError`` on a defense abbreviation the crosswalk does not know, or when a
+    position group has no rows at all (a roster that joined nothing).
     """
     rows = defense_vs_position(pbp.select(PBP_COLUMNS["nfl"]), rosters, "nfl")
     if rows.height == 0:
         return pl.DataFrame(schema=OUTPUT_SCHEMA)
+    # sdv-py joins carries and targets to the roster INNER and QB rows need no roster,
+    # so an empty roster (or one for another season) comes back as QB rows alone --
+    # a table the CLI would write and upload as the season's
+    missing = sorted({"QB", "RB", "TE", "WR"} - set(rows["position_group"].unique()))
+    if missing:
+        raise ValueError(
+            f"no {', '.join(missing)} rows: the roster ({rosters.height} rows) joined no "
+            "carries or targets; refusing to build a table with position groups missing"
+        )
     share = _unattributed_target_share(pbp)
     for k in _KEYS:  # both sides still carry sdv-py's key: the nflverse abbreviation
         assert rows.schema[k] == share.schema[k], f"{k} {rows.schema[k]} != {share.schema[k]}"
@@ -172,8 +182,14 @@ def defense_vs_position_table(pbp: pl.DataFrame, rosters: pl.DataFrame) -> pl.Da
         .sort(*_KEYS, "position_group")
     )
     assert out.schema == pl.Schema(OUTPUT_SCHEMA), out.schema
-    # two abbreviations of one franchise in a season would repeat a key
-    assert out.select(*_KEYS, "position_group").is_duplicated().sum() == 0
+    # Two abbreviations of one franchise in a season (OAK and LV) would repeat a key.
+    # A data condition, so a raise: `python -O` strips an assert and the CLI would publish.
+    dupes = out.filter(out.select(*_KEYS, "position_group").is_duplicated())
+    if dupes.height:
+        raise ValueError(
+            f"duplicate (season, team_id, position_group) rows for team_id "
+            f"{sorted(dupes['team_id'].unique().to_list())}: two abbreviations of one franchise in the pbp"
+        )
     return out
 
 

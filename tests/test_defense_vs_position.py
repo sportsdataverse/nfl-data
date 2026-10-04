@@ -215,6 +215,36 @@ def test_empty_pbp_is_the_empty_schema():
     assert out.schema == pl.Schema(OUTPUT_SCHEMA)
 
 
+def test_a_roster_that_joins_nothing_raises_instead_of_publishing_qb_rows_only():
+    """sdv-py joins carries and targets to the roster INNER, and QB rows need no roster:
+    an empty roster (or one for another season) used to return the QB rows alone, which
+    the CLI would write and upload as the season's table."""
+    rosters = _rosters()
+    for bad in (rosters.head(0), rosters.with_columns(season=pl.col("season") - 1)):
+        with pytest.raises(ValueError, match="RB, TE, WR"):
+            defense_vs_position_table(_pbp(), bad)
+
+
+def test_two_abbreviations_of_one_franchise_raise():
+    """sdv-py groups by the pbp's abbreviation; the crosswalk then maps OAK and LV to one
+    ESPN id, which would repeat a key. A ValueError, not an assert `python -O` would strip."""
+    pbp = _pbp()
+    one = pbp["defteam"].drop_nulls().unique().sort()[0]
+    games = pbp.filter(pl.col("defteam") == one)["game_id"].unique().sort()
+    half = games.head(games.len() // 2)
+    split = pbp.with_columns(
+        defteam=pl.when(pl.col("defteam") == one)
+        .then(
+            pl.when(pl.col("game_id").is_in(half.implode()))
+            .then(pl.lit("OAK"))
+            .otherwise(pl.lit("LV"))
+        )
+        .otherwise(pl.col("defteam"))
+    )
+    with pytest.raises(ValueError, match="duplicate .* two abbreviations"):
+        defense_vs_position_table(split, _rosters())
+
+
 def test_pbp_of_another_season_raises(tmp_path):
     with pytest.raises(ValueError, match="2024"):
         build_defense_vs_position(2023, _pbp_dir(tmp_path, season=2023))

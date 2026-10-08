@@ -138,7 +138,7 @@ def plot_ep_by_yardline(df: pl.DataFrame, stem: Path | str) -> tuple[Path, Path]
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     csv, png = stem.with_suffix(".csv"), stem.with_suffix(".png")
-    d = df.drop_nulls(["yardline_100", "ep", "down"]).filter(pl.col("down").is_in([1, 2, 3, 4]))
+    d = df.drop_nulls(["yardline_100", "ep", "down"]).filter(pl.col("down").cast(pl.Int64, strict=False).is_in([1, 2, 3, 4]))
     d = d.with_columns(pl.col("down").cast(pl.Int64).cast(pl.Utf8).alias("Down"))
     pdf = d.select(["yardline_100", "ep", "Down"]).to_pandas()
     d.select(["yardline_100", "ep", "Down"]).write_csv(csv)

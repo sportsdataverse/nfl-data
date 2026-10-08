@@ -117,7 +117,8 @@ def prepare_fd_data(df: pl.DataFrame) -> pl.DataFrame:
         Frame with ``FD_FEATURES`` columns + ``label`` (Int32, 0..75).
     """
     out = df.filter(
-        pl.col("down").is_in([3, 4])
+        # nflverse down is Float64; polars 2.0 is_in will not coerce it against an int list
+        pl.col("down").cast(pl.Int64, strict=False).is_in([3, 4])
         & (pl.col("qb_kneel") == 0)
         & ((pl.col("rush") == 1) | (pl.col("pass") == 1))
         & pl.col("posteam").is_not_null()

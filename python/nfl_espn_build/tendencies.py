@@ -160,7 +160,7 @@ def schedule_context(sched: pl.DataFrame) -> pl.DataFrame:
     first_week = (
         sched.filter(reg)
         .select("week", team=pl.concat_list("home_team", "away_team"))
-        .explode("team")
+        .explode("team", empty_as_null=True)
         .group_by("team")
         .agg(pl.col("week").min())
     )

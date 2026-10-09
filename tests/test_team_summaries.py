@@ -32,6 +32,7 @@ from nfl_team_summaries.build import (
     _prepare_for_write,
     _rank,
     _side_pair,
+    _team_off,
     _turnovers,
     add_derived_metrics,
     build_team_opponent_splits,
@@ -487,15 +488,12 @@ def test_every_rank_has_its_metric_and_every_player_rank_its_percentile(tables):
 def test_ranks_have_no_nulls_and_percentiles_stay_off_the_ends(tables):
     _, out = tables
     ts = out["team_summaries"]
-    # the grid ranks everything (the cfb port's contract); an rbsdm extra is the
-    # exception: its rank is null exactly where the metric is null for EVERY team
-    # (an extra the synthetic season never produces), never anywhere else
+    # a rank is null exactly where its metric is null or the column is constant (two or
+    # more values, all equal: no placing to give), never anywhere else
     for c in (c for c in ts.columns if c.endswith("_rank")):
-        metric = c[: -len("_rank")]
-        if metric in RBSDM_RANKED and ts[metric].null_count() == ts.height:
-            assert ts[c].null_count() == ts.height, c
-        else:
-            assert ts[c].null_count() == 0, c
+        metric = ts[c[: -len("_rank")]]
+        constant = metric.count() > 1 and metric.drop_nulls().n_unique() == 1
+        assert (ts[c].is_null() == (metric.is_null() | constant)).all(), c
     qb = out["passing"].filter(pl.col("TEPA_pct").is_not_null())
     assert qb.height > 0
     assert (qb["TEPA_pct"] > 0).all() and (qb["TEPA_pct"] < 100).all()
@@ -626,10 +624,8 @@ def test_pct_is_monotone_with_its_metric_within_its_group(tables, table):
     [("passing", QB_QUALIFIES), ("rushing", RB_QUALIFIES), ("receiving", WR_QUALIFIES)],
 )
 def test_qualification_is_applied_identically_to_rank_and_pct(tables, table, gate):
-    """Same population for both, and a null metric costs the percentile only.
-
-    ``_rank`` reproduces R's ``na.last=TRUE`` and hands a null metric a trailing
-    rank; ``_pct`` must not, or "unknown" renders as "worst".
+    """Same population for both, and a null metric (or a constant column) is unranked:
+    no rank, no percentile, so "unknown" never renders as "worst".
     """
     _, out = tables
     df = out[table]
@@ -645,12 +641,12 @@ def test_qualification_is_applied_identically_to_rank_and_pct(tables, table, gat
         rank, pct = pl.col(f"{metric}_rank"), pl.col(f"{metric}_pct")
         # non-qualifiers carry neither
         assert df.filter(~gate).filter(rank.is_not_null() | pct.is_not_null()).height == 0, metric
-        # qualifiers all carry a rank; the percentile is dropped exactly where the metric is
-        assert qualified.filter(rank.is_null()).height == 0, metric
-        assert (
-            qualified.filter(pct.is_null()).height
-            == qualified.filter(pl.col(metric).is_null()).height
-        ), metric
+        # qualifiers carry both, except where the metric is null or constant (null ranks now)
+        m = qualified[metric]
+        constant = m.count() > 1 and m.drop_nulls().n_unique() == 1
+        unranked = m.is_null() | constant
+        assert (qualified[f"{metric}_rank"].is_null() == unranked).all(), metric
+        assert (qualified[f"{metric}_pct"].is_null() == unranked).all(), metric
         good = qualified.filter(pct.is_not_null())
         n = good.height
         assert (good[f"{metric}_pct"] == 100 * (n + 1 - good[f"{metric}_rank"]) / (n + 1)).all()
@@ -763,8 +759,8 @@ def test_attach_leader_ranks_gates_rank_and_pct_on_the_same_rows():
     hit = out.filter(~pl.col("k").is_in(["e", "f"])).sort("k")
     assert hit["TEPA_rank"].to_list() == [1.0, 2.0, 3.0, 4.0]
     assert hit["TEPA_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]
-    # a null metric keeps its trailing rank but loses the percentile
-    assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_rank"][0] == 4.0
+    # a null metric is unranked and loses the percentile (it took R's trailing rank before)
+    assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_rank"][0] is None
     assert hit.filter(pl.col("EPAgame").is_null())["EPAgame_pct"][0] is None
     # fumbles rank low-is-good: the cleanest back tops the percentile
     assert hit.sort("fumbles")["fumbles_pct"].to_list() == [80.0, 60.0, 40.0, 20.0]
@@ -833,6 +829,65 @@ def test_team_game_median_matches_the_percentiles_table(tables):
     assert tg.height > 0
     for r in tg.iter_rows(named=True):
         assert r["median"] == pytest.approx(mid[r["metric"]], abs=1e-9), r["metric"]
+
+
+# --- rush-only rates, unranked nulls, the ladder's play classification ---------------
+
+
+@pytest.mark.parametrize(
+    "metric,carry_flag",
+    [("play_stuffed", pl.col("yds_rushed") <= 0), ("opportunity_rate", pl.col("yds_rushed") >= 4)],
+)
+def test_run_rates_are_shares_of_carries(tables, metric, carry_flag):
+    """B1 / C1: a stuff and an opportunity are shares of CARRIES. Over all plays an
+    incompletion was a "stuff" and a pass a failed opportunity (rush rate x per-carry)."""
+    plays, out = tables
+    ts = out["team_summaries"].sort("team_id")
+    runs = plays.filter(pl.col("rush") == 1)
+    want = (
+        runs.group_by("pos_team_id")
+        .agg(v=carry_flag.mean(), n=pl.len())
+        .with_columns(team_id=pl.col("pos_team_id").cast(pl.Int64))
+        .sort("team_id")
+    )
+    assert ts[f"{metric}_off"].to_list() == pytest.approx(want["v"].to_list())
+    assert ts[f"{metric}_off_n"].to_list() == want["n"].to_list()
+    assert ts[f"{metric}_off_pass"].null_count() == ts.height
+    assert ts[f"{metric}_off_pass_rank"].null_count() == ts.height
+
+
+def test_rank_leaves_nulls_and_constant_columns_unranked():
+    """C4: R's na.last gave a null metric the trailing rank, an all-null column team-id
+    order and a constant split (``passrate_off_pass`` = 1) a 2.0 for everyone."""
+    df = pl.DataFrame(
+        {"x": [0.2, None, 0.5], "const": [1.0, 1.0, 1.0], "empty": [None, None, None]},
+        schema={"x": pl.Float64, "const": pl.Float64, "empty": pl.Float64},
+    )
+    out = df.select(_rank(c, descending=True).alias(c) for c in df.columns)
+    assert out["x"].to_list() == [2.0, None, 1.0]
+    assert out["const"].to_list() == [None, None, None]
+    assert out["empty"].to_list() == [None, None, None]
+
+
+def test_ladder_counts_a_scramble_as_a_rush_like_the_box(tables):
+    """B6: the box (sdv-py over ESPN) counts a scramble as a rush, so the ladder its
+    EPA/Rush, EPA/Dropback, Yards/Dropback and stuff cells are ranked on must too. The
+    season tables keep nflfastR's convention (a scramble is a dropback)."""
+    plays, out = tables
+    off = _team_off(plays)
+    scramble = pl.col("qb_scramble") == 1
+    rush = (pl.col("rush") == 1) | scramble
+    assert off.filter(scramble).height > 0
+    pg = off.group_by("game_id", "pos_team").agg(
+        rushes=rush.sum().cast(pl.Float64),
+        dropbacks=((pl.col("pass") == 1) & ~scramble).sum().cast(pl.Float64),
+        EPArush=pl.col("EPA").filter(rush).mean(),
+    )
+    ladder = out["percentiles"]
+    for m in ("rushes", "dropbacks", "EPArush"):
+        want = [pg[m].quantile(q, interpolation="linear") for q in ladder["pctile"]]
+        assert ladder[m].to_list() == pytest.approx(want), m
+    assert out["team_summaries"]["plays_off_rush"].sum() == off.filter(pl.col("rush") == 1).height
 
 
 # --- Five Factors ------------------------------------------------------------------

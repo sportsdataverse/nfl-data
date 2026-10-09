@@ -40,14 +40,12 @@ _NEUTRAL = (
 
 
 def _rank(col: str, *, descending: bool) -> pl.Expr:
+    """``build._rank``'s rule (build imports this module, so it cannot be imported
+    here): a null metric is unranked -- so a column with no values at all (an older
+    asset without the source columns) ranks nobody -- and so is a constant column."""
     c = pl.col(col)
-    base = c.rank(method="average", descending=descending)
-    n_nonnull = c.is_not_null().sum()
-    # a column with no values at all (an older asset without the source
-    # columns) ranks nobody: sequential ranks over nulls would look like data
-    null_trail = (n_nonnull + c.is_null().cum_sum()).cast(pl.Float64)
-    ranked = pl.when(c.is_null()).then(null_trail).otherwise(base)
-    return pl.when(n_nonnull == 0).then(pl.lit(None, dtype=pl.Float64)).otherwise(ranked)
+    constant = (c.count() > 1) & (c.drop_nulls().n_unique() == 1)
+    return pl.when(~constant).then(c.rank(method="average", descending=descending))
 
 
 def _pass_tendencies(plays: pl.DataFrame) -> pl.DataFrame:

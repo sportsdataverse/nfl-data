@@ -8,7 +8,8 @@ ESPN's incomplete college sidecars (name->id maps for sacks and interceptions):
 nflfastR-shape pbp carries ``passer_player_id`` on every sack and pick, so the
 passer table is a plain aggregation here.
 
-Ranks follow R's ``rank()`` (average ties, nulls trailing); percentiles are
+Ranks follow R's ``rank()`` (average ties), except that a null metric and a
+constant column are unranked (null). Percentiles are
 Weibull positions among qualifiers with null metrics excluded from the
 denominator -- see ``_rank`` / ``_pct``.
 """
@@ -186,18 +187,13 @@ PLAYER_PERCENTILE_METRICS: list[str] = list(
 
 
 def _rank(col: str, *, descending: bool) -> pl.Expr:
-    """R ``rank()`` -- average ties, ``na.last=TRUE`` (nulls take the trailing ranks)."""
+    """R ``rank()`` with average ties, but a null metric stays UNRANKED (null), so "no
+    sample" never renders as "worst"; and a constant column (two or more values, all
+    equal, like ``passrate_off_pass``) ranks nobody -- a tie for everyone is not a
+    placing. An all-null column (``line_yards_off_pass``) is then unranked too."""
     c = pl.col(col)
-    base = c.rank(method="average", descending=descending)
-    n_nonnull = c.is_not_null().sum()
-    null_trail = (n_nonnull + c.is_null().cum_sum()).cast(pl.Float64)
-    return pl.when(c.is_null()).then(null_trail).otherwise(base)
-
-
-def _rank_known(col: str, *, descending: bool) -> pl.Expr:
-    """``_rank`` for a metric that can be legitimately absent: a null stays UNRANKED
-    (null) instead of taking a trailing rank, so "no sample" never renders as "worst"."""
-    return pl.col(col).rank(method="average", descending=descending)
+    constant = (c.count() > 1) & (c.drop_nulls().n_unique() == 1)
+    return pl.when(~constant).then(c.rank(method="average", descending=descending))
 
 
 def _pct(col: str) -> pl.Expr:
@@ -479,11 +475,11 @@ def _drives(plays: pl.DataFrame, group: str, ascending: bool) -> pl.DataFrame:
     )
     return agg.with_columns(
         available_yards_pct_rank=_rank("available_yards_pct", descending=not ascending),
-        pts_per_opp_rank=_rank_known("pts_per_opp", descending=not ascending),
+        pts_per_opp_rank=_rank("pts_per_opp", descending=not ascending),
         # fewer yards to go ranks first on offense, more allowed on defense; the points
         # version the other way round
         start_position_rank=_rank("start_position", descending=ascending),
-        drive_start_ep_rank=_rank_known("drive_start_ep", descending=not ascending),
+        drive_start_ep_rank=_rank("drive_start_ep", descending=not ascending),
     )
 
 
@@ -510,9 +506,9 @@ def _drives_table(plays: pl.DataFrame) -> pl.DataFrame:
             ),
             total_gained_yards_margin_rank=_rank("total_gained_yards_margin", descending=True),
             available_yards_pct_margin_rank=_rank("available_yards_pct_margin", descending=True),
-            pts_per_opp_margin_rank=_rank_known("pts_per_opp_margin", descending=True),
+            pts_per_opp_margin_rank=_rank("pts_per_opp_margin", descending=True),
             start_position_margin_rank=_rank("start_position_margin", descending=True),
-            drive_start_ep_margin_rank=_rank_known("drive_start_ep_margin", descending=True),
+            drive_start_ep_margin_rank=_rank("drive_start_ep_margin", descending=True),
         )
     )
 
@@ -941,8 +937,8 @@ def _attach_cohort_percentiles(
 
     The college twin's formula. The cohort rank ``r`` is the rank of ``<m>_rank``
     ascending within the cohort, over the rows whose ``<m>`` and ``<m>_rank`` are
-    both non-null (a null ``_rank`` is a non-qualifier or an unranked rbsdm extra;
-    a null ``<m>`` carries R's trailing na.last rank, which is not a placing).
+    both non-null (a null ``_rank`` is a non-qualifier, a null metric or a column
+    ``_rank`` leaves unranked).
     ``_rank`` already encodes direction, so ascending is best-first. Ties take
     ``_rank``'s own ``average`` method. The value is ``100 * (n + 1 - r) / (n + 1)``
     with ``n`` those rows in the cohort, and null when ``<m>`` or the cohort key is

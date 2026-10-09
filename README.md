@@ -210,8 +210,8 @@ carries the thresholds behind them. Five things a reader will otherwise get wron
    exactly 0 or 100, which leaves room at both ends.
 4. **A null metric yields a null percentile**, and null rows leave the
    denominator, so "unknown" never renders as "worst" or depresses everyone
-   else's placing. (`_rank` still hands it a trailing rank — that is R's
-   `na.last = TRUE`, kept for the leaderboard.)
+   else's placing. Its `_rank` is null too, as is every rank of a constant
+   column (all values equal, e.g. `passrate_off_pass`).
 5. **In-season percentiles move weekly** as the qualifier population grows.
    Expected, not a bug.
 

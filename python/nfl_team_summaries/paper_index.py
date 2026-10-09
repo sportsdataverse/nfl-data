@@ -59,7 +59,7 @@ from pathlib import Path
 
 import polars as pl
 
-from nfl_team_summaries.build import ESPN_FIRST_SEASON, _rank_known
+from nfl_team_summaries.build import ESPN_FIRST_SEASON, _rank
 
 TAG = "nfl_paper_index_games"
 STEM = "paper_index_games"
@@ -298,8 +298,8 @@ def attach_luck(team_data: pl.DataFrame, games: pl.DataFrame, season: int) -> pl
         team_data.join(luck, on="team_id", how="left", validate="1:1")
         .with_columns(
             paper_index_games_n=pl.col("paper_index_games_n").fill_null(0),
-            luck_wins_rank=_rank_known("luck_wins", descending=True),
-            luck_z_rank=_rank_known("luck_z", descending=True),
+            luck_wins_rank=_rank("luck_wins", descending=True),
+            luck_z_rank=_rank("luck_z", descending=True),
             paper_index_span=pl.lit(paper_index_span(season)),
         )
         .select(*team_data.columns, *LUCK_COLUMNS)

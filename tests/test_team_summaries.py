@@ -833,6 +833,28 @@ def test_team_game_median_matches_the_percentiles_table(tables):
 # --- rush-only rates, unranked nulls, the ladder's play classification ---------------
 
 
+@pytest.mark.parametrize(
+    "metric,carry_flag",
+    [("play_stuffed", pl.col("yds_rushed") <= 0), ("opportunity_rate", pl.col("yds_rushed") >= 4)],
+)
+def test_run_rates_are_shares_of_carries(tables, metric, carry_flag):
+    """B1 / C1: a stuff and an opportunity are shares of CARRIES. Over all plays an
+    incompletion was a "stuff" and a pass a failed opportunity (rush rate x per-carry)."""
+    plays, out = tables
+    ts = out["team_summaries"].sort("team_id")
+    runs = plays.filter(pl.col("rush") == 1)
+    want = (
+        runs.group_by("pos_team_id")
+        .agg(v=carry_flag.mean(), n=pl.len())
+        .with_columns(team_id=pl.col("pos_team_id").cast(pl.Int64))
+        .sort("team_id")
+    )
+    assert ts[f"{metric}_off"].to_list() == pytest.approx(want["v"].to_list())
+    assert ts[f"{metric}_off_n"].to_list() == want["n"].to_list()
+    assert ts[f"{metric}_off_pass"].null_count() == ts.height
+    assert ts[f"{metric}_off_pass_rank"].null_count() == ts.height
+
+
 def test_rank_leaves_nulls_and_constant_columns_unranked():
     """C4: R's na.last gave a null metric the trailing rank, an all-null column team-id
     order and a constant split (``passrate_off_pass`` = 1) a 2.0 for everyone."""

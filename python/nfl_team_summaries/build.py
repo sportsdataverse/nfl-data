@@ -214,7 +214,9 @@ def _pct(col: str) -> pl.Expr:
 def add_derived_metrics(plays: pl.DataFrame) -> pl.DataFrame:
     """Per-play situational columns the grid aggregates."""
     df = plays.with_columns(
-        play_stuffed=pl.col("yards_gained") <= 0,
+        # a stuffed RUN (sdv-py's ``stuffed_run``): null off rushes (``yds_rushed`` is), so
+        # every mean is a share of carries, never of all plays with incompletions as stuffs
+        play_stuffed=pl.col("yds_rushed") <= 0,
         red_zone=pl.col("yards_to_goal") <= 20,
     )
     df = df.with_columns(
@@ -236,7 +238,9 @@ def add_derived_metrics(plays: pl.DataFrame) -> pl.DataFrame:
         .when(pl.col("rush") == 1)
         .then(pl.col("EPA") >= _EXPLOSIVE_RUSH_EPA)
         .otherwise(False),
-        opportunity_run=(pl.col("rush") == 1) & (pl.col("yds_rushed") >= 4),
+        # over rushes only (null elsewhere), like play_stuffed: False on a pass made the
+        # rate rush rate x per-carry rate
+        opportunity_run=pl.col("yds_rushed") >= 4,
     )
     rush = pl.col("rush") == 1
     yds = pl.col("yds_rushed")

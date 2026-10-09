@@ -32,6 +32,7 @@ from nfl_team_summaries.build import (
     _prepare_for_write,
     _rank,
     _side_pair,
+    _team_off,
     _turnovers,
     add_derived_metrics,
     build_team_opponent_splits,
@@ -867,6 +868,26 @@ def test_rank_leaves_nulls_and_constant_columns_unranked():
     assert out["const"].to_list() == [None, None, None]
     assert out["empty"].to_list() == [None, None, None]
 
+
+def test_ladder_counts_a_scramble_as_a_rush_like_the_box(tables):
+    """B6: the box (sdv-py over ESPN) counts a scramble as a rush, so the ladder its
+    EPA/Rush, EPA/Dropback, Yards/Dropback and stuff cells are ranked on must too. The
+    season tables keep nflfastR's convention (a scramble is a dropback)."""
+    plays, out = tables
+    off = _team_off(plays)
+    scramble = pl.col("qb_scramble") == 1
+    rush = (pl.col("rush") == 1) | scramble
+    assert off.filter(scramble).height > 0
+    pg = off.group_by("game_id", "pos_team").agg(
+        rushes=rush.sum().cast(pl.Float64),
+        dropbacks=((pl.col("pass") == 1) & ~scramble).sum().cast(pl.Float64),
+        EPArush=pl.col("EPA").filter(rush).mean(),
+    )
+    ladder = out["percentiles"]
+    for m in ("rushes", "dropbacks", "EPArush"):
+        want = [pg[m].quantile(q, interpolation="linear") for q in ladder["pctile"]]
+        assert ladder[m].to_list() == pytest.approx(want), m
+    assert out["team_summaries"]["plays_off_rush"].sum() == off.filter(pl.col("rush") == 1).height
 
 
 # --- Five Factors ------------------------------------------------------------------

@@ -26,6 +26,7 @@ from sportsdataverse.cfb import cfb_adjusted_epa
 
 from .checks import assert_adjustment_is_real, assert_finite, assert_passer_identity
 from .crosswalk import attach_team_ids, load_crosswalk
+from .input import box_classification
 from .league_averages import build_league_averages
 from .rbsdm import passer_extras, team_extras
 
@@ -1010,7 +1011,9 @@ def _attach_position_cohorts(df: pl.DataFrame, rosters: pl.DataFrame | None) -> 
 
 def per_game_metrics(df: pl.DataFrame) -> pl.DataFrame:
     """One row per (game_id, pos_team): the team-game metrics both the percentile
-    ladder and the ``team_game`` league baselines are cut over.
+    ladder and the ``team_game`` league baselines are cut over. ``build_team_summaries``
+    passes the box-classified frame (:func:`.input.box_classification`): dropbacks,
+    rushes and every rush or dropback rate here count a scramble as a rush.
     """
     per_game = df.group_by(["game_id", "pos_team"]).agg(
         GEI=pl.col("GEI").drop_nulls().first(),
@@ -1295,7 +1298,9 @@ def build_team_summaries(
     plays = add_derived_metrics(plays_input)
     team_off = _team_off(plays)
 
-    pctls = team_off.with_columns(
+    # the ladder speaks the box score's play classification (a scramble is a rush), so
+    # each box cell is ranked against its own definition; the season tables do not
+    pctls = _team_off(add_derived_metrics(box_classification(plays_input))).with_columns(
         GEI=(pl.col("wpa").abs().sum().over("game_id")) * (_GEI_NORM / pl.len().over("game_id"))
     )
     per_game = per_game_metrics(pctls)

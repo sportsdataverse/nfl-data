@@ -201,6 +201,27 @@ def prepare_plays(
     return df
 
 
+def box_classification(plays: pl.DataFrame) -> pl.DataFrame:
+    """:func:`prepare_plays` output with each QB scramble moved from the dropbacks to the
+    rushes, as sdv-py's box score counts it (ESPN types a scramble ``Rush``).
+
+    The percentile ladder is cut from this frame, so a box cell (EPA/Rush, EPA/Dropback,
+    Yards/Dropback, Def Run Stuff Rate) is ranked against its own play set. The season
+    tables keep nflfastR's convention: a scramble is a dropback.
+    """
+    scramble = _flag("qb_scramble") == 1
+    rush = (pl.col("rush") == 1) | scramble
+    return plays.with_columns(
+        **{"pass": ((pl.col("pass") == 1) & ~scramble).cast(pl.Float64)},
+        rush=rush.cast(pl.Float64),
+        yds_rushed=pl.when(scramble)
+        .then(pl.col("rushing_yards").fill_null(pl.col("yards_gained")).cast(pl.Float64))
+        .otherwise(pl.col("yds_rushed")),
+        pos_EPA_pass=pl.when((pl.col("pass") == 1) & ~scramble).then(pl.col("EPA")),
+        pos_EPA_rush=pl.when(rush).then(pl.col("EPA")),
+    )
+
+
 def _schedule(season: int, schedule_fn) -> Optional[pl.DataFrame]:
     try:
         if schedule_fn is None:

@@ -156,7 +156,7 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
 - Workflows: `.github/workflows/nfl_pbp_cron.yml` (model_pbp), `nfl_rosters_players_cron.yml`
   (rosters/players/player-stats/team-stats/qbr). Both: `workflow_dispatch` + cron
   pbp `0 20 * 9-12,1,2 *` (daily 20:00 UTC, Sep–Feb); rosters `0 9 * 9-12,1,2 1` (Mondays, full
-  run) plus `30 20 * 9-12,1,2 *` (daily, `nfl_rosters` only); checkout nfl-data + nfl-raw, install uv,
+  run) plus `30 20 * 9-12,1,2 *` (daily: `nfl_rosters`, `nfl_player_stats`, `nfl_team_stats`); checkout nfl-data + nfl-raw, install uv,
   install sdv-py from git@main, publish with `SDV_GH_TOKEN`.
 - `python/native_pbp/__init__.py` documents the build-module order (stat_ids → parse → players →
   description → features → labels → parity).

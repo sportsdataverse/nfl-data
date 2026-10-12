@@ -23,11 +23,13 @@ concurrency:
 
 on:
   schedule:
-    # Tuesdays 20:00 UTC, Sep-Feb: AFTER nfl-raw's daily scrape (11:45 cron; GitHub starts it
+    # Daily 20:00 UTC, Sep-Feb: AFTER nfl-raw's daily scrape (11:45 cron; GitHub starts it
     # 14:48-17:12 UTC and it pushes minutes later). The old 10:30 slot actually started ~15:07
     # and lost that race on 2026-09-15 and 09-22, so Monday night shipped a week late -- the
-    # same move nfl_pbp_cron.yml already made.
-    - cron: '0 20 * 9-12,1,2 2'
+    # same move nfl_pbp_cron.yml already made. Daily (was Tuesdays only, 2026-10-11): Thursday,
+    # Saturday and Sunday games land the next day instead of the next Tuesday, ahead of
+    # sdv-db's 11:00 ET nightly ingest.
+    - cron: '0 20 * 9-12,1,2 *'
   workflow_dispatch:
     inputs:
       start_year:

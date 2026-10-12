@@ -66,8 +66,14 @@ on:
         default: ""
 
   schedule:
-    # Mondays 09:00 UTC, September through February (active NFL season window).
+    # Mondays 09:00 UTC, September through February (active NFL season window):
+    # the full run (rosters + players + player-stats + team-stats + QBR).
     - cron: "0 9 * 9-12,1,2 1"
+    # Daily 20:30 UTC in season: nfl_rosters ONLY (current season; rosters move with
+    # every transaction). The other steps skip on this schedule -- they rebuild full
+    # history (player-stats 1999-, QBR 2006-) or walk ~7,500 ESPN athlete $refs.
+    # The literal is repeated in each step's `if:`; change them together.
+    - cron: "30 20 * 9-12,1,2 *"
 
 concurrency:
   group: nfl-rosters-players-build
@@ -163,7 +169,7 @@ jobs:
             --repo sportsdataverse/sportsdataverse-data
 
       - name: Publish nfl_players
-        if: ${{ github.event.inputs.skip_players != 'true' }}
+        if: ${{ github.event.inputs.skip_players != 'true' && github.event.schedule != '30 20 * 9-12,1,2 *' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
@@ -196,7 +202,7 @@ jobs:
       # REG+POST, offense) from the SDV-native play-by-play and publish to the
       # nfl_player_stats release. --clobber upload is idempotent.
       - name: Publish nfl_player_stats
-        if: ${{ github.event.inputs.skip_player_stats != 'true' }}
+        if: ${{ github.event.inputs.skip_player_stats != 'true' && github.event.schedule != '30 20 * 9-12,1,2 *' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
@@ -231,7 +237,7 @@ jobs:
       # play-by-play and publish to the nfl_team_stats release. --clobber upload
       # is idempotent.
       - name: Publish nfl_team_stats
-        if: ${{ github.event.inputs.skip_team_stats != 'true' }}
+        if: ${{ github.event.inputs.skip_team_stats != 'true' && github.event.schedule != '30 20 * 9-12,1,2 *' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
@@ -265,7 +271,7 @@ jobs:
       # qbr_season_level + qbr_week_level parquets and publish to the
       # nfl_espn_qbr release. --clobber upload is idempotent.
       - name: Publish nfl_espn_qbr
-        if: ${{ github.event.inputs.skip_qbr != 'true' }}
+        if: ${{ github.event.inputs.skip_qbr != 'true' && github.event.schedule != '30 20 * 9-12,1,2 *' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}

@@ -69,10 +69,12 @@ on:
     # Mondays 09:00 UTC, September through February (active NFL season window):
     # the full run (rosters + players + player-stats + team-stats + QBR).
     - cron: "0 9 * 9-12,1,2 1"
-    # Daily 20:30 UTC in season: nfl_rosters ONLY (current season; rosters move with
-    # every transaction). The other steps skip on this schedule -- they rebuild full
-    # history (player-stats 1999-, QBR 2006-) or walk ~7,500 ESPN athlete $refs.
-    # The literal is repeated in each step's `if:`; change them together.
+    # Daily 20:30 UTC in season: nfl_rosters (current season) + nfl_player_stats /
+    # nfl_team_stats (aggregates of the daily nfl_model_pbp release; ~30 s each, no
+    # ESPN calls). Each is ONE combined all-seasons parquet, so the daily run keeps
+    # the full 1999.. range -- a current-season-only build would overwrite history.
+    # players (~7,500 ESPN athlete $refs) and QBR skip on this schedule; the literal
+    # is repeated in those two steps' `if:`, change them together.
     - cron: "30 20 * 9-12,1,2 *"
 
 concurrency:
@@ -202,7 +204,7 @@ jobs:
       # REG+POST, offense) from the SDV-native play-by-play and publish to the
       # nfl_player_stats release. --clobber upload is idempotent.
       - name: Publish nfl_player_stats
-        if: ${{ github.event.inputs.skip_player_stats != 'true' && github.event.schedule != '30 20 * 9-12,1,2 *' }}
+        if: ${{ github.event.inputs.skip_player_stats != 'true' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}
@@ -237,7 +239,7 @@ jobs:
       # play-by-play and publish to the nfl_team_stats release. --clobber upload
       # is idempotent.
       - name: Publish nfl_team_stats
-        if: ${{ github.event.inputs.skip_team_stats != 'true' && github.event.schedule != '30 20 * 9-12,1,2 *' }}
+        if: ${{ github.event.inputs.skip_team_stats != 'true' }}
         working-directory: nfl-data/python
         env:
           GH_TOKEN: ${{ secrets.SDV_GH_TOKEN }}

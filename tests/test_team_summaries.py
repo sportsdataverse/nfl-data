@@ -1164,6 +1164,12 @@ SPLITS_SCHEMA = {
     "week": pl.Int64,
     "season_type": pl.Int64,
     "nflverse_game_id": pl.Utf8,
+    "pass_plays": pl.Int64,
+    "rush_plays": pl.Int64,
+    "epa_per_pass": pl.Float64,
+    "epa_per_rush": pl.Float64,
+    "success_rate_pass": pl.Float64,
+    "success_rate_rush": pl.Float64,
 }
 
 
@@ -1221,6 +1227,43 @@ def test_opponent_splits_reconcile_with_season_epa(tables, splits):
     for r in j.iter_rows(named=True):
         assert abs(r["epa"] - r["EPAplay_off"]) <= 1e-9, r
         assert r["plays"] == r["plays_off"], r
+
+
+def test_opponent_splits_pass_rush_reconcile_with_season_pass_rush_grid(tables, splits):
+    """Plays-weighted pass / rush splits over a team's games ARE the grid's
+    EPAplay_off_pass / _rush and success_off_pass / _rush (the same frames)."""
+    ts = tables[1]["team_summaries"].select(
+        "team_id",
+        "plays_off_pass",
+        "plays_off_rush",
+        "EPAplay_off_pass",
+        "EPAplay_off_rush",
+        "success_off_pass",
+        "success_off_rush",
+    )
+    pw, rw = pl.col("pass_plays"), pl.col("rush_plays")
+    w = splits.group_by("team_id").agg(
+        pp=pw.sum(),
+        rp=rw.sum(),
+        epa_pass=(pl.col("epa_per_pass") * pw).sum() / pw.sum(),
+        epa_rush=(pl.col("epa_per_rush") * rw).sum() / rw.sum(),
+        suc_pass=(pl.col("success_rate_pass") * pw).sum() / pw.sum(),
+        suc_rush=(pl.col("success_rate_rush") * rw).sum() / rw.sum(),
+    )
+    j = ts.join(w, on="team_id", how="inner", validate="1:1")
+    assert j.height == 4
+    for r in j.iter_rows(named=True):
+        assert r["pp"] == r["plays_off_pass"] and r["rp"] == r["plays_off_rush"], r
+        for mine, grid in (
+            ("epa_pass", "EPAplay_off_pass"),
+            ("epa_rush", "EPAplay_off_rush"),
+            ("suc_pass", "success_off_pass"),
+            ("suc_rush", "success_off_rush"),
+        ):
+            assert abs(r[mine] - r[grid]) <= 1e-9, (mine, r)
+    # pass and rush are disjoint slices of the scrimmage plays
+    assert (splits["pass_plays"] + splits["rush_plays"] <= splits["plays"]).all()
+    assert (splits["pass_plays"] > 0).all() and (splits["rush_plays"] > 0).all()
 
 
 def _splits_with(raw_extra: pl.DataFrame | None = None, ids=None, yr: int = 2025):

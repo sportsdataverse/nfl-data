@@ -291,6 +291,12 @@ still build and publish, and the run exits 1.
 | week | Int64 | Week of the season. |
 | season_type | Int64 | ESPN season-type code (2 = regular season). |
 | nflverse_game_id | Utf8 | nflverse game id (e.g. `2025_01_KC_LAC`). |
+| pass_plays | Int64 | Dropbacks (throws, sacks, scrambles) behind `epa_per_pass`: the season grid's `pass` flag. |
+| rush_plays | Int64 | Designed rushes behind `epa_per_rush`: the season grid's `rush` flag. |
+| epa_per_pass | Float64 | Mean EPA per dropback (`EPAplay_off_pass` per game); null when the team had none. |
+| epa_per_rush | Float64 | Mean EPA per rush (`EPAplay_off_rush` per game); null when the team had none. |
+| success_rate_pass | Float64 | Share of dropbacks with EPA > 0 (`success_off_pass` per game). |
+| success_rate_rush | Float64 | Share of rushes with EPA > 0 (`success_off_rush` per game). |
 
 ## League averages
 

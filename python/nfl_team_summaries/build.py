@@ -1175,6 +1175,15 @@ SPLITS_COLUMNS = [
     "week",
     "season_type",
     "nflverse_game_id",
+    # pass/rush splits, named like the college twin (adv_team's EPA_passing_per_play ...);
+    # appended so the original column order is untouched. `pass` is the season grid's own
+    # flag: a dropback (throws, sacks, scrambles), so epa_per_pass is EPA per dropback.
+    "pass_plays",
+    "rush_plays",
+    "epa_per_pass",
+    "epa_per_rush",
+    "success_rate_pass",
+    "success_rate_rush",
 ]
 
 
@@ -1191,7 +1200,11 @@ def build_team_opponent_splits(
     ``epa_per_play`` / ``success_rate`` / ``plays`` aggregate the SAME scrimmage
     frame the grid's ``EPAplay_off`` does (:func:`_team_off`), per ``(game_id,
     pos_team_id, def_pos_team_id)``, so a team's plays-weighted mean over its games
-    is its season ``EPAplay_off``. Points are the final ``home_score`` /
+    is its season ``EPAplay_off``. The pass/rush split columns do the same over the
+    grid's ``_pass`` / ``_rush`` frames (``EPAplay_off_pass`` / ``_rush``,
+    ``success_off_pass`` / ``_rush``): ``pass`` is a dropback, so ``epa_per_pass`` is
+    EPA per dropback; a scramble is a dropback here (the season tables' convention).
+    A game where the team never ran (or never dropped back) has null for that split. Points are the final ``home_score`` /
     ``away_score`` nflfastR carries on every row of a game. A side with no
     scrimmage play is dropped, which removes a game that was never played
     (``2022_17_BUF_CIN``, the no-contest, carries only two placeholder rows and a
@@ -1239,6 +1252,12 @@ def build_team_opponent_splits(
             epa_per_play=pl.col("EPA").mean(),
             success_rate=pl.col("epa_success").mean(),
             plays=pl.len().cast(pl.Int64),
+            pass_plays=(pl.col("pass") == 1).sum().cast(pl.Int64),
+            rush_plays=(pl.col("rush") == 1).sum().cast(pl.Int64),
+            epa_per_pass=pl.col("EPA").filter(pl.col("pass") == 1).mean(),
+            epa_per_rush=pl.col("EPA").filter(pl.col("rush") == 1).mean(),
+            success_rate_pass=pl.col("epa_success").filter(pl.col("pass") == 1).mean(),
+            success_rate_rush=pl.col("epa_success").filter(pl.col("rush") == 1).mean(),
         )
         .select(
             pl.col("game_id").alias("nflverse_game_id"),
@@ -1247,6 +1266,12 @@ def build_team_opponent_splits(
             "epa_per_play",
             "success_rate",
             "plays",
+            "pass_plays",
+            "rush_plays",
+            "epa_per_pass",
+            "epa_per_rush",
+            "success_rate_pass",
+            "success_rate_rush",
         )
     )
     keys = ["nflverse_game_id", "team_id", "opponent_id"]

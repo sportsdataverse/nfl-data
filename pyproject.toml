@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Builds NFL compiled play-by-play datasets + trains EP/WP/CP models from sportsdataverse/nfl-raw committed JSON; publishes to sportsdataverse-data."
 requires-python = ">=3.11"
 dependencies = [
-    "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py@main",
+    # pinned 2026-10-21 until REPROCESS runs #1/#2 (sdv-py quality program, WB-nfl-2)
+    "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py@9e9e0d6de36eba6450d5025a4852408fb4f3128c",
     "polars>=1.0",
     "pyarrow>=15.0",
     "requests>=2.28",

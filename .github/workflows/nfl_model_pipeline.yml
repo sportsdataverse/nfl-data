@@ -124,12 +124,13 @@ jobs:
       # `uv sync --frozen` already installed the lockfile-pinned release and a
       # plain install no-ops against a satisfied environment. Every `uv run`
       # below passes --no-sync so this is not undone.
-      - name: Install sportsdataverse from git (main)
+      # pinned 2026-10-21 until REPROCESS runs #1/#2 (sdv-py quality program, WB-nfl-2)
+      - name: Install sportsdataverse from git (pinned)
         if: steps.sel.outputs.selected == 'true'
         working-directory: nfl-data
         run: |
           uv pip install --reinstall --refresh \
-            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@9e9e0d6de36eba6450d5025a4852408fb4f3128c"
 
       # Fail in seconds on a broken surface rather than after a multi-hour fit.
       - name: Verify trainer surface imports

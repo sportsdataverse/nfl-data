@@ -117,11 +117,12 @@ jobs:
       # uv.lock (0.0.66) BEFORE running, silently reverting that install and
       # reintroducing the very ImportError the verify step exists to catch.
       # TODO: pin to a PyPI release once it ships build_nfl_rosters/build_nfl_players.
-      - name: Install sportsdataverse from git (main)
+      # pinned 2026-10-21 until REPROCESS runs #1/#2 (sdv-py quality program, WB-nfl-2)
+      - name: Install sportsdataverse from git (pinned)
         working-directory: nfl-data/python
         run: |
           uv pip install --reinstall --refresh \
-            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@main"
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@9e9e0d6de36eba6450d5025a4852408fb4f3128c"
 
       - name: Verify builders import
         working-directory: nfl-data/python

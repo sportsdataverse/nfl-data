@@ -88,7 +88,7 @@ _RELEASE_BODY = {
         "TE rows are completions only). Built by stage 08 with sdv-py "
         "defense_vs_position."
     ),
-    # No fit years here on purpose: they live in sportsdataverse.paper_index, and
+    # No fit years here on purpose: they live in sportsdataverse.analytics.paper_index, and
     # importing it in this module would stop every publish stage on an sdv-py older
     # than the port (cfbfastR-cfb-data hit exactly that, e3e4a4e8).
     "nfl_paper_index_games": (
@@ -104,7 +104,7 @@ _RELEASE_BODY = {
         "team_id are the ESPN ids. paper_index_span says where the season sits against "
         "the fit: train = that season's games were part of the fit, so its shares are "
         "in-sample; holdout = scored out of sample at fit time; out_of_span = never seen "
-        "by the fit and never evaluated (the spans are sportsdataverse.paper_index's "
+        "by the fit and never evaluated (the spans are sportsdataverse.analytics.paper_index's "
         "TRAIN_SEASONS and HOLDOUT_SEASONS). The regular-season sums are the "
         "deserved_wins / luck_wins / luck_z columns of nfl_team_summaries. Built by "
         "stage 09 with sdv-py paper_index_games from espn_nfl_pbp."

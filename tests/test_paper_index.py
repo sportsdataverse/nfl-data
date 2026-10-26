@@ -21,7 +21,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-import sportsdataverse.paper_index as pi
+import sportsdataverse.analytics.paper_index as pi
 import yaml
 from nfl_model_publish import artifacts
 from nfl_model_publish.artifacts import _RELEASE_BODY, PKG_FUNCTION
@@ -672,7 +672,7 @@ def test_no_model_or_feature_set_reads_the_summaries_tables():
 
 def test_stages_import_on_an_sdv_py_without_paper_index():
     """A checkout whose venv was not synced after the lock moved has no
-    ``sportsdataverse.paper_index``. Stage 06's CLI imports this module and stages 07 and
+    ``sportsdataverse.analytics.paper_index``. Stage 06's CLI imports this module and stages 07 and
     08 import stage 06's CLI: all of them must still import there, and only a call that
     needs the Paper Index may fail. A fresh interpreter, so no module is already loaded."""
     code = "\n".join(
@@ -681,7 +681,7 @@ def test_stages_import_on_an_sdv_py_without_paper_index():
             # the locked sdv-py imports paper_index in its own __init__, so the package
             # is loaded first and the submodule taken away after: an older sdv-py
             "import sportsdataverse",
-            "sys.modules['sportsdataverse.paper_index'] = None  # import -> ImportError",
+            "sys.modules['sportsdataverse.analytics.paper_index'] = None  # import -> ImportError",
             "import nfl_team_summaries.__main__, nfl_team_summaries.curves",
             "import nfl_model_publish.artifacts, nfl_espn_build.cli",
             "from nfl_team_summaries import paper_index",

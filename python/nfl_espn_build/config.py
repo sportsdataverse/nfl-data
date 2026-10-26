@@ -106,7 +106,7 @@ class DatasetSpec:
     #: ``"team"`` (season x team), ``"coach"`` (season x team x head coach) or
     #: ``"careers"`` (every written coach season summed per coach, one file)
     tendencies: str | None = None
-    #: ``sportsdataverse.rolling_windows`` over the WRITTEN pbp seasons through
+    #: ``sportsdataverse.analytics.rolling_windows`` over the WRITTEN pbp seasons through
     #: the build season (:mod:`nfl_espn_build.rolling`), not the season's finals
     rolling: bool = False
 

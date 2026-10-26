@@ -2,7 +2,7 @@
 
 FG% by kick distance, completion% and EPA by air-yards bucket, 4th-down conversion
 by yards to go and success by down x distance, each bucket with attempts,
-successes, rate and EPA/attempt: ``sportsdataverse.metric_curves`` over ONE season
+successes, rate and EPA/attempt: ``sportsdataverse.analytics.metric_curves`` over ONE season
 of ``nfl_model_pbp`` (regular season + postseason, the adapter's population). The
 NFL twin of cfbfastR-cfb-data's stage 65; the span is the ``nfl_model_pbp`` span,
 and a season whose pbp carries no air yards simply has no air-yards rows (an
@@ -39,7 +39,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import polars as pl
-from sportsdataverse.metric_curves import (
+from sportsdataverse.analytics.metric_curves import (
     NFLFASTR_ATTEMPT_COLUMNS,
     OUTPUT_SCHEMA,
     metric_curves,

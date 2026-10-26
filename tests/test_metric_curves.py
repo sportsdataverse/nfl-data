@@ -18,7 +18,7 @@ from nfl_model_publish import artifacts
 from nfl_model_publish.artifacts import _RELEASE_BODY, PKG_FUNCTION
 from nfl_team_summaries.crosswalk import load_crosswalk
 from nfl_team_summaries.curves import SCHEMA, STEM, TAG, build_metric_curves, gsis_to_espn, main
-from sportsdataverse.metric_curves import BUCKET_EDGES
+from sportsdataverse.analytics.metric_curves import BUCKET_EDGES
 
 ROOT = Path(__file__).resolve().parents[1]
 SEASON = 2024

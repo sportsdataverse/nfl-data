@@ -1,4 +1,4 @@
-"""``nfl_rolling_windows``: last-N-events form (``sportsdataverse.rolling_windows``).
+"""``nfl_rolling_windows``: last-N-events form (``sportsdataverse.analytics.rolling_windows``).
 
 Cut from the WRITTEN ``espn_nfl_pbp`` seasons 2002..S (the career history the
 baselines need). A scheduled run in CI has only the current season on disk, so
@@ -103,7 +103,7 @@ def season_frame(
     nine days earlier -- so it is replaced from the published tag; if that
     download fails the season is empty and nothing is published.
     """
-    from sportsdataverse.rolling_windows import (
+    from sportsdataverse.analytics.rolling_windows import (
         FOOTBALL_PBP_COLUMNS,
         football_events,
         rolling_windows,

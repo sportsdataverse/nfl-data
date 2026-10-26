@@ -65,12 +65,12 @@ import sys
 from pathlib import Path
 
 import polars as pl
-from sportsdataverse.defense_vs_position import OUTPUT_SCHEMA as _T1_SCHEMA
+from sportsdataverse.analytics.defense_vs_position import OUTPUT_SCHEMA as _T1_SCHEMA
 
 # ponytail: _plays is sdv-py's private population filter; importing it keeps the
 # share on exactly the plays the rows count. uv.lock pins the commit; if sdv-py
 # renames it this import fails at build time -- ask for a public name then.
-from sportsdataverse.defense_vs_position import PBP_COLUMNS, _plays, defense_vs_position
+from sportsdataverse.analytics.defense_vs_position import PBP_COLUMNS, _plays, defense_vs_position
 
 from nfl_team_summaries.__main__ import REPO, _parse_seasons
 from nfl_team_summaries.build import MIN_COHORT_TEAMS, _attach_cohort_percentiles, _teams_lookup

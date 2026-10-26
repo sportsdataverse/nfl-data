@@ -12,7 +12,7 @@ sha256 as `sportsdataverse-py/tests/fixtures/paper_index/README.md` records).
 
 ## Selection
 
-Every play of seven games, projected to `sportsdataverse.paper_index.PBP_COLUMNS` (23
+Every play of seven games, projected to `sportsdataverse.analytics.paper_index.PBP_COLUMNS` (23
 columns) plus `nflverse_game_id`, sorted by `game_id, game_play_number`. Ids are as
 released: `game_id`, `pos_team_id`, `homeTeamId`, `awayTeamId` all Int64;
 `nflverse_game_id` is text.
@@ -44,7 +44,7 @@ the game is not scored; the first 56 give Atlanta 22 and it is.
 
 ## Hand numbers
 
-Shares are `sportsdataverse.paper_index.paper_index_games` at sdv-py `769ea7fc` on the
+Shares are `sportsdataverse.analytics.paper_index.paper_index_games` at sdv-py `769ea7fc` on the
 fixture rows. The four oracle games are also Game on Paper's own module on the same
 rows and the trainer's full-precision shares, both copied from sdv-py's
 `tests/fixtures/paper_index/` (`gop_compute_nfl.json` `homeShare`,

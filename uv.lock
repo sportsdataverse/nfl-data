@@ -1086,7 +1086,7 @@ requires-dist = [
     { name = "polars", specifier = ">=1.0" },
     { name = "pyarrow", specifier = ">=15.0" },
     { name = "requests", specifier = ">=2.28" },
-    { name = "sportsdataverse", git = "https://github.com/sportsdataverse/sportsdataverse-py?rev=c2031afbc72a0e892a19e56a0c03dd1425f76c40" },
+    { name = "sportsdataverse", git = "https://github.com/sportsdataverse/sportsdataverse-py?rev=425745d294b2978b7f8ea4fb924ca4dedfacef15" },
     { name = "tqdm", specifier = ">=4.66" },
     { name = "xgboost", specifier = ">=2.0" },
 ]
@@ -2164,8 +2164,8 @@ wheels = [
 
 [[package]]
 name = "sportsdataverse"
-version = "0.1.5"
-source = { git = "https://github.com/sportsdataverse/sportsdataverse-py?rev=c2031afbc72a0e892a19e56a0c03dd1425f76c40#c2031afbc72a0e892a19e56a0c03dd1425f76c40" }
+version = "0.2.0b1"
+source = { git = "https://github.com/sportsdataverse/sportsdataverse-py?rev=425745d294b2978b7f8ea4fb924ca4dedfacef15#425745d294b2978b7f8ea4fb924ca4dedfacef15" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "lxml" },

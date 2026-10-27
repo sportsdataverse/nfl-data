@@ -26,6 +26,8 @@ elif [ -n "$START" ]; then LIST=$(seq "$START" "${END:-$START}")
 else echo "usage: $0 -s YYYY [-e YYYY]  (or SEASONS=\"...\")" >&2; exit 2; fi
 
 PY=.venv/bin/python; OUT=nfl/espn; CACHE=.cache/nfl_espn_final
+[ -x "$PY" ] || PY=${PY%/bin/python}/Scripts/python.exe  # a Windows venv (a local run)
+command -v flock >/dev/null || flock() { :; }  # no git_pull sweep lock off the droplet
 RAW=${NFL_RAW_DIR:-../nfl-raw}; WORKERS=${ESPN_NFL_WORKERS:-4}
 mkdir -p logs; LOG="logs/reprocess_espn_nfl_$(date -u +%Y%m%d).log"
 export PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 PYTHONPATH=python
@@ -56,7 +58,7 @@ for Y in $LIST; do
     || fail "$Y paper_index_games build"
 
   echo "[$(ts)Z] === $Y gate"
-  "$PY" -m nfl_espn_build.gate --pbp-dir "$OUT/pbp" -s "$Y" || fail "$Y G-NFL-1 gate (nothing published)"
+  "$PY" -m nfl_espn_build.gate --pbp-dir "$OUT/pbp" --raw-dir "$RAW" -s "$Y" || fail "$Y G-NFL-1 gate (nothing published)"
 
   echo "[$(ts)Z] === $Y publish"
   "$PY" -m nfl_espn_build --dataset all -s "$Y" --no-process --cache-dir "$CACHE" --out "$OUT" --publish \

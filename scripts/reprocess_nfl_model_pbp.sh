@@ -25,6 +25,8 @@ elif [ -n "$START" ]; then LIST=$(seq "$START" "${END:-$START}")
 else echo "usage: $0 -s YYYY [-e YYYY]  (or SEASONS=\"...\")" >&2; exit 2; fi
 
 PY=$PWD/.venv/bin/python; RAW=.cache/nfl_raw; WORK=out/reprocess_model_pbp
+[ -x "$PY" ] || PY=${PY%/bin/python}/Scripts/python.exe  # a Windows venv (a local run)
+command -v flock >/dev/null || flock() { :; }  # no git_pull sweep lock off the droplet
 mkdir -p logs; LOG="logs/reprocess_nfl_model_pbp_$(date -u +%Y%m%d).log"
 export PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8
 export GIT_CONFIG_PARAMETERS="'gc.auto=0'"

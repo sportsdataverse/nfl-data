@@ -127,6 +127,17 @@ def test_build_season_creates_parquet(tmp_path):
     assert df.shape[0] > 0, "expected at least 1 play row"
 
 
+def test_build_season_stamps_processing_version(tmp_path):
+    """The nfl_model_pbp manifest reads its row from this stamp, never from the uploader's env."""
+    from nfl_espn_build.config import processing_version
+
+    out_path = build_season(2024, raw_dir=_seed_raw_dir(tmp_path / "raw"), out_dir=tmp_path / "out")
+
+    meta = pl.read_parquet_metadata(out_path)
+    assert meta["processing_version"] == processing_version()
+    assert meta["season"] == "2024"
+
+
 def test_build_season_returns_path_with_correct_name(tmp_path):
     raw_dir = _seed_raw_dir(tmp_path / "raw", season=2023)
     out_dir = tmp_path / "out"

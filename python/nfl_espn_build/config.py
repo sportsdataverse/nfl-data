@@ -42,7 +42,11 @@ from importlib import metadata
 #: 5: the final carries a ``qa`` block -- the per-game
 #:    ``sportsdataverse.validation.validate_game`` report, flattened by
 #:    :func:`nfl_espn_build.qa.qa_row` and cut into ``espn_nfl_qa`` (V2).
-SCHEMA_REV = 5
+#: 6: REPROCESS run #1 (sdv-py quality program): the lock moves to sdv-py 425745d294,
+#:    which carries devel-nfl 2.1-2.28 (line-yards band, half-end EP/WP, pre-2009 and
+#:    2009+ punt end states, kickoff touchbacks, td_play on reversed scores, Float64
+#:    EP/WP), devel-cfb's three NFL hunks and the QBR re-save. Every 5 final must rebuild.
+SCHEMA_REV = 6
 
 
 @functools.lru_cache(maxsize=1)

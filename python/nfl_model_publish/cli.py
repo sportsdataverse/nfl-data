@@ -331,11 +331,15 @@ def main(argv=None) -> int:
         if args.stale:
             print(" ".join(map(str, pm.stale_seasons(manifest, args.stale))))
             return 0
-        problems = pm.rev_problems(manifest, args.check)
+        seasons = pm.published_seasons(pm.release_assets(args.tag, args.repo), args.check)
+        unpublished = sorted(set(args.check) - set(seasons))
+        if unpublished:
+            print(f"pbp-manifest: no model_pbp asset yet, not gated: {unpublished}")
+        problems = pm.rev_problems(manifest, seasons)
         for p in problems:
             print(f"pbp-manifest: {p}")
         print(
-            f"pbp-manifest: {len(args.check) - len(problems)}/{len(args.check)} season(s) on "
+            f"pbp-manifest: {len(seasons) - len(problems)}/{len(seasons)} published season(s) on "
             f"SCHEMA_REV {pm.SCHEMA_REV}"
         )
         return 1 if problems else 0

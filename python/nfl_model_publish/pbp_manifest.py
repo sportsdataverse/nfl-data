@@ -52,19 +52,28 @@ def _gh(args: list[str]) -> str:
     ).stdout
 
 
+def release_assets(tag: str, repo: str, *, gh=None) -> set[str]:
+    """The tag's asset names. ``gh`` (``(args) -> stdout``) is injectable; a failed listing raises."""
+    out = (gh or _gh)(["release", "view", tag, "--repo", repo, "--json", "assets"])
+    return {a["name"] for a in json.loads(out)["assets"]}
+
+
+def published_seasons(assets: set[str], seasons: list[int]) -> list[int]:
+    """The ``seasons`` with a ``model_pbp_<season>.parquet`` on the tag.
+
+    The gate's span: from March to the first game the current season has no asset yet, and a
+    season with nothing published has no shape to mix.
+    """
+    return [s for s in seasons if f"model_pbp_{s}.parquet" in assets]
+
+
 def fetch_manifest(tag: str, repo: str, *, gh=None) -> pl.DataFrame:
     """The published manifest; an empty frame only when the tag has no manifest asset.
 
     ``gh`` (``(args) -> stdout``) is injectable for tests. A failed listing or download raises.
     """
     gh = gh or _gh
-    names = {
-        a["name"]
-        for a in json.loads(gh(["release", "view", tag, "--repo", repo, "--json", "assets"]))[
-            "assets"
-        ]
-    }
-    if MANIFEST not in names:
+    if MANIFEST not in release_assets(tag, repo, gh=gh):
         return pl.DataFrame(schema=MANIFEST_SCHEMA)
     with tempfile.TemporaryDirectory() as d:
         gh(["release", "download", tag, "--repo", repo, "--pattern", MANIFEST, "--dir", d])

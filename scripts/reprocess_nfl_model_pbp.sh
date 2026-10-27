@@ -9,7 +9,7 @@
 # A season whose published stamp (nfl_model_pbp_in_data_repo.csv on the tag) already equals the installed
 # processing_version is skipped; FORCE=1 rebuilds it anyway. Its manifest row is written only after stages
 # 06-08 publish and the commit lands, so a season that failed half-way stays stale and the rerun redoes it.
-# Then the gate: every season 1999 to the current one must be in the manifest on the current SCHEMA_REV
+# Then the gate: every PUBLISHED season 1999..current must be in the manifest on the current SCHEMA_REV
 # (nfl_espn_build/config.py), or the chain fails before player-stats / team-stats, which are rebuilt over
 # that whole span (each is one all-seasons asset aggregating the pbp release, so a mixed span mixes shapes).
 # Run AFTER scripts/reprocess_espn_nfl.sh: stage 06's Paper Index luck columns read espn_nfl_pbp.

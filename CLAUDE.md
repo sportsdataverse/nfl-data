@@ -169,8 +169,9 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   upserted from the release by `nfl_model_publish pbp` (the cron) or `pbp-manifest --parquet-dir` (never
   rewritten from a local dir, which would hold one season). The script skips a season whose published stamp
   equals the installed one (`FORCE=1` rebuilds it), writes the row only after the season's stages 06-08 and
-  commit land, and before player-stats / team-stats runs the gate `pbp-manifest --check 1999:<current>`: a
-  season missing from the manifest or on another `SCHEMA_REV` fails the chain, so a half-done republish is
+  commit land, and before player-stats / team-stats runs the gate `pbp-manifest --check 1999:<current>`: published
+  season (one with a `model_pbp_<season>.parquet` asset; spring's not-yet-played season is skipped) missing
+  from the manifest or on another `SCHEMA_REV` fails the chain, so a half-done republish is
   visible, not a `diagonal_relaxed` mix of shapes in `load_nfl_pbp`. The gate compares `SCHEMA_REV`, not the
   sha (the cron installs sdv-py git main), so **bump `SCHEMA_REV` for any sdv-py change that moves the
   model_pbp shape**. Manifest writes are unlocked: keep a reprocess clear of the 20:00 UTC cron.

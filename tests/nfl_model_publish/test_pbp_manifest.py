@@ -148,11 +148,19 @@ def test_pbp_publish_writes_the_manifest_after_the_parquets(tmp_path, monkeypatc
 def test_check_cli_exits_1_on_a_stale_season(tmp_path, monkeypatch, capsys):
     gh = FakeRelease(tmp_path / "release")
     _manifest({2024: processing_version(), 2025: "0.1.0+1"}).write_csv(gh.store / pm.MANIFEST)
+    for s in (2023, 2024, 2025):
+        (gh.store / f"model_pbp_{s}.parquet").write_bytes(b"")
     monkeypatch.setattr(pm, "_gh", gh)
 
+    # 2026 has no asset yet (March to the first game): not gated
+    assert cli.main(["pbp-manifest", "--check", "2024:2026", "--repo", REPO]) == 1
+    out = capsys.readouterr().out
+    assert "not gated: [2026]" in out and "2025: 0.1.0+1" in out and "2024:" not in out
+    # 2023 is published but was never stamped
+    assert cli.main(["pbp-manifest", "--check", "2023:2024", "--repo", REPO]) == 1
+    assert f"2023: not in {pm.MANIFEST}" in capsys.readouterr().out
     assert cli.main(["pbp-manifest", "--check", "2024", "--repo", REPO]) == 0
-    assert cli.main(["pbp-manifest", "--check", "2024:2025", "--repo", REPO]) == 1
-    assert "2025: 0.1.0+1" in capsys.readouterr().out
+    capsys.readouterr()
 
     assert cli.main(["pbp-manifest", "--stale", "2023:2025", "--repo", REPO]) == 0
     assert capsys.readouterr().out.split() == ["2023", "2025"]

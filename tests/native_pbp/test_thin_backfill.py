@@ -117,7 +117,7 @@ def test_all_null_stub_column_keeps_nflverse_values(tmp_path, nflverse):
     assert sorted(got.to_list()) == sorted(want["qb_hit_1_player_id"].to_list())
 
 
-def test_team_codes_use_the_era_abbreviation(tmp_path, nflverse):
+def test_team_codes_use_the_modern_abbreviation(tmp_path, nflverse):
     # nflverse ships the modern LA / LV and, on some 1999-2000 non-play rows, "" for posteam
     nv_teams = {v for c in ("posteam", "timeout_team") for v in NV[c].drop_nulls().to_list()}
     assert {"LA", "LV", ""} <= nv_teams
@@ -125,29 +125,30 @@ def test_team_codes_use_the_era_abbreviation(tmp_path, nflverse):
     g00 = _build(tmp_path / "a", 2000, KC_OAK, SD_KC, BUF_MIA)
     g02 = _build(tmp_path / "b", 2002, STL_PHI, MIA_MIN)
 
-    assert _team_values(g00) == {"KC", "OAK"}
-    assert _team_values(g02) == {"STL", "PHI", "MIA", "MIN"}
-    assert g00.filter(pl.col("play_id") == 761)["posteam"].to_list() == ["OAK"]  # was LV
+    # nflverse and the Shield build both name relocated clubs by their modern code (sportsdataverse-py #1028)
+    assert _team_values(g00) == {"KC", "LV"}
+    assert _team_values(g02) == {"LA", "PHI", "MIA", "MIN"}
+    assert g00.filter(pl.col("play_id") == 761)["posteam"].to_list() == ["LV"]
     assert g00.filter(pl.col("play_id") == 17)["posteam"].to_list() == [None]  # was ""
     # `home` as the build emits it: Int64 1/0, never null -- 0 when posteam is null
     assert g00.schema["home"] == pl.Int64 and g00["home"].null_count() == 0
     home = dict(g00.filter(pl.col("play_id").is_in([761, 17])).select("play_id", "home").rows())
-    assert home == {761: 1, 17: 0}  # OAK's ball at OAK; a no-posteam captains row
+    assert home == {761: 1, 17: 0}  # the Raiders' ball at home; a no-posteam captains row
 
 
-def test_drive_yard_lines_follow_the_build_not_nflverse_strings(tmp_path, nflverse):
+def test_drive_yard_lines_are_nflverse_strings_like_the_build(tmp_path, nflverse):
+    """The Shield build ships nflverse's own "PHI 20" text (sportsdataverse-py #1028): a backfilled game keeps it."""
     ref = build_season_frame(2003, raw_dir=_raw(tmp_path / "ref", CAR_HOU))
     g = _build(tmp_path, 2002, STL_PHI, MIA_MIN).filter(pl.col("game_id") == STL_PHI)
 
     for c in ("drive_start_yard_line", "drive_end_yard_line"):
-        assert g.schema[c] == ref.schema[c] == pl.Int64
+        assert g.schema[c] == ref.schema[c] == pl.String
         assert g[c].is_not_null().mean() > 0.9
     first = (
         g.group_by("fixed_drive").agg(pl.col("drive_start_yard_line").first()).sort("fixed_drive")
     )
     by_drive = dict(zip(first["fixed_drive"].to_list(), first["drive_start_yard_line"].to_list()))
-    # nflverse: drive 3 "PHI 20" (PHI's ball) -> 80 to go; drive 5 "LA 24" (PHI's ball) -> 24
-    assert (by_drive[3], by_drive[5]) == (80, 24)
+    assert (by_drive[3], by_drive[5]) == ("PHI 20", "LA 24")
 
 
 # --------------------------------------------------------------------------- schema + scope

@@ -172,14 +172,16 @@ def test_add_pass_rush_noop_on_empty_frame():
 
 
 def test_qb_dropback_truth_table():
+    # nflfastR: play_type == "pass" | (play_type == "run" & qb_scramble == 1); a nullified pass is a no_play
     df = pl.DataFrame(
         {
-            "pass": [1, 0, 0],
-            "qb_scramble": [0, 1, 0],
+            "play_type": ["pass", "run", "run", "no_play"],
+            "pass": [1, 1, 0, 1],
+            "qb_scramble": [0, 1, 0, 0],
         }
     )
     out = add_qb_dropback(df)
-    assert out["qb_dropback"].to_list() == [1, 1, 0]
+    assert out["qb_dropback"].to_list() == [1, 1, 0, 0]
     assert out["qb_dropback"].dtype == pl.Int32
 
 

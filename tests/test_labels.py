@@ -33,7 +33,7 @@ def _play(
         half_seconds_remaining=1800.0, game_seconds_remaining=3600.0,
         score_differential=0.0, spread_line=-3.0, fixed_drive=1.0,
         posteam_timeouts_remaining=3.0, defteam_timeouts_remaining=3.0,
-        roof="outdoors",
+        roof="outdoors", play_type="pass", two_point_conv_result=None, extra_point_result=None,
     )
     base.update(kwargs)
     return base
@@ -255,6 +255,26 @@ class TestBuildEpTrainingSet:
         for col in EP_FEATURES:
             nulls = result[col].null_count()
             assert nulls == 0, f"Unexpected nulls in {col}"
+
+    def test_trains_only_on_regular_season_snaps_with_a_down(self):
+        """nflfastR-data model_data.R: no kickoffs, PATs or postseason rows in the EP training set."""
+        plays = [
+            _play(game_id="T3", play_id=1, play_type="kickoff", down=None),
+            _play(game_id="T3", play_id=2, play_type="run"),
+            _play(game_id="T3", play_id=3, play_type="extra_point", down=None, extra_point_result="good"),
+            _play(game_id="T3", play_id=4, play_type="pass", season_type="POST"),
+        ]
+        df = pl.DataFrame(plays).with_columns(pl.col("season_type").fill_null("REG"))
+        assert build_ep_training_set(df).height == 1
+
+    def test_a_no_play_is_never_the_next_score(self):
+        """model_data.R reads scoring plays as sp == 1 & play_type != 'no_play'."""
+        plays = [
+            _play(game_id="T4", play_id=1),
+            _play(game_id="T4", play_id=2, sp=1, touchdown=1, td_team="KC", play_type="no_play"),
+        ]
+        result = compute_next_score_half(pl.DataFrame(plays))
+        assert result.filter(pl.col("play_id") == 1)["next_score_half"][0] == "No_Score"
 
 
 # ---------------------------------------------------------------------------

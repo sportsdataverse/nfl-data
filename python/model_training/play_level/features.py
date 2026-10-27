@@ -45,17 +45,17 @@ def make_model_mutations(df: pl.DataFrame) -> pl.DataFrame:
     # home indicator
     df = df.with_columns((pl.col("posteam") == pl.col("home_team")).cast(pl.Float64).alias("home"))
 
-    # roof one-hot: 'closed' and 'dome' both map to dome=1
+    # roof one-hot, nflfastR's model_roof (helper_add_nflscrapr_mutations.R): a missing, open or closed roof is
+    # retractable, so a retractable stadium is one state whatever the roof did that day
+    model_roof = (
+        pl.when(pl.col("roof").is_null() | pl.col("roof").is_in(["open", "closed"]))
+        .then(pl.lit("retractable"))
+        .otherwise(pl.col("roof"))
+    )
     df = df.with_columns(
-        (pl.col("roof") == "retractable").cast(pl.Float64).alias("retractable"),
-        pl.when(pl.col("roof").is_in(["dome", "closed"]))
-        .then(pl.lit(1.0))
-        .otherwise(pl.lit(0.0))
-        .alias("dome"),
-        pl.when(~pl.col("roof").is_in(["retractable", "dome", "closed"]))
-        .then(pl.lit(1.0))
-        .otherwise(pl.lit(0.0))
-        .alias("outdoors"),
+        (model_roof == "retractable").cast(pl.Float64).alias("retractable"),
+        (model_roof == "dome").cast(pl.Float64).alias("dome"),
+        (model_roof == "outdoors").cast(pl.Float64).alias("outdoors"),
     )
 
     # era buckets from season

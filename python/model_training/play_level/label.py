@@ -76,19 +76,19 @@ def compute_next_score_half(df: pl.DataFrame) -> pl.DataFrame:
     #    flipped the sign on every possession-change play and never produced Opp_Field_Goal
     #    or Safety. See the row-wise spec in _score_type_and_team.)
     df = df.with_columns([
-        pl.when((pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
+        pl.when((pl.col("sp") == 1) & (pl.col("play_type") != "no_play") & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
         .then(pl.lit("TD"))
-        .when((pl.col("sp") == 1) & (pl.col("field_goal_result") == "made"))
+        .when((pl.col("sp") == 1) & (pl.col("play_type") != "no_play") & (pl.col("field_goal_result") == "made"))
         .then(pl.lit("FG"))
-        .when((pl.col("sp") == 1) & (pl.col("safety") == 1))
+        .when((pl.col("sp") == 1) & (pl.col("play_type") != "no_play") & (pl.col("safety") == 1))
         .then(pl.lit("Safety"))
         .otherwise(pl.lit(None).cast(pl.Utf8))
         .alias("_score_type"),
-        pl.when((pl.col("sp") == 1) & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
+        pl.when((pl.col("sp") == 1) & (pl.col("play_type") != "no_play") & (pl.col("touchdown") == 1) & pl.col("td_team").is_not_null())
         .then(pl.col("td_team"))                       # TD: the team that scored (offense or defense)
-        .when((pl.col("sp") == 1) & (pl.col("field_goal_result") == "made"))
+        .when((pl.col("sp") == 1) & (pl.col("play_type") != "no_play") & (pl.col("field_goal_result") == "made"))
         .then(pl.col("posteam"))                       # made FG: kicked by the possession team
-        .when((pl.col("sp") == 1) & (pl.col("safety") == 1))
+        .when((pl.col("sp") == 1) & (pl.col("play_type") != "no_play") & (pl.col("safety") == 1))
         .then(pl.col("defteam"))                       # safety: scored by the defense (posteam conceded)
         .otherwise(pl.lit(None).cast(pl.Utf8))
         .alias("_score_team"),
@@ -271,6 +271,17 @@ def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
         Training-ready DataFrame with EP_FEATURES columns + ``next_score_class`` + ``weight``.
     """
     df = compute_next_score_half(df)
+    # nflfastR-data models/model_data.R: label every regular-season play, then train only on snaps with a down
+    # (no kickoffs, PATs, two-point tries, timeouts or quarter ends), before the weights are normalised
+    if "season_type" in df.columns:
+        df = df.filter(pl.col("season_type") == "REG")
+    df = df.filter(
+        pl.col("play_type").is_in(["field_goal", "no_play", "pass", "punt", "run", "qb_spike"])
+        & pl.col("two_point_conv_result").is_null()
+        & pl.col("extra_point_result").is_null()
+        & pl.col("down").is_not_null()
+        & pl.col("game_seconds_remaining").is_not_null()
+    )
     df = _add_ep_sample_weights(df)
     df = make_model_mutations(df)
     # Match nflfastR's cal_data filter (MODELS.R): drop plays missing yardline or timeouts.

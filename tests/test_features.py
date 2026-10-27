@@ -88,10 +88,11 @@ class TestMakeModelMutations:
         assert df["dome"][0] == 0.0
         assert df["outdoors"][0] == 0.0
 
-    def test_closed_roof_counts_as_dome(self):
-        """nflfastR treats 'closed' the same as 'dome'."""
-        df = make_model_mutations(_make_df(roof="closed"))
-        assert df["dome"][0] == 1.0
+    @pytest.mark.parametrize("roof", ["closed", "open", None])
+    def test_open_closed_and_missing_roofs_are_retractable(self, roof):
+        """nflfastR's model_roof (helper_add_nflscrapr_mutations.R): NA, 'open' and 'closed' -> retractable."""
+        df = make_model_mutations(_make_df(roof=roof))
+        assert (df["retractable"][0], df["dome"][0], df["outdoors"][0]) == (1.0, 0.0, 0.0)
 
     def test_era_buckets_2024(self):
         df = make_model_mutations(_make_df(season=2024))

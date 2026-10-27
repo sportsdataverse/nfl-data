@@ -54,6 +54,10 @@ EP_CLASS_ORDER: list[str] = [
     "No_Score",
 ]
 
+#: The roof mapping the EP booster is trained on (``make_model_mutations(nflfastr_roof=True)``), recorded in its card;
+#: the parity gate and sdv-py's applier score EP with the same one.
+EP_ROOF_MAPPING = "nflfastr"
+
 EP_HYPERPARAMS: dict = {
     "objective": "multi:softprob",
     "num_class": EP_NUM_CLASSES,

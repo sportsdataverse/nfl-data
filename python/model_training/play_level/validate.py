@@ -23,7 +23,20 @@ from typing import Any, Dict, List
 import numpy as np
 import polars as pl
 
-from .constants import EP_CLASS_ORDER, EP_FEATURES, EP_LABEL_TO_SCORE, WP_SPREAD_FEATURES
+from .constants import (
+    EP_CLASS_ORDER,
+    EP_FEATURES,
+    EP_LABEL_TO_SCORE,
+    EP_ROOF_MAPPING,
+    WP_SPREAD_FEATURES,
+)
+
+#: EP level ceilings and the frame's play floor. Pearson r ignores a shift or a rescale, so the gate also bounds the
+#: error: the aligned 1999-2025 refit measured MAE 0.0904 and bias +0.0288 against nflfastR's ep on 324,927 plays of
+#: 1999/2005/2012/2019/2022-2025 (2026-10-27), rounded up to the next 0.01. Those seasons are in its training window.
+EP_MAE_THRESHOLD = 0.10
+EP_BIAS_THRESHOLD = 0.03
+EP_MIN_PLAYS = 50_000
 
 # Point values indexed by class order (TD=6, Opp_TD=-6, …, No_Score=0)
 _EP_POINT_VALUES: np.ndarray = np.array(
@@ -145,6 +158,9 @@ def validate_ep(
     df: pl.DataFrame,
     *,
     correlation_threshold: float = 0.98,
+    mae_threshold: float = EP_MAE_THRESHOLD,
+    bias_threshold: float = EP_BIAS_THRESHOLD,
+    min_plays: int = EP_MIN_PLAYS,
 ) -> Dict[str, Any]:
     """Validate EP model predictions against nflfastR reference ``ep`` column.
 
@@ -152,9 +168,12 @@ def validate_ep(
         model: Trained XGBoost Booster with ``EP_FEATURES`` feature names.
         df: Frame with ``EP_FEATURES`` columns + ``ep`` (nflfastR reference values).
         correlation_threshold: Minimum Pearson r to pass the gate (default 0.98).
+        mae_threshold: Maximum mean |EP - nflfastR ep| (:data:`EP_MAE_THRESHOLD`).
+        bias_threshold: Maximum |mean(EP - nflfastR ep)| (:data:`EP_BIAS_THRESHOLD`).
+        min_plays: Fewest compared plays the gate accepts (:data:`EP_MIN_PLAYS`).
 
     Returns:
-        Dict with keys ``correlation``, ``gate_pass``, ``n_plays``.
+        Dict with keys ``correlation``, ``mae``, ``bias``, ``gate_pass``, ``n_plays``.
     """
     from xgboost import DMatrix
 
@@ -168,12 +187,36 @@ def validate_ep(
     our_ep = _ep_expected_points(probs)
     ref_ep = np.array(df["ep"].to_list(), dtype=np.float64)
     r = pearson_correlation(our_ep, ref_ep)
+    mae = float(np.abs(our_ep - ref_ep).mean()) if len(df) else float("nan")
+    bias = float((our_ep - ref_ep).mean()) if len(df) else float("nan")
 
     return {
         "correlation": r,
-        "gate_pass": r >= correlation_threshold,
+        "mae": mae,
+        "bias": bias,
+        "gate_pass": bool(
+            len(df) >= min_plays and r >= correlation_threshold and mae <= mae_threshold and abs(bias) <= bias_threshold
+        ),
         "n_plays": len(df),
     }
+
+
+def check_ep_roof_mapping(ep_model_path: Path) -> None:
+    """Refuse an EP booster whose card does not record :data:`EP_ROOF_MAPPING`.
+
+    The gate's frame scores EP with nflfastR's roof one-hots; a booster trained on the legacy mapping (closed = dome)
+    would be fed a state it never saw on every closed or open roof, ~10% of plays, and could still clear r 0.98. A
+    booster without a card (or a card without the key) predates the mapping and is refused too.
+    """
+    import json
+
+    card = Path(ep_model_path).with_suffix(".json")
+    mapping = json.loads(card.read_text(encoding="utf-8")).get("roof_mapping") if card.exists() else None
+    if mapping != EP_ROOF_MAPPING:
+        raise ValueError(
+            f"{Path(ep_model_path).name} records roof_mapping={mapping!r} (card {card.name}); the EP gate and sdv-py "
+            f"score EP with {EP_ROOF_MAPPING!r}. Retrain it with model_training.play_level, which writes the card."
+        )
 
 
 def validate_wp(
@@ -247,6 +290,7 @@ def run_parity_gate(
             )
             print("PASS" if result["overall_pass"] else "FAIL", result)
     """
+    check_ep_roof_mapping(Path(ep_model_path))
     ep_model = _load_model(Path(ep_model_path))
     wp_model = _load_model(Path(wp_model_path))
 
@@ -256,8 +300,9 @@ def run_parity_gate(
     ep_result = validate_ep(
         ep_model, ep_df, correlation_threshold=ep_correlation_threshold
     )
-    print(f"[validate] EP correlation = {ep_result['correlation']:.4f} "
-          f"(threshold ≥ {ep_correlation_threshold}) → {'PASS' if ep_result['gate_pass'] else 'FAIL'}")
+    print(f"[validate] EP correlation = {ep_result['correlation']:.4f} (≥ {ep_correlation_threshold}), "
+          f"MAE = {ep_result['mae']:.4f} (≤ {EP_MAE_THRESHOLD}), bias = {ep_result['bias']:+.4f} "
+          f"(|·| ≤ {EP_BIAS_THRESHOLD}) → {'PASS' if ep_result['gate_pass'] else 'FAIL'}")
 
     print(f"[validate] WP: {len(wp_df):,} reference plays from {sample_seasons}")
     wp_result = validate_wp(

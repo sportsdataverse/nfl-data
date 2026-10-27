@@ -159,6 +159,10 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   season stops the chain and publishes nothing), publish from the cached finals + `paper_index_games`,
   then commit + push that season's `nfl/espn` parquets under the git_pull lock. `SEASONS="2011 2010"`
   reruns a list. Bump `SCHEMA_REV` first when the change moves processed output.
+- **Native family after the same bump:** `bash scripts/reprocess_nfl_model_pbp.sh -s 1999 -e 2026`, run
+  after the espn chain (stage 06's luck columns read `espn_nfl_pbp`). Per season: ingest, build + publish
+  `nfl_model_pbp`, stages 06-08 into a per-season dir (stage 06 uploads its whole `--out`), copy the tracked
+  `nfl/<table>/` files, commit + push; then player-stats / team-stats over the range.
 - Workflows: `.github/workflows/nfl_pbp_cron.yml` (model_pbp), `nfl_rosters_players_cron.yml`
   (rosters/players/player-stats/team-stats/qbr). Both: `workflow_dispatch` + cron
   pbp `0 20 * 9-12,1,2 *` (daily 20:00 UTC, Sep–Feb); rosters `0 9 * 9-12,1,2 1` (Mondays, full

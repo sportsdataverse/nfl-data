@@ -83,7 +83,7 @@ jobs:
         working-directory: nfl-data/python
         run: |
           uv pip install --reinstall --refresh \
-            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@425745d294b2978b7f8ea4fb924ca4dedfacef15"
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@699409c9b883bed46554a0ec0edd1b0a73ee160f"
 
       # ── 7. Verify the sportsdataverse surface the build needs is importable ──
       # Assert BOTH symbols build_season imports — enrich_nfl_pbp is the one the

@@ -81,6 +81,28 @@ def test_a_reversal_into_a_touchdown_keeps_td_play():
 
 
 def test_game_count_matches_the_raw_library():
-    assert _checks(_frame(), 2005, expected={1})["games_vs_raw"] == 0
-    assert _checks(_frame(), 2005, expected={1, 2})["games_vs_raw"] == 1  # a game the file lost
-    assert _checks(_frame(), 2005, expected=set())["games_vs_raw"] == 1  # a game it should not hold
+    assert _checks(_frame(), 2005, expected=({1}, 251, 0))["games_vs_raw"] == 0
+    assert _checks(_frame(), 2005, expected=({1, 2}, 251, 0))["games_vs_raw"] == 1  # a game the file lost
+    assert _checks(_frame(), 2005, expected=(set(), 251, 0))["games_vs_raw"] == 1  # a game it should not hold
+
+
+def test_a_library_that_lost_games_fails_even_when_the_file_matches_it():
+    """The expected set comes from the raw library, so a library that lost games is caught by its own counts."""
+    counts = _checks(_frame(), 2010, expected=({1}, 40, 0))  # 40 stub games in a season that had none
+    assert counts["games_vs_raw"] == 0 and counts["stub_games_over_observed"] == 38
+    assert _checks(_frame(), 2005, expected=({1}, 251, 0))["stub_games_over_observed"] == 0
+    assert _checks(_frame(), 2010, expected=({1}, 0, 3))["raw_summaries_missing"] == 3
+
+
+def test_truncated_games_are_capped_at_the_observed_count():
+    """A parser bug that nulls game_play_number would exempt its games from the end-of-game checks: count them."""
+    partial = _frame(game_play_number=[None, None, None], end_of_half=[None, None, None])
+    assert _checks(partial, 2003)["partial_games_over_observed"] == 0  # 1 of the 12 measured
+    assert _checks(partial, 2015)["partial_games_over_observed"] == 1  # none measured
+
+
+def test_a_reversal_whose_touchdown_was_nullified_is_still_held_to_td_play():
+    nullified = _frame(
+        text=["run", "The play was REVERSED. ... TOUCHDOWN NULLIFIED by Penalty.", "TO"], td_play=[False, True, False]
+    )
+    assert _checks(nullified, 2011)["td_play_unscored_reversal"] == 1

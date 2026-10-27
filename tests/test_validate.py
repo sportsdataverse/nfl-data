@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import model_training.play_level.validate as val_mod
 import numpy as np
 import polars as pl
+import pytest
 from model_training.play_level.constants import EP_FEATURES, WP_SPREAD_FEATURES
 from model_training.play_level.validate import (
     brier_score,
@@ -145,8 +146,24 @@ class TestValidateEp:
         model = _mock_ep_model(np.zeros((len(df), 7)))
         monkeypatch.setattr(val_mod, "_ep_expected_points", lambda probs: ref_ep)
 
-        result = validate_ep(model, df, correlation_threshold=0.98)
+        result = validate_ep(model, df, correlation_threshold=0.98, min_plays=100)
         assert result["gate_pass"] is True
+
+    def test_gate_fails_on_a_shifted_ep_that_correlates_perfectly(self, monkeypatch):
+        """Pearson r is blind to a shift: the MAE / bias ceilings are not."""
+        df = _ep_frame(n=200)
+        ref_ep = np.array(df["ep"].to_list())
+        model = _mock_ep_model(np.zeros((len(df), 7)))
+        monkeypatch.setattr(val_mod, "_ep_expected_points", lambda probs: ref_ep + 0.5)
+        result = validate_ep(model, df, min_plays=100)
+        assert result["correlation"] > 0.999 and result["gate_pass"] is False
+
+    def test_gate_fails_on_too_few_plays(self, monkeypatch):
+        df = _ep_frame(n=200)
+        ref_ep = np.array(df["ep"].to_list())
+        model = _mock_ep_model(np.zeros((len(df), 7)))
+        monkeypatch.setattr(val_mod, "_ep_expected_points", lambda probs: ref_ep)
+        assert validate_ep(model, df)["gate_pass"] is False  # 200 < EP_MIN_PLAYS
 
     def test_gate_fail_when_correlation_below_threshold(self, monkeypatch):
         df = _ep_frame(n=200)
@@ -200,13 +217,21 @@ class TestValidateWp:
 
 
 class TestRunParityGate:
-    def _setup(self, monkeypatch, ep_corr: float = 0.99, wp_brier: float = 0.15):
+    def _setup(self, monkeypatch, ep_corr: float = 0.99, wp_brier: float = 0.15, tmp_path=None):
+        if tmp_path is not None:  # the EP booster's card, as model_training.play_level writes it
+            (tmp_path / "ep.json").write_text('{"roof_mapping": "nflfastr"}', encoding="utf-8")
         monkeypatch.setattr(val_mod, "_load_model", lambda path: MagicMock())
         monkeypatch.setattr(val_mod, "_load_pbp_for_validation", lambda seasons, data_dir: (_ep_frame(), _wp_frame()))
         monkeypatch.setattr(
             val_mod,
             "validate_ep",
-            lambda model, df, **kw: {"correlation": ep_corr, "gate_pass": ep_corr >= 0.98, "n_plays": 100},
+            lambda model, df, **kw: {
+                "correlation": ep_corr,
+                "mae": 0.09,
+                "bias": 0.02,
+                "gate_pass": ep_corr >= 0.98,
+                "n_plays": 100,
+            },
         )
         monkeypatch.setattr(
             val_mod,
@@ -215,7 +240,7 @@ class TestRunParityGate:
         )
 
     def test_returns_overall_pass_when_both_gates_pass(self, tmp_path, monkeypatch):
-        self._setup(monkeypatch, ep_corr=0.99, wp_brier=0.15)
+        self._setup(monkeypatch, ep_corr=0.99, wp_brier=0.15, tmp_path=tmp_path)
         result = run_parity_gate(
             ep_model_path=tmp_path / "ep.ubj",
             wp_model_path=tmp_path / "wp.ubj",
@@ -224,7 +249,7 @@ class TestRunParityGate:
         assert result["overall_pass"] is True
 
     def test_returns_overall_fail_when_ep_gate_fails(self, tmp_path, monkeypatch):
-        self._setup(monkeypatch, ep_corr=0.95, wp_brier=0.15)
+        self._setup(monkeypatch, ep_corr=0.95, wp_brier=0.15, tmp_path=tmp_path)
         result = run_parity_gate(
             ep_model_path=tmp_path / "ep.ubj",
             wp_model_path=tmp_path / "wp.ubj",
@@ -234,7 +259,7 @@ class TestRunParityGate:
         assert result["ep"]["gate_pass"] is False
 
     def test_returns_overall_fail_when_wp_gate_fails(self, tmp_path, monkeypatch):
-        self._setup(monkeypatch, ep_corr=0.99, wp_brier=0.25)
+        self._setup(monkeypatch, ep_corr=0.99, wp_brier=0.25, tmp_path=tmp_path)
         result = run_parity_gate(
             ep_model_path=tmp_path / "ep.ubj",
             wp_model_path=tmp_path / "wp.ubj",
@@ -244,10 +269,24 @@ class TestRunParityGate:
         assert result["wp"]["gate_pass"] is False
 
     def test_result_has_ep_and_wp_keys(self, tmp_path, monkeypatch):
-        self._setup(monkeypatch)
+        self._setup(monkeypatch, tmp_path=tmp_path)
         result = run_parity_gate(
             ep_model_path=tmp_path / "ep.ubj",
             wp_model_path=tmp_path / "wp.ubj",
             sample_seasons=[2023],
         )
         assert "ep" in result and "wp" in result
+
+
+class TestEpRoofMapping:
+    def test_a_booster_without_the_nflfastr_roof_card_is_refused(self, tmp_path):
+        from model_training.play_level.validate import check_ep_roof_mapping
+
+        ubj = tmp_path / "ep_model.ubj"
+        with pytest.raises(ValueError, match="roof_mapping=None"):
+            check_ep_roof_mapping(ubj)  # no card: the June artifact's state
+        (tmp_path / "ep_model.json").write_text('{"model_type": "ep"}', encoding="utf-8")
+        with pytest.raises(ValueError, match="roof_mapping=None"):
+            check_ep_roof_mapping(ubj)  # a card that predates the mapping
+        (tmp_path / "ep_model.json").write_text('{"roof_mapping": "nflfastr"}', encoding="utf-8")
+        check_ep_roof_mapping(ubj)

@@ -154,6 +154,20 @@ def run_ep_pipeline(
     ep_df = _build_ep(df)
     output_path = models_dir / "ep_model.ubj"
     _train_ep(ep_df, output_path)
+    from .constants import EP_FEATURES, EP_HYPERPARAMS, EP_ROOF_MAPPING
+    from .model_card import write_model_card
+
+    write_model_card(
+        output_path,
+        model_type="ep",
+        features=EP_FEATURES,
+        label="next_score_class",
+        seasons=seasons,
+        n_rows=ep_df.height,
+        hyperparams=EP_HYPERPARAMS,
+        source="nflverse",
+        extra={"roof_mapping": EP_ROOF_MAPPING},
+    )
     return output_path
 
 
@@ -323,7 +337,9 @@ def run_full_pipeline(
     print(f"[pipeline] EP: {ep_df.height:,} plays → training")
     ep_path = models_dir / "ep_model.ubj"
     _train_ep(ep_df, ep_path)
-    _card(ep_path, "ep", EP_FEATURES, "next_score_class", EP_HYPERPARAMS, ep_df.height)
+    from .constants import EP_ROOF_MAPPING
+
+    _card(ep_path, "ep", EP_FEATURES, "next_score_class", EP_HYPERPARAMS, ep_df.height, {"roof_mapping": EP_ROOF_MAPPING})
     print(f"[pipeline] EP model saved → {ep_path}")
 
     print("[pipeline] building WP-spread training set...")

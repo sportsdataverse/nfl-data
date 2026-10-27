@@ -14,6 +14,11 @@ Usage::
         [--repo sportsdataverse/sportsdataverse-data] \\
         [--dry-run]
 
+    python -m nfl_model_publish pbp-manifest \\
+        (--parquet-dir <dir> | --stale 1999:2026 | --check 1999:2026) \\
+        [--tag nfl_model_pbp] \\
+        [--repo sportsdataverse/sportsdataverse-data]
+
     python -m nfl_model_publish playstats \\
         --parquet-dir <dir> \\
         [--tag nfl_play_stats] \\
@@ -136,7 +141,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory containing model_pbp_*.parquet files.",
     )
     pbp.add_argument("--tag", default="nfl_model_pbp", help="GitHub release tag.")
+    pbp.add_argument(
+        "--no-manifest",
+        action="store_true",
+        help="Skip the nfl_model_pbp_in_data_repo.csv upsert (the reprocess stamps it "
+        "only after the season's stages 06-08 finish).",
+    )
     _add_repo_dry(pbp)
+
+    pm = sub.add_parser(
+        "pbp-manifest",
+        help="The nfl_model_pbp processing-version manifest: stamp, list stale seasons, or gate.",
+    )
+    act = pm.add_mutually_exclusive_group(required=True)
+    act.add_argument(
+        "--parquet-dir",
+        help="Upsert these model_pbp_*.parquet seasons' stamps into the release manifest.",
+    )
+    act.add_argument(
+        "--stale",
+        type=_parse_seasons,
+        metavar="SEASONS",
+        help="Print the seasons whose published stamp is not the installed processing_version.",
+    )
+    act.add_argument(
+        "--check",
+        type=_parse_seasons,
+        metavar="SEASONS",
+        help="Exit 1 unless every season is in the manifest on the current SCHEMA_REV.",
+    )
+    pm.add_argument("--tag", default="nfl_model_pbp", help="GitHub release tag.")
+    _add_repo_dry(pm)
 
     psx = sub.add_parser(
         "playstats",
@@ -281,6 +316,33 @@ def main(argv=None) -> int:
             dry_run=args.dry_run,
         )
         _print_result(res, args.repo, args.dry_run)
+        if res["files"] and not args.no_manifest:
+            from .pbp_manifest import publish_manifest
+
+            publish_manifest(args.parquet_dir, args.tag, args.repo, dry_run=args.dry_run)
+    elif args.cmd == "pbp-manifest":
+        from . import pbp_manifest as pm
+
+        if args.parquet_dir:
+            out = pm.publish_manifest(args.parquet_dir, args.tag, args.repo, dry_run=args.dry_run)
+            print(f"manifest: {out.name} -> {args.repo}:{args.tag}")
+            return 0
+        manifest = pm.fetch_manifest(args.tag, args.repo)
+        if args.stale:
+            print(" ".join(map(str, pm.stale_seasons(manifest, args.stale))))
+            return 0
+        seasons = pm.published_seasons(pm.release_assets(args.tag, args.repo), args.check)
+        unpublished = sorted(set(args.check) - set(seasons))
+        if unpublished:
+            print(f"pbp-manifest: no model_pbp asset yet, not gated: {unpublished}")
+        problems = pm.rev_problems(manifest, seasons)
+        for p in problems:
+            print(f"pbp-manifest: {p}")
+        print(
+            f"pbp-manifest: {len(seasons) - len(problems)}/{len(seasons)} published season(s) on "
+            f"SCHEMA_REV {pm.SCHEMA_REV}"
+        )
+        return 1 if problems else 0
     elif args.cmd == "playstats":
         res = upload_artifacts(
             args.parquet_dir,

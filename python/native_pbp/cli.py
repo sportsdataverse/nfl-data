@@ -21,9 +21,11 @@ from __future__ import annotations
 
 import argparse
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 import polars as pl
+from nfl_espn_build.config import processing_version
 
 from native_pbp.build import build_season as _build_season
 from native_pbp.playstats import build_playstats_season as _build_playstats_season
@@ -189,7 +191,8 @@ def build_season(
         raw_dir: Root directory of the committed per-game JSON library.
             Per-game files are expected at ``{raw_dir}/{season}/*.json``.
         out_dir: Output directory.  The file is written as
-            ``{out_dir}/model_pbp_{season}.parquet``.
+            ``{out_dir}/model_pbp_{season}.parquet``, stamped with
+            ``nfl_espn_build.config.processing_version()`` in its file-level metadata.
         enrich: When ``True``, run the nflfastR-faithful EP/WP/CP/xYAC
             enrichment (``sportsdataverse.nfl.ep_wp.enrich_nfl_pbp`` with
             ``method="lead_diff"``) on the build frame before writing it.
@@ -217,7 +220,15 @@ def build_season(
         df = enrich_nfl_pbp(df, method="lead_diff")
 
     out_path = out_dir / f"model_pbp_{season}.parquet"
-    df.write_parquet(out_path)
+    # the stamp nfl_model_publish's manifest reads back: which library state cut this season
+    df.write_parquet(
+        out_path,
+        metadata={
+            "processing_version": processing_version(),
+            "season": str(season),
+            "generated_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        },
+    )
     return out_path
 
 

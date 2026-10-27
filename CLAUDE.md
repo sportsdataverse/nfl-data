@@ -163,6 +163,17 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   after the espn chain (stage 06's luck columns read `espn_nfl_pbp`). Per season: ingest, build + publish
   `nfl_model_pbp`, stages 06-08 into a per-season dir (stage 06 uploads its whole `--out`), copy the tracked
   `nfl/<table>/` files, commit + push; then player-stats / team-stats over the range.
+  **Stamp + manifest:** each `model_pbp_<season>.parquet` carries the same `processing_version`
+  (`nfl_espn_build/config.py`, so ONE `SCHEMA_REV` covers both families) in its file-level metadata, and the
+  tag carries `nfl_model_pbp_in_data_repo.csv` (season, row_count, processing_version, generated_at_utc),
+  upserted from the release by `nfl_model_publish pbp` (the cron) or `pbp-manifest --parquet-dir` (never
+  rewritten from a local dir, which would hold one season). The script skips a season whose published stamp
+  equals the installed one (`FORCE=1` rebuilds it), writes the row only after the season's stages 06-08 and
+  commit land, and before player-stats / team-stats runs the gate `pbp-manifest --check 1999:<current>`: a
+  season missing from the manifest or on another `SCHEMA_REV` fails the chain, so a half-done republish is
+  visible, not a `diagonal_relaxed` mix of shapes in `load_nfl_pbp`. The gate compares `SCHEMA_REV`, not the
+  sha (the cron installs sdv-py git main), so **bump `SCHEMA_REV` for any sdv-py change that moves the
+  model_pbp shape**. Manifest writes are unlocked: keep a reprocess clear of the 20:00 UTC cron.
 - Workflows: `.github/workflows/nfl_pbp_cron.yml` (model_pbp), `nfl_rosters_players_cron.yml`
   (rosters/players/player-stats/team-stats/qbr). Both: `workflow_dispatch` + cron
   pbp `0 20 * 9-12,1,2 *` (daily 20:00 UTC, Sep–Feb); rosters `0 9 * 9-12,1,2 1` (Mondays, full

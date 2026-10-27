@@ -6,12 +6,17 @@
 #      so a shared dir would re-upload every earlier season),
 #   3. copy the season's tracked tables into nfl/<table>/ and commit + push them,
 #      "chore(data): NFL season summaries + percentiles rebuild (Start: Y End: Y) [skip ci]".
-# Then player-stats / team-stats are rebuilt over the whole published span, 1999 to the current season
-# (each is one all-seasons asset aggregating the pbp release).
+# A season whose published stamp (nfl_model_pbp_in_data_repo.csv on the tag) already equals the installed
+# processing_version is skipped; FORCE=1 rebuilds it anyway. Its manifest row is written only after stages
+# 06-08 publish and the commit lands, so a season that failed half-way stays stale and the rerun redoes it.
+# Then the gate: every season 1999 to the current one must be in the manifest on the current SCHEMA_REV
+# (nfl_espn_build/config.py), or the chain fails before player-stats / team-stats, which are rebuilt over
+# that whole span (each is one all-seasons asset aggregating the pbp release, so a mixed span mixes shapes).
 # Run AFTER scripts/reprocess_espn_nfl.sh: stage 06's Paper Index luck columns read espn_nfl_pbp.
 #
 #   bash scripts/reprocess_nfl_model_pbp.sh -s 1999 -e 2026
 #   SEASONS="2011 2010" bash scripts/reprocess_nfl_model_pbp.sh
+#   FORCE=1 bash scripts/reprocess_nfl_model_pbp.sh -s 2024
 #   tail -f logs/reprocess_nfl_model_pbp_$(date -u +%Y%m%d).log
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -34,16 +39,26 @@ exec > >(tee -a "$LOG") 2>&1
 ts() { date -u '+%F %T'; }
 fail() { echo "[$(ts)Z] FAIL: $*"; echo "EXIT=1"; exit 1; }
 py() { (cd python && "$PY" -m "$@"); }
+REPO=sportsdataverse/sportsdataverse-data
+CUR=$(date -u +%Y); [ "$((10#$(date -u +%m)))" -lt 3 ] && CUR=$((CUR - 1))
 
 echo "[$(ts)Z] reprocess_nfl_model_pbp start: seasons $(echo $LIST | tr '\n' ' ')"
+if [ "${FORCE:-0}" != 1 ]; then
+  SPAN=$(printf '%s\n' $LIST | sort -n | sed -n '1p;$p' | paste -sd:)
+  STALE=" $(py nfl_model_publish pbp-manifest --stale "$SPAN" --repo $REPO) " || fail "reading the nfl_model_pbp manifest"
+  echo "[$(ts)Z] stale in $SPAN (rebuilt):${STALE% }"
+fi
 for Y in $LIST; do
+  if [ "${FORCE:-0}" != 1 ] && [[ "$STALE" != *" $Y "* ]]; then
+    echo "[$(ts)Z] $Y: published stamp is current, skipped"; continue
+  fi
   W=$PWD/$WORK/$Y; rm -rf "${W:?}"; mkdir -p "$W"
   echo "[$(ts)Z] === $Y model_pbp"
   py nfl_data_01_ingest --seasons "$Y" --cache-dir "$PWD/$RAW" || fail "$Y ingest"
   py nfl_data_02_model_pbp build --enrich --seasons "$Y" --raw-dir "$PWD/$RAW" --out "$W/model_pbp" || fail "$Y build"
   ls "$W"/model_pbp/*.parquet >/dev/null 2>&1 || fail "$Y build wrote no parquet"
   py nfl_data_03_pbp_publish --parquet-dir "$W/model_pbp" --tag nfl_model_pbp \
-    --repo sportsdataverse/sportsdataverse-data || fail "$Y model_pbp publish"
+    --repo $REPO --no-manifest || fail "$Y model_pbp publish"
 
   echo "[$(ts)Z] === $Y stages 06-08"
   py nfl_data_06_team_summaries --seasons "$Y" --pbp-dir "$W/model_pbp" --out "$W/summaries" --publish \
@@ -77,12 +92,17 @@ for Y in $LIST; do
     [ "$pushed" = 1 ] || fail "$Y push rejected 3 times"
   fi
   flock -u 9; exec 9>&-
+  # last: the row says this season finished, so a failure above leaves it stale for the rerun
+  py nfl_model_publish pbp-manifest --parquet-dir "$W/model_pbp" --repo $REPO || fail "$Y manifest"
   echo "[$(ts)Z] $Y done"
 done
 
+echo "[$(ts)Z] === SCHEMA_REV gate 1999:$CUR"
+py nfl_model_publish pbp-manifest --check "1999:$CUR" --repo $REPO \
+  || fail "nfl_model_pbp seasons not all on the current SCHEMA_REV; rerun the stale ones first"
+
 # player_stats / team_stats are ONE all-seasons asset each: always rebuild the whole published span
 # (1999 to the current season), never just the reprocessed seasons, or the upload drops the rest.
-CUR=$(date -u +%Y); [ "$((10#$(date -u +%m)))" -lt 3 ] && CUR=$((CUR - 1))
 echo "[$(ts)Z] === player-stats / team-stats 1999:$CUR"
 py nfl_model_publish player-stats --seasons "1999:$CUR" --out "$PWD/$WORK/player_stats" || fail "player-stats"
 py nfl_model_publish team-stats --seasons "1999:$CUR" --out "$PWD/$WORK/team_stats" || fail "team-stats"

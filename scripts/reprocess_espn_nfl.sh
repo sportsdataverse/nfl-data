@@ -58,7 +58,7 @@ for Y in $LIST; do
     || fail "$Y paper_index_games build"
 
   echo "[$(ts)Z] === $Y gate"
-  "$PY" -m nfl_espn_build.gate --pbp-dir "$OUT/pbp" -s "$Y" || fail "$Y G-NFL-1 gate (nothing published)"
+  "$PY" -m nfl_espn_build.gate --pbp-dir "$OUT/pbp" --raw-dir "$RAW" -s "$Y" || fail "$Y G-NFL-1 gate (nothing published)"
 
   echo "[$(ts)Z] === $Y publish"
   "$PY" -m nfl_espn_build --dataset all -s "$Y" --no-process --cache-dir "$CACHE" --out "$OUT" --publish \

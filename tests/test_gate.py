@@ -51,3 +51,36 @@ def test_null_values_on_a_rush_are_failures():
     counts = _checks(bad, 2025)
     assert counts["opportunity_run"] == 1
     assert counts["line_yards_parts"] == 1
+
+
+def test_a_game_that_ends_on_a_try_checks_the_touchdown_before_it():
+    """sdv-py scores the try on its own row: EPA = its points - 0.92, never -EP, so the try is not the last play."""
+    ended_on_pat = _frame(
+        **{"type.text": ["Rush", "Passing Touchdown", "Extra Point Good"]},
+        scoring_play=[False, True, False],
+        EPA=[0.3, 4.9, 0.08],
+        EP_start=[1.0, 2.0, 0.92],
+    )
+    assert _checks(ended_on_pat, 2025)["last_play_epa_not_minus_ep"] == 0
+
+
+def test_a_truncated_feed_is_not_held_to_end_of_half():
+    """The processor's "partial" game (no row carries game_play_number) has no end; a real game still does."""
+    partial = _frame(game_play_number=[None, None, None], end_of_half=[None, None, None])
+    assert _checks(partial, 2003)["last_row_end_of_half_null"] == 0
+    assert _checks(_frame(end_of_half=[False, False, None]), 2003)["last_row_end_of_half_null"] == 1
+
+
+def test_a_reversal_into_a_touchdown_keeps_td_play():
+    """311204002/0528: ESPN leaves it unscored, but the reversal made it a touchdown."""
+    into_td = _frame(
+        text=["run", "FUMBLES, Touchback. The play was REVERSED. FUMBLES, and recovers at TEN 0. TOUCHDOWN.", "TO"],
+        td_play=[False, True, False],
+    )
+    assert _checks(into_td, 2011)["td_play_unscored_reversal"] == 0
+
+
+def test_game_count_matches_the_raw_library():
+    assert _checks(_frame(), 2005, expected={1})["games_vs_raw"] == 0
+    assert _checks(_frame(), 2005, expected={1, 2})["games_vs_raw"] == 1  # a game the file lost
+    assert _checks(_frame(), 2005, expected=set())["games_vs_raw"] == 1  # a game it should not hold

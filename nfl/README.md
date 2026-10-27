@@ -15,6 +15,7 @@ promoted here. Nothing downstream should read `out/`.
 |---|---|---|
 | `model_pbp/model_pbp_{season}.parquet` | enriched play-by-play — the `nfl_model_pbp` dataset | built from `nfl-raw` by `python/nfl_data_02_model_pbp.py build --enrich` |
 | `ratings_weekly/nfl_ratings_weekly_{season}.parquet` | per-week as-of team ratings, 1999-2025 | `python/nfl_data_05_ratings_weekly.py` |
+| `stadiums/stadiums.csv` | NFL stadiums since 1999 (coordinates, roof, surface), keyed by `stadium_id` as in nflverse `games` | verbatim copy of nfelo's [greerreNFL/Stadiums](https://github.com/greerreNFL/Stadiums); provenance in `stadiums/README.md` |
 
 `ratings_weekly` is complete (27 seasons, 1999-2025, 12 columns, schema stable
 across the span). `model_pbp` carries 2023 and 2024 only — see below.

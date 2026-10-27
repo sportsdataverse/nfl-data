@@ -20,7 +20,7 @@ Trained by `python -m model_training.play_level train` on the nflverse-parity
 
 | model | artifact(s) | release tag | training data | fitting script | gates at publish | last retrain | cadence |
 |---|---|---|---|---|---|---|---|
-| Expected Points | `ep_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware; nflfastR's `cal_data` rows (REG snaps with a down, no PAT or two-point try) and `model_roof` mapping | `model_training/play_level` | nflfastR parity r **0.997** (floor r 0.98) on 324,927 plays of 1999/2005/2012/2019/2022–2025; LOSO 1999–2025 per-class calibration error **0.0059** (0.0058 on the old recipe), EP-points error 0.078 | 2026-10 | annual (Mar 1) |
+| Expected Points | `ep_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.996** (floor r 0.98). **Candidate, not yet published (#84):** a refit on nflfastR's `cal_data` rows (REG snaps with a down, no PAT or two-point try) and `model_roof` mapping, bundled in sdv-py #1027: parity r **0.997** on 324,927 plays of 1999/2005/2012/2019/2022–2025; LOSO 1999–2025 per-class calibration error **0.0059** (0.0058 on the published recipe) | 2026-06 (candidate 2026-10) | annual (Mar 1) |
 | Win Probability (naive) | `wp_naive.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.997**; WP Brier cap per parity.md; **not applied in overtime** — nflfastR scores `qtr > 4` with a closed form off the EP class probabilities and sets `vegas_wp = wp` (`add_wp_variables` L820-899), ported as `_apply_ot_wp_overlay` (sdv-py PR #435). Overtime `wp` MAE vs nflverse **0.014-0.052** over 10 seasons / 3,171 overtime plays (was 0.097-0.173 unported); gated in sdv-py on its committed five-era overtime fixture (`tests/fixtures/nfl_ep_wp/`, five whole overtime games) at MAE <= **0.035** / \|bias\| <= **0.030** / r >= **0.98**, set from the observed 0.0209 / -0.0149 / 0.9945 | 2026-06 | annual (Mar 1) |
 | Win Probability (spread) | `wp_spread.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | nflfastR parity r **0.998** (`vegas_wp`); fitted `spread_time` decay exponent −4.0 recorded in the card (`derived_feature_constants`) + `features/wp_spread_v1.yaml`, gated trainer == registry == applier (`tests/test_feature_sets.py`); **not applied in overtime** — nflfastR scores `qtr > 4` with a closed form off the EP class probabilities and sets `vegas_wp = wp` (`add_wp_variables` L820-899), ported as `_apply_ot_wp_overlay` (sdv-py PR #435). Overtime `wp` MAE vs nflverse **0.014-0.052** over 10 seasons / 3,171 overtime plays (was 0.097-0.173 unported); gated in sdv-py on its committed five-era overtime fixture (`tests/fixtures/nfl_ep_wp/`, five whole overtime games) at MAE <= **0.035** / \|bias\| <= **0.030** / r >= **0.98**, set from the observed 0.0209 / -0.0149 / 0.9945 | 2026-06 | annual (Mar 1) |
 | Completion Probability | `cp_model.ubj` + `.json` | `nfl_model_artifacts` | model_pbp 1999–2025, era-aware | `model_training/play_level` | CPOE scale-correct vs nflfastR (percentage-point scale) | 2026-06 | annual (Mar 1) |
@@ -28,11 +28,12 @@ Trained by `python -m model_training.play_level train` on the nflverse-parity
 
 ## Known limitations
 
-- **The roof mapping now differs by model until the others are refit.** `make_model_mutations` maps roofs the
-  nflfastR way (`open`, `closed` and missing are retractable) since #84, and only EP has been retrained on it.
-  CP, xYAC and xpass were trained on the old mapping (`closed` is a dome, missing is outdoors), and sdv-py
-  applies each model with its own (`ep_wp._roof_one_hots(nflfastr=...)`). Retraining any of them here moves it to
-  the nflfastR mapping, so the sdv-py change that bundles it must switch that model's call sites in the same PR.
+- **The roof mapping differs by model.** EP trains on nflfastR's `model_roof` (`open`, `closed` and missing are
+  retractable; `make_model_mutations(nflfastr_roof=True)` in `build_ep_training_set`). CP, xYAC and the decision
+  models (xpass, FD, two-point) keep the default legacy mapping (`closed` is a dome). sdv-py applies CP, xYAC and
+  xpass with it (`ep_wp._roof_one_hots`), but its fourth-down applier gives FD and two-point nflfastR's
+  `model_roof` (`nfl_fourth_down`), which they were not trained on: a mismatch older than #84, still open.
+  Moving any model is a change on both sides, its training call here and its sdv-py call site, in one release.
 - **Win probability in overtime is not a model output.** Following nflfastR,
   `qtr > 4` uses a closed form off the EP class probabilities —
   `Sudden_Death_WP = fg_prob + td_prob + safety_prob` — with

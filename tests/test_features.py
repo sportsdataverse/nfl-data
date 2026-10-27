@@ -89,10 +89,16 @@ class TestMakeModelMutations:
         assert df["outdoors"][0] == 0.0
 
     @pytest.mark.parametrize("roof", ["closed", "open", None])
-    def test_open_closed_and_missing_roofs_are_retractable(self, roof):
+    def test_open_closed_and_missing_roofs_are_retractable_for_ep(self, roof):
         """nflfastR's model_roof (helper_add_nflscrapr_mutations.R): NA, 'open' and 'closed' -> retractable."""
-        df = make_model_mutations(_make_df(roof=roof))
+        df = make_model_mutations(_make_df(roof=roof), nflfastr_roof=True)
         assert (df["retractable"][0], df["dome"][0], df["outdoors"][0]) == (1.0, 0.0, 0.0)
+
+    @pytest.mark.parametrize(("roof", "hot"), [("closed", (0.0, 1.0, 0.0)), ("open", (0.0, 0.0, 1.0))])
+    def test_the_default_keeps_the_legacy_roof_mapping(self, roof, hot):
+        """CP, xYAC and the decision models train on the mapping their sdv-py appliers read: closed is a dome."""
+        df = make_model_mutations(_make_df(roof=roof))
+        assert (df["retractable"][0], df["dome"][0], df["outdoors"][0]) == hot
 
     def test_era_buckets_2024(self):
         df = make_model_mutations(_make_df(season=2024))

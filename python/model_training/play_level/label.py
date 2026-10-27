@@ -283,7 +283,7 @@ def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
         & pl.col("game_seconds_remaining").is_not_null()
     )
     df = _add_ep_sample_weights(df)
-    df = make_model_mutations(df)
+    df = make_model_mutations(df, nflfastr_roof=True)
     # Match nflfastR's cal_data filter (MODELS.R): drop plays missing yardline or timeouts.
     df = df.filter(
         pl.col("yardline_100").is_not_null()

@@ -267,6 +267,12 @@ class TestBuildEpTrainingSet:
         df = pl.DataFrame(plays).with_columns(pl.col("season_type").fill_null("REG"))
         assert build_ep_training_set(df).height == 1
 
+    def test_reads_the_roof_the_nflfastr_way(self):
+        """EP trains on nflfastR's model_roof (a closed roof is retractable), unlike make_model_mutations' default."""
+        df = pl.DataFrame([_play(game_id="T5", play_id=1, roof="closed")]).with_columns(season_type=pl.lit("REG"))
+        r = build_ep_training_set(df)
+        assert (r["retractable"][0], r["dome"][0], r["outdoors"][0]) == (1.0, 0.0, 0.0)
+
     def test_a_no_play_is_never_the_next_score(self):
         """model_data.R reads scoring plays as sp == 1 & play_type != 'no_play'."""
         plays = [

@@ -53,7 +53,7 @@ def _load_pbp_for_validation(
     from .label import compute_winner
 
     df = load_local_pbp(seasons, data_dir=data_dir)
-    df = make_model_mutations(df)
+    df = make_model_mutations(df, nflfastr_roof=True)  # the EP frame's mapping; WP has no roof feature
 
     # EP frame: compare on the EP model's domain — scrimmage plays with a valid down and
     # non-null yardline/timeouts. This matches nflfastR's cal_data filter (MODELS.R requires

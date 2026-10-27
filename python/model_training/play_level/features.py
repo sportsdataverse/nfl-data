@@ -32,7 +32,7 @@ _ERA_BOUNDS: list[tuple[int, int, str]] = [
 ]
 
 
-def make_model_mutations(df: pl.DataFrame) -> pl.DataFrame:
+def make_model_mutations(df: pl.DataFrame, *, nflfastr_roof: bool = False) -> pl.DataFrame:
     """Add all derived columns needed by EP, WP, and CP models.
 
     Mirrors nflfastR's ``make_model_mutations()`` + relevant parts of
@@ -41,22 +41,40 @@ def make_model_mutations(df: pl.DataFrame) -> pl.DataFrame:
     Added columns (appended; existing columns unchanged):
         home, retractable, dome, outdoors,
         era0..era4, down1..down4
+
+    ``nflfastr_roof=True`` maps the roof the way nflfastR's ``model_roof`` does (EP only, since #84).
+    The default keeps the mapping CP, xYAC and the decision models were trained on, and that their
+    sdv-py appliers still read; move one to the nflfastR mapping only together with its applier.
     """
     # home indicator
     df = df.with_columns((pl.col("posteam") == pl.col("home_team")).cast(pl.Float64).alias("home"))
 
-    # roof one-hot, nflfastR's model_roof (helper_add_nflscrapr_mutations.R): a missing, open or closed roof is
-    # retractable, so a retractable stadium is one state whatever the roof did that day
-    model_roof = (
-        pl.when(pl.col("roof").is_null() | pl.col("roof").is_in(["open", "closed"]))
-        .then(pl.lit("retractable"))
-        .otherwise(pl.col("roof"))
-    )
-    df = df.with_columns(
-        (model_roof == "retractable").cast(pl.Float64).alias("retractable"),
-        (model_roof == "dome").cast(pl.Float64).alias("dome"),
-        (model_roof == "outdoors").cast(pl.Float64).alias("outdoors"),
-    )
+    if nflfastr_roof:
+        # nflfastR's model_roof (helper_add_nflscrapr_mutations.R): a missing, open or closed roof is retractable,
+        # so a retractable stadium is one state whatever the roof did that day
+        model_roof = (
+            pl.when(pl.col("roof").is_null() | pl.col("roof").is_in(["open", "closed"]))
+            .then(pl.lit("retractable"))
+            .otherwise(pl.col("roof"))
+        )
+        df = df.with_columns(
+            (model_roof == "retractable").cast(pl.Float64).alias("retractable"),
+            (model_roof == "dome").cast(pl.Float64).alias("dome"),
+            (model_roof == "outdoors").cast(pl.Float64).alias("outdoors"),
+        )
+    else:
+        # legacy: 'closed' and 'dome' both map to dome=1
+        df = df.with_columns(
+            (pl.col("roof") == "retractable").cast(pl.Float64).alias("retractable"),
+            pl.when(pl.col("roof").is_in(["dome", "closed"]))
+            .then(pl.lit(1.0))
+            .otherwise(pl.lit(0.0))
+            .alias("dome"),
+            pl.when(~pl.col("roof").is_in(["retractable", "dome", "closed"]))
+            .then(pl.lit(1.0))
+            .otherwise(pl.lit(0.0))
+            .alias("outdoors"),
+        )
 
     # era buckets from season
     era_exprs = [

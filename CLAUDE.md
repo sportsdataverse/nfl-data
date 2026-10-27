@@ -153,6 +153,12 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   `espn_nfl_cron.yml`. Processing is ~8 s a game: only a completed game (`state == "post"`) is
   cached, and a cached final is rebuilt when its stamp differs from the installed sdv-py.
   Fixture: `tests/fixtures/espn_nfl` (one real game, laid out like the raw library).
+- **Reprocess after an sdv-py lock bump:** `bash scripts/reprocess_espn_nfl.sh -s 2002 -e 2026`
+  (detached on the droplet; `tail -f logs/reprocess_espn_nfl_*.log`). Per season, in order: build every
+  dataset (stale finals reprocess), gate with G-NFL-1 (`python -m nfl_espn_build.gate`; a failing
+  season stops the chain and publishes nothing), publish from the cached finals + `paper_index_games`,
+  then commit + push that season's `nfl/espn` parquets under the git_pull lock. `SEASONS="2011 2010"`
+  reruns a list. Bump `SCHEMA_REV` first when the change moves processed output.
 - Workflows: `.github/workflows/nfl_pbp_cron.yml` (model_pbp), `nfl_rosters_players_cron.yml`
   (rosters/players/player-stats/team-stats/qbr). Both: `workflow_dispatch` + cron
   pbp `0 20 * 9-12,1,2 *` (daily 20:00 UTC, Sep–Feb); rosters `0 9 * 9-12,1,2 1` (Mondays, full

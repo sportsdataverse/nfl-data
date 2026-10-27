@@ -212,6 +212,43 @@ def _pct(col: str) -> pl.Expr:
     )
 
 
+def _rush_yardage_bands(df: pl.DataFrame) -> pl.DataFrame:
+    """The standard per-yard adjusted-line-yards band, as sdv-py's processors compute it.
+
+    Losses count 120%, yards 0-4 100%, yards 5-10 50% (cap 7); the line takes half of
+    yards 5-10, the carrier (second level) the other half, open field everything past
+    10, so the three parts sum to the carry. The old band charged a 5-10 yard carry
+    ``0.5 * yds`` and an 11+ carry 0 line yards (R843-3: a 7-yard run read 3.5, not 5.5).
+    """
+    rush = pl.col("rush") == 1
+    yds = pl.col("yds_rushed")
+    df = df.with_columns(
+        adj_rush_yardage=pl.when(rush & (yds > 10)).then(pl.lit(10.0)).when(rush).then(yds).otherwise(None)
+    )
+    adj = pl.col("adj_rush_yardage")
+    return df.with_columns(
+        line_yards=pl.when(rush & (yds < 0))
+        .then(1.2 * adj)
+        .when(rush & (yds <= 4))
+        .then(adj)
+        .when(rush & (yds <= 10))
+        .then(4 + 0.5 * (adj - 4))
+        .when(rush & (yds > 10))
+        .then(pl.lit(7.0))
+        .otherwise(None),
+        second_level_yards=pl.when(rush & (yds >= 4))
+        .then(0.5 * (adj - 4))
+        .when(rush)
+        .then(pl.lit(0.0))
+        .otherwise(None),
+        open_field_yards=pl.when(rush & (yds > 10))
+        .then(yds - adj)
+        .when(rush)
+        .then(pl.lit(0.0))
+        .otherwise(None),
+    )
+
+
 def add_derived_metrics(plays: pl.DataFrame) -> pl.DataFrame:
     """Per-play situational columns the grid aggregates."""
     df = plays.with_columns(
@@ -243,37 +280,7 @@ def add_derived_metrics(plays: pl.DataFrame) -> pl.DataFrame:
         # rate rush rate x per-carry rate
         opportunity_run=pl.col("yds_rushed") >= 4,
     )
-    rush = pl.col("rush") == 1
-    yds = pl.col("yds_rushed")
-    df = df.with_columns(
-        adj_rush_yardage=pl.when(rush & (yds > 10))
-        .then(pl.lit(10.0))
-        .when(rush)
-        .then(yds)
-        .otherwise(None)
-    )
-    adj = pl.col("adj_rush_yardage")
-    df = df.with_columns(
-        line_yards=pl.when(rush & (yds < 0))
-        .then(1.2 * adj)
-        .when(rush & (yds >= 0) & (yds <= 4))
-        .then(adj)
-        .when(rush & (yds >= 5) & (yds <= 10))
-        .then(0.5 * adj)
-        .when(rush & (yds >= 11))
-        .then(pl.lit(0.0))
-        .otherwise(None),
-        second_level_yards=pl.when(rush & (yds >= 5))
-        .then(0.5 * (adj - 5))
-        .when(rush)
-        .then(pl.lit(0.0))
-        .otherwise(None),
-        open_field_yards=pl.when(rush & (yds > 10))
-        .then(yds - adj)
-        .when(rush)
-        .then(pl.lit(0.0))
-        .otherwise(None),
-    )
+    df = _rush_yardage_bands(df)
     df = df.with_columns(highlight_yards=pl.col("second_level_yards") + pl.col("open_field_yards"))
     df = df.with_columns(
         nonExplosiveEpa=pl.when(pl.col("EPA").is_not_null() & (pl.col("explosive") == False))  # noqa: E712

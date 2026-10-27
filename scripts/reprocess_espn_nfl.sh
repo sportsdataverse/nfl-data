@@ -5,7 +5,8 @@
 #   3. publish that season from the cached finals (--no-process --publish) + paper_index_games,
 #   4. commit + push that season's nfl/espn parquets, "chore(data): espn_nfl family rebuild
 #      (Start: Y End: Y) [skip ci]", under the git_pull sweep lock.
-# Ascending order matters: rolling_windows reads the WRITTEN pbp seasons 2002..Y.
+# Ascending order matters: rolling_windows reads the WRITTEN pbp seasons 2002..Y. The season-less
+# coach_careers table is published once, after the loop, from every rebuilt season.
 #
 #   bash scripts/reprocess_espn_nfl.sh -s 2002 -e 2026
 #   SEASONS="2011 2010" bash scripts/reprocess_espn_nfl.sh      # rerun a list
@@ -35,12 +36,22 @@ fail() { echo "[$(ts)Z] FAIL: $*"; echo "EXIT=1"; exit 1; }
 
 stamp=$("$PY" -c 'from nfl_espn_build.config import processing_version; print(processing_version())') \
   || fail "cannot read processing_version"
+
+# Data relies on raw being done: nfl-raw (the ESPN library + crosswalk/games.json this reads) must be on
+# origin/main with no local changes, pulled under the sweep lock so no scrape is mid-commit.
+exec 9>/tmp/git_pull_sdv.lock
+flock -w 3600 9 || fail "git_pull sweep held its lock for 1h"
+[ "$(git -C "$RAW" branch --show-current)" = main ] || fail "nfl-raw is not on main"
+[ -z "$(git -C "$RAW" status --porcelain --untracked-files=no)" ] || fail "nfl-raw has local changes"
+git -C "$RAW" pull -q --ff-only origin main 9>&- || fail "nfl-raw pull failed"
+flock -u 9; exec 9>&-
+echo "[$(ts)Z] nfl-raw at $(git -C "$RAW" log -1 --format='%h %s')"
 echo "[$(ts)Z] reprocess_espn_nfl start: seasons $(echo $LIST | tr '\n' ' ') stamp=$stamp workers=$WORKERS"
 
 for Y in $LIST; do
   echo "[$(ts)Z] === $Y build"
   "$PY" -m nfl_espn_build --dataset all -s "$Y" --raw-dir "$RAW" --cache-dir "$CACHE" --out "$OUT" \
-    --workers "$WORKERS" || fail "$Y build"
+    --workers "$WORKERS" --no-careers || fail "$Y build"
   "$PY" -m nfl_data_09_paper_index_games --seasons "$Y" --pbp-dir "$OUT/pbp" --out "$OUT/paper_index_games" \
     || fail "$Y paper_index_games build"
 
@@ -49,7 +60,7 @@ for Y in $LIST; do
 
   echo "[$(ts)Z] === $Y publish"
   "$PY" -m nfl_espn_build --dataset all -s "$Y" --no-process --cache-dir "$CACHE" --out "$OUT" --publish \
-    || fail "$Y publish"
+    --no-careers || fail "$Y publish"
   "$PY" -m nfl_data_09_paper_index_games --seasons "$Y" --pbp-dir "$OUT/pbp" --out "$OUT/paper_index_games" \
     --publish || fail "$Y paper_index_games publish"
 
@@ -72,5 +83,10 @@ for Y in $LIST; do
   flock -u 9; exec 9>&-
   echo "[$(ts)Z] $Y done"
 done
+# coach_careers sums every written coach season: publish it ONCE, from the full rebuilt span
+LAST=$(echo $LIST | tr ' ' '\n' | sort -n | tail -1)
+echo "[$(ts)Z] === coach_careers 2002-$LAST"
+"$PY" -m nfl_espn_build --dataset coach_careers -s 2002 -e "$LAST" --no-process --cache-dir "$CACHE" --out "$OUT" \
+  --publish || fail "coach_careers publish"
 echo "[$(ts)Z] chain done"
 echo "EXIT=0"

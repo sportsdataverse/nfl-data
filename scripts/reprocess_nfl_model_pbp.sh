@@ -6,7 +6,8 @@
 #      so a shared dir would re-upload every earlier season),
 #   3. copy the season's tracked tables into nfl/<table>/ and commit + push them,
 #      "chore(data): NFL season summaries + percentiles rebuild (Start: Y End: Y) [skip ci]".
-# Then player-stats / team-stats are rebuilt over every season (they aggregate the pbp release).
+# Then player-stats / team-stats are rebuilt over the whole published span, 1999 to the current season
+# (each is one all-seasons asset aggregating the pbp release).
 # Run AFTER scripts/reprocess_espn_nfl.sh: stage 06's Paper Index luck columns read espn_nfl_pbp.
 #
 #   bash scripts/reprocess_nfl_model_pbp.sh -s 1999 -e 2026
@@ -77,9 +78,11 @@ for Y in $LIST; do
   echo "[$(ts)Z] $Y done"
 done
 
-FIRST=$(echo $LIST | tr ' ' '\n' | sort -n | head -1); LAST=$(echo $LIST | tr ' ' '\n' | sort -n | tail -1)
-echo "[$(ts)Z] === player-stats / team-stats $FIRST:$LAST"
-py nfl_model_publish player-stats --seasons "$FIRST:$LAST" --out "$PWD/$WORK/player_stats" || fail "player-stats"
-py nfl_model_publish team-stats --seasons "$FIRST:$LAST" --out "$PWD/$WORK/team_stats" || fail "team-stats"
+# player_stats / team_stats are ONE all-seasons asset each: always rebuild the whole published span
+# (1999 to the current season), never just the reprocessed seasons, or the upload drops the rest.
+CUR=$(date -u +%Y); [ "$((10#$(date -u +%m)))" -lt 3 ] && CUR=$((CUR - 1))
+echo "[$(ts)Z] === player-stats / team-stats 1999:$CUR"
+py nfl_model_publish player-stats --seasons "1999:$CUR" --out "$PWD/$WORK/player_stats" || fail "player-stats"
+py nfl_model_publish team-stats --seasons "1999:$CUR" --out "$PWD/$WORK/team_stats" || fail "team-stats"
 echo "[$(ts)Z] chain done"
 echo "EXIT=0"

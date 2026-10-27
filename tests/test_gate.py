@@ -43,3 +43,11 @@ def test_each_defect_is_counted():
     counts = _checks(bad, 2025)
     for key in ("opportunity_run", "line_yards_parts", "last_play_epa_not_minus_ep", "td_play_unscored_reversal"):
         assert counts[key] == 1, key
+
+
+def test_null_values_on_a_rush_are_failures():
+    """A null comparison must count, not drop the row (a null opportunity_run passed silently)."""
+    bad = _frame(opportunity_run=[None, False, None], second_level_yards=[None, 0.0, None])
+    counts = _checks(bad, 2025)
+    assert counts["opportunity_run"] == 1
+    assert counts["line_yards_parts"] == 1

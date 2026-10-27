@@ -37,11 +37,11 @@ def _checks(pbp: pl.DataFrame, season: int) -> dict[str, int]:
     out: dict[str, int] = {}
 
     # opportunity_run is exactly a carry that reached 4 yards (was wrong on 88.5% of rushes)
-    out["opportunity_run"] = pbp.filter(rush & (pl.col("opportunity_run") != (yds >= 4))).height
+    out["opportunity_run"] = pbp.filter(rush & (pl.col("opportunity_run") != (yds >= 4)).fill_null(True)).height
 
     # the three line-yards parts sum to the carry on every 4+ carry (C-H1 / C-NF-3)
     parts = pl.col("line_yards") + pl.col("second_level_yards") + pl.col("open_field_yards")
-    out["line_yards_parts"] = pbp.filter(rush & (yds >= 4) & ((parts - yds).abs() > 1e-6)).height
+    out["line_yards_parts"] = pbp.filter(rush & (yds >= 4) & ((parts - yds).abs() > 1e-6).fill_null(True)).height
 
     # every game's last row carries end_of_half; a non-scoring last play scores epa == -ep
     last = pbp.sort(["game_id", "game_play_number"]).group_by("game_id", maintain_order=True).last()

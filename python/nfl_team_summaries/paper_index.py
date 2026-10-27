@@ -1,6 +1,6 @@
 """Stage 09 -- ``nfl_paper_index_games``, and the season luck columns on ``nfl_team_summaries``.
 
-The model is ``sportsdataverse.paper_index`` (Game on Paper's Paper Index: each
+The model is ``sportsdataverse.analytics.paper_index`` (Game on Paper's Paper Index: each
 side's deserved-win share of a game from eight performance margins). The NFL
 weights were fitted there and nothing is refitted here; this module adds no
 formula. The NFL twin of cfbfastR-cfb-data's stage 67 (#138). It owns the
@@ -105,14 +105,14 @@ _NO_GAMES = pl.DataFrame(
 
 
 def _sdv():
-    """``sportsdataverse.paper_index``, imported at call time.
+    """``sportsdataverse.analytics.paper_index``, imported at call time.
 
     Stage 06 imports this module and stages 07 / 08 import stage 06's CLI, so a
     module-level import would stop all three on an sdv-py older than the port
     (sportsdataverse-py #661): a checkout whose venv has not been synced since the
     lock moved. Only a call that needs the Paper Index fails there.
     """
-    import sportsdataverse.paper_index as pi
+    import sportsdataverse.analytics.paper_index as pi
 
     return pi
 

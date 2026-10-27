@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="with --publish: plan uploads, send nothing"
     )
     ap.add_argument("--repo", default=DEFAULT_REPO)
+    ap.add_argument(
+        "--no-careers",
+        action="store_true",
+        help="skip the season-less coach_careers table (a per-season reprocess publishes it once at the end)",
+    )
     ap.add_argument("--verbose", action="store_true")
     return ap
 
@@ -83,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     # coach_careers sums EVERY written coach season into one season-less file:
     # cut and publish it once after the loop, never per season (a per-season
     # cut would publish a partial career table mid-run)
-    careers = "coach_careers" in datasets
+    careers = "coach_careers" in datasets and not args.no_careers
     datasets = [d for d in datasets if d != "coach_careers"]
     end = args.end_year if args.end_year is not None else args.start_year
     if end < args.start_year:

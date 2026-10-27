@@ -414,7 +414,7 @@ conversion, points per opportunity, starting field position, havoc, turnovers). 
 shares of a game sum to 1. It is the NFL twin of the college `cfb_paper_index_games`.
 Stage 09 passes sdv-py's `paper_index_games(pbp, "nfl")` through unchanged and adds
 `paper_index_span`. Nothing is fitted in this repo: the weights are
-`sportsdataverse.paper_index`'s.
+`sportsdataverse.analytics.paper_index`'s.
 
 **Input.** The Paper Index reads ESPN-shape columns that `nfl_model_pbp` does not carry,
 so unlike stages 06–08 this stage reads `espn_nfl_pbp` (2002–). It runs from

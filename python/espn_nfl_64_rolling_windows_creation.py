@@ -3,7 +3,7 @@
 Thin entrypoint; the build lives in ``nfl_espn_build`` and this file exists so
 the directory listing is the pipeline and each dataset is runnable on its own.
 Cut at build time from the written ``espn_nfl_pbp`` seasons 2002..S
-(``sportsdataverse.rolling_windows``), so the installed sdv-py defines every
+(``sportsdataverse.analytics.rolling_windows``), so the installed sdv-py defines every
 window. Publishes to ``nfl_rolling_windows``.
 
 Example:

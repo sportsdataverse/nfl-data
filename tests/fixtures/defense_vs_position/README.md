@@ -16,7 +16,7 @@ Both hashes are of the files as downloaded that day. The pbp asset is the one th
 **pbp**: every play (special teams and penalties included) the six defenses below
 defended in the listed regular-season games: the semi-join of the season pbp on those
 `(defteam, game_id)` pairs, sorted by `game_id, play_id`. Columns:
-`sportsdataverse.defense_vs_position.PBP_COLUMNS["nfl"]` plus `qb_scramble` (the stage
+`sportsdataverse.analytics.defense_vs_position.PBP_COLUMNS["nfl"]` plus `qb_scramble` (the stage
 reads it) and `week`, `posteam`, `desc` for reading plays by hand.
 
 | defense (`team_id`) | games (`game_id`) | why it is here |
@@ -88,7 +88,7 @@ From the repo root, with the two source files downloaded to `SRC`:
 
 ```python
 import polars as pl
-from sportsdataverse.defense_vs_position import PBP_COLUMNS
+from sportsdataverse.analytics.defense_vs_position import PBP_COLUMNS
 
 games = {
     "PHI": ["2024_01_GB_PHI", "2024_02_ATL_PHI", "2024_03_PHI_NO"],

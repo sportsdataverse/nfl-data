@@ -34,8 +34,8 @@ from nfl_team_summaries.defense_vs_position import (
 )
 from nfl_team_summaries.league_averages import CATEGORIES
 from polars.testing import assert_frame_equal
-from sportsdataverse.defense_vs_position import OUTPUT_SCHEMA as T1_SCHEMA
-from sportsdataverse.defense_vs_position import PBP_COLUMNS, defense_vs_position
+from sportsdataverse.analytics.defense_vs_position import OUTPUT_SCHEMA as T1_SCHEMA
+from sportsdataverse.analytics.defense_vs_position import PBP_COLUMNS, defense_vs_position
 
 ROOT = Path(__file__).resolve().parents[1]
 FIX = ROOT / "tests" / "fixtures" / "defense_vs_position"

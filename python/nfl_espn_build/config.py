@@ -46,7 +46,10 @@ from importlib import metadata
 #:    which carries devel-nfl 2.1-2.28 (line-yards band, half-end EP/WP, pre-2009 and
 #:    2009+ punt end states, kickoff touchbacks, td_play on reversed scores, Float64
 #:    EP/WP), devel-cfb's three NFL hunks and the QBR re-save. Every 5 final must rebuild.
-SCHEMA_REV = 6
+#: 7: the lock moves to sdv-py 699409c9b8: the next-snap end spot (#1025, #1026), the
+#:    nflfastR-aligned EP refit with EP's nflfastR roof mapping, and ESPN roofs read from the
+#:    venue id (#1027). Every 6 final must rebuild.
+SCHEMA_REV = 7
 
 
 @functools.lru_cache(maxsize=1)

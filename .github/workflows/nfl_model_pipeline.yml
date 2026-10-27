@@ -130,7 +130,7 @@ jobs:
         working-directory: nfl-data
         run: |
           uv pip install --reinstall --refresh \
-            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@425745d294b2978b7f8ea4fb924ca4dedfacef15"
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@699409c9b883bed46554a0ec0edd1b0a73ee160f"
 
       # Fail in seconds on a broken surface rather than after a multi-hour fit.
       - name: Verify trainer surface imports

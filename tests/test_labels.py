@@ -267,6 +267,17 @@ class TestBuildEpTrainingSet:
         df = pl.DataFrame(plays).with_columns(pl.col("season_type").fill_null("REG"))
         assert build_ep_training_set(df).height == 1
 
+    def test_a_native_pbp_frame_without_play_type_still_builds(self):
+        """native_pbp emits no play_type / try results: the down filter alone drops a kickoff."""
+        plays = [
+            _play(game_id="T6", play_id=1, down=None),
+            _play(game_id="T6", play_id=2),
+            _play(game_id="T6", play_id=3, sp=1, touchdown=1, td_team="KC"),
+        ]
+        df = pl.DataFrame(plays).drop("play_type", "two_point_conv_result", "extra_point_result")
+        r = build_ep_training_set(df)
+        assert r.height == 2 and r["next_score_class"].null_count() == 0
+
     def test_reads_the_roof_the_nflfastr_way(self):
         """EP trains on nflfastR's model_roof (a closed roof is retractable), unlike make_model_mutations' default."""
         df = pl.DataFrame([_play(game_id="T5", play_id=1, roof="closed")]).with_columns(season_type=pl.lit("REG"))

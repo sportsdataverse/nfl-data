@@ -42,7 +42,6 @@ _THIN_SHIELD_LAST_SEASON = 2002
 #: so a real game under 100 plays would be swapped for nflverse's rows and a thin payload of
 #: 100+ kept. Upgrade path: compare against the payload's own sum(driveChart.drives[].plays).
 _MIN_GAME_PLAYS = 100
-_DRIVE = ["game_id", "fixed_drive"]
 #: nflverse rows the Shield build drops as TIMEOUT markers (timeouts and two-minute
 #: warnings). 2001+ nflverse types them play_type_nfl "TIMEOUT" (play_type "no_play");
 #: 1999-2000 carry only the desc, with play_type and often timeout null. A real play that
@@ -59,11 +58,6 @@ _DERIVED = {
     "home": lambda: (pl.col("posteam") == pl.col("home_team")).fill_null(False),
     "def_tackles_for_loss": lambda: pl.col("tackled_for_loss"),
     "td_ids_touchdown": lambda: pl.col("touchdown"),
-    # build semantics (shield_pbp/drives.py:374-375): yardline_100 of the drive's
-    # first/last play; nflverse ships "SEA 20" strings that don't cast. nflverse files an
-    # END QUARTER row under the next drive, so such a drive starts null (27 in 2002).
-    "drive_start_yard_line": lambda: pl.col("yardline_100").first().over(_DRIVE),
-    "drive_end_yard_line": lambda: pl.col("yardline_100").last().over(_DRIVE),
 }
 #: Null-typed in stub-only seasons (so nflverse's Float64 would leak through); the Shield
 #: build and the published 2003/2004 assets type them Int64.
@@ -95,7 +89,6 @@ def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> 
         return df
 
     from sportsdataverse.nfl import load_nfl_pbp
-    from sportsdataverse.nfl.shield_pbp.game_id import _nflverse_abbr
 
     nv = load_nfl_pbp([season])
     if not nv.schema["game_id"] == df.schema["game_id"] == pl.String:
@@ -105,15 +98,14 @@ def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> 
     is_timeout = (pl.col("play_type_nfl") == "TIMEOUT").fill_null(False)
     is_marker = is_timeout | pl.col("desc").fill_null("").str.contains(_MARKER_DESC)
     nv = nv.filter(pl.col("game_id").is_in(sorted(thin)), ~is_marker)
-    # nflverse team columns carry the modern LA/LAC/LV (game_id and every Shield season use
-    # the era's STL/SD/OAK), and "" for no team on some 1999-2000 non-play rows
+    # nflverse and the Shield build both name relocated clubs by their modern LA/LAC/LV in the
+    # team columns (sportsdataverse-py #1028); nflverse has "" for no team on some 1999-2000 non-play rows
     team_cols = [
         c
         for c, dt in nv.schema.items()
         if dt == pl.String and (c in ("posteam", "defteam") or c.endswith("_team"))
     ]
-    remap = {t: _nflverse_abbr(t, season) for t in ("LA", "LAC", "LV")} | {"": None}
-    nv = nv.with_columns(pl.col(team_cols).replace(remap))
+    nv = nv.with_columns(pl.col(team_cols).replace({"": None}))
     target = {c: pl.Int64 if c in _INT64_YARDS else dt for c, dt in df.schema.items()}
     # polars' strict cast truncates 1.5 -> 1 silently: refuse a fractional float bound for Int64
     to_int = [

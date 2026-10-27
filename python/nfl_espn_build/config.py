@@ -49,7 +49,11 @@ from importlib import metadata
 #: 7: the lock moves to sdv-py 699409c9b8: the next-snap end spot (#1025, #1026), the
 #:    nflfastR-aligned EP refit with EP's nflfastR roof mapping, and ESPN roofs read from the
 #:    venue id (#1027). Every 6 final must rebuild.
-SCHEMA_REV = 7
+#: 8: the lock moves to sdv-py 8ba6275421: the Shield parser at nflverse parity (#1028) --
+#:    drive_* from Shield's drive records in nflverse's format (text yard lines), relocated
+#:    clubs folded to LA / LAC / LV, playoff weeks 18-22, qb_dropback before fix_scrambles.
+#:    nfl_model_pbp 1999-2026 republishes in one pass. Every 7 final must rebuild.
+SCHEMA_REV = 8
 
 
 @functools.lru_cache(maxsize=1)

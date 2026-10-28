@@ -53,7 +53,10 @@ from importlib import metadata
 #:    drive_* from Shield's drive records in nflverse's format (text yard lines), relocated
 #:    clubs folded to LA / LAC / LV, playoff weeks 18-22, qb_dropback before fix_scrambles.
 #:    nfl_model_pbp 1999-2026 republishes in one pass. Every 7 final must rebuild.
-SCHEMA_REV = 8
+#: 9: the lock moves to sdv-py 702b2cca15: an ESPN game with no (or an unknown) venue id takes the
+#:    home team's roof, which EP/WP/CP read (#1029); Shield neutral sites stay outdoors. Every 8
+#:    final must rebuild.
+SCHEMA_REV = 9
 
 
 @functools.lru_cache(maxsize=1)

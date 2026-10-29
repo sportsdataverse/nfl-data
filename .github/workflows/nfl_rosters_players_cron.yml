@@ -122,7 +122,7 @@ jobs:
         working-directory: nfl-data/python
         run: |
           uv pip install --reinstall --refresh \
-            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@702b2cca15eb69dab142440fbac4983960dc6d82"
+            "sportsdataverse @ git+https://github.com/sportsdataverse/sportsdataverse-py.git@af7f86732076061a5bece6674fcee582c38d52fd"
 
       - name: Verify builders import
         working-directory: nfl-data/python

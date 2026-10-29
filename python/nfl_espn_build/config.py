@@ -56,7 +56,10 @@ from importlib import metadata
 #: 9: the lock moves to sdv-py 702b2cca15: an ESPN game with no (or an unknown) venue id takes the
 #:    home team's roof, which EP/WP/CP read (#1029); Shield neutral sites stay outdoors. Every 8
 #:    final must rebuild.
-SCHEMA_REV = 9
+#: 10: the lock moves to sdv-py af7f867320: Shield venue uuids carry their real roof (#1032), so
+#:     Shield-built nfl_model_pbp games at domes and retractables no longer score outdoors.
+#:     Every 9 final must rebuild.
+SCHEMA_REV = 10
 
 
 @functools.lru_cache(maxsize=1)

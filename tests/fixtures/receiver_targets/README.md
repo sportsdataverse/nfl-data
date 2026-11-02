@@ -53,3 +53,6 @@ o = pl.read_parquet(f"{SRC}/play_by_play_2003.parquet").select(
     .write_parquet("tests/fixtures/receiver_targets/model_pbp_2003_det.parquet")
 )
 ```
+
+The Cleveland 2004 file is the same recipe on the 2004 files with `posteam == "CLE"`,
+written to `model_pbp_2004_cle.parquet`.

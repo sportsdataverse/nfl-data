@@ -34,19 +34,28 @@ def _chr(v: Any) -> str | None:
 
 
 # --- pbp ------------------------------------------------------------------
+#: Ids some finals carry as JSON strings. One such game turned the whole season
+#: Utf8 at bind_games (2002-04, 2007), and sdv-db widened nfl.espn_pbp to text.
+_PBP_INT_IDS = ("id", "sequenceNumber", "start.team.id", "end.team.id")
+
+
 def reshape_pbp(game: dict[str, Any]) -> pl.DataFrame:
     """The processor's plays, one row per play, every column kept.
 
     ``NFLPlayProcess`` already emits the released column set (EPA/WP, series,
     box-score flags, dotted ``drive.*`` / ``start.*`` / ``end.*`` fields, player
-    names + ids); this only normalizes cells and stamps identity. Nothing is
-    recomputed, so a re-run of the processor is the only way values change.
+    names + ids); this only normalizes cells, pins the play/team ids to Int64
+    and stamps identity. Nothing is recomputed, so a re-run of the processor is
+    the only way values change.
     """
     plays = game.get("plays") or []
     rows = [{k: _norm_cell(v) for k, v in p.items()} for p in plays if isinstance(p, dict)]
     if not rows:
         return pl.DataFrame()
-    return stamp_identity(pl.from_dicts(rows, infer_schema_length=None), game, week=True)
+    df = pl.from_dicts(rows, infer_schema_length=None)
+    # strict: a non-numeric id fails the build instead of turning into a null
+    df = df.with_columns(pl.col(c).cast(pl.Int64) for c in _PBP_INT_IDS if c in df.columns)
+    return stamp_identity(df, game, week=True)
 
 
 # --- qa -------------------------------------------------------------------

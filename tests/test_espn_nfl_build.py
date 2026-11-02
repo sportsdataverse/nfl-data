@@ -630,6 +630,31 @@ def test_pbp_carries_the_processor_columns(built):
     assert set(df["pos_team"].drop_nulls().to_list()) == {"Philadelphia Eagles", "Dallas Cowboys"}
     assert df.columns.index("pos_team_id") + 1 == df.columns.index("pos_team")
     assert df.select(pl.col("EPA").is_null().mean()).item() < 0.2
+    assert {df.schema[c] for c in reshapers._PBP_INT_IDS} == {pl.Int64}
+
+
+def test_pbp_ids_stay_int64_when_a_final_carries_strings():
+    # one string-id game used to make the season Utf8 at bind_games (2002-04, 2007)
+    def game(gid, play):
+        return {"id": gid, "season": 2007, "week": 1, "plays": [play]}
+
+    as_str = {
+        "id": "2709060100101",
+        "sequenceNumber": "1",
+        "start.team.id": "19",
+        "end.team.id": None,
+    }
+    as_int = {"id": 2709090200101, "sequenceNumber": 1, "start.team.id": 6, "end.team.id": 6}
+    df = build.bind_games(
+        [
+            reshapers.reshape_pbp(game(270906010, as_str)),
+            reshapers.reshape_pbp(game(270909020, as_int)),
+        ]
+    )
+    assert {df.schema[c] for c in reshapers._PBP_INT_IDS} == {pl.Int64}
+    assert df["id"].to_list() == [2709060100101, 2709090200101]
+    with pytest.raises(pl.exceptions.InvalidOperationError):
+        reshapers.reshape_pbp(game(1, {**as_str, "id": "not-an-id"}))
 
 
 def test_adv_and_box_shapes(built):

@@ -1,12 +1,13 @@
 # receiver_targets fixtures
 
-Real 2003 plays for `fill_receiver_ids` (`python/nfl_team_summaries/input.py`) and
+Real 2003 and 2004 plays for `fill_receiver_ids` (`python/nfl_team_summaries/input.py`) and
 `tests/test_receiver_targets.py`, cut on 2026-11-01.
 
 | fixture | rows | source | source sha256 |
 | --- | --- | --- | --- |
 | `model_pbp_2003_det.parquet` | 1,304 x 11 | `model_pbp_2003.parquet` on the `nfl_model_pbp` release tag of `sportsdataverse/sportsdataverse-data` (44,962 rows x 327 columns) | `62da2363b0fe94bd5688d7a5d416ae428890a0744a50013f624d57a6d315bd17` |
 | (oracle column `nflverse_receiver_id`) | | `play_by_play_2003.parquet` on the `pbp` release tag of `nflverse/nflverse-data`, its `receiver_id` joined on `game_id, play_id` | `a5bc20c69eee0c18364bea7fa1d3c2817941c8d9026058c694ab1ee73a2d279d` |
+| `model_pbp_2004_cle.parquet` | 1,268 x 11 | `model_pbp_2004.parquet`, same tag (44,891 rows x 327 columns), with `play_by_play_2004.parquet`'s `receiver_id` from the same nflverse tag as the oracle column | `d31a2d5b633d116934bd36810ba1f2b4c4aaf65f2207e24edd83a5ea4d0d8889` (pbp), `94658bc15788eda63a8cdba0d8f1c8aa9253fb5baa9c0d07b9c2e35e75ae6a03` (nflverse) |
 
 Hashes are of the files as downloaded that day. nflverse data (c) nflverse contributors,
 CC BY 4.0.
@@ -17,6 +18,11 @@ Every play with `posteam == "DET"` (the 2003 Lions' offense, regular season only
 by `game_id, play_id`. One whole team-season, because the fill's id lookup is the mode
 over `(name, posteam)` for the season: a slice of a team's season would change it.
 nflverse's `receiver_id` is null on its 693 non-pass rows.
+
+The Cleveland 2004 offense (cut 2026-11-01, same selection, `posteam == "CLE"`) is the
+unnamed-throw case: "Andre' Davis"'s apostrophe stops the name parser, so his catches carry an
+id with no parsed name. 440 throws, 188 with no stat receiver; nflverse names a receiver on all
+but 19, among them play 1406 ("J.Garcia pass incomplete to Andre' Davis (W.Peterson).").
 
 ## Hand-counted cells
 

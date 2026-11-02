@@ -79,3 +79,24 @@ def test_filled_rows_carry_the_stat_name(plays):
     assert (
         filled.join(stat, on=["receiver_player_id", "receiver_player_name"], how="anti").height == 0
     )
+
+
+CLE_2004 = FIX.parent / "model_pbp_2004_cle.parquet"
+
+
+def test_unnamed_throws_are_not_one_group():
+    """Cleveland 2004: "Andre' Davis" stops the parser, so his catches carry an id but no
+    parsed name. Grouping on a null name gave that id to every unnamed Browns throw
+    (throwaways, spikes, failed conversions); nflverse leaves them null."""
+    plays = pl.read_parquet(CLE_2004)
+    thrown = fill_receiver_ids(plays).filter(THROWN)
+    assert thrown.height == 440
+    assert thrown["receiver_player_id"].null_count() == 19
+    assert (
+        thrown.filter(
+            pl.col("receiver_player_id").ne_missing(pl.col("nflverse_receiver_id"))
+        ).height
+        == 0
+    )
+    # "J.Garcia pass incomplete to Andre' Davis (W.Peterson)." names no parsable target
+    assert thrown.filter(pl.col("play_id") == 1406)["receiver_player_id"].item() is None

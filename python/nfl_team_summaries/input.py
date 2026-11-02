@@ -94,7 +94,11 @@ def fill_receiver_ids(pbp: pl.DataFrame) -> pl.DataFrame:
     df = pbp.with_columns(
         __rx=pl.when(thrown & desc.str.contains(" pass ")).then(desc.str.extract(_RECEIVER_RX, 1))
     ).with_columns(
-        __rid=pl.col("receiver_player_id").drop_nulls().mode().min().over(["__rx", "posteam"])
+        # no parsed name is no group: a team's unnamed throws (throwaways, spikes, "Andre'
+        # Davis", whose apostrophe stops the parser) would otherwise share one id
+        __rid=pl.when(pl.col("__rx").is_not_null()).then(
+            pl.col("receiver_player_id").drop_nulls().mode().min().over(["__rx", "posteam"])
+        )
     )
     df = df.with_columns(
         __fill=thrown & pl.col("receiver_player_id").is_null() & pl.col("__rid").is_not_null()

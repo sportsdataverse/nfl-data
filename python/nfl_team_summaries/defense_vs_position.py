@@ -16,13 +16,15 @@ owns:
 * ``unattributed_target_share``: of the passes thrown against the defense
   (dropbacks that are neither sacks nor scrambles), the share on which the pbp
   names NO receiver. Those throws reach the QB row and no WR or TE row, so the
-  WR and TE rates are **on targets naming a receiver**. Measured on the released
-  seasons (2026-10-04), league-wide: 1-4% from 2009 on (throwaways; 4.1% in 2024,
-  4.4% in 2025), 2-4% in 1999-2001, 9% in 2002 and **38-41% in 2003-2008**, when
-  the pbp carries no receiver id on ANY incompletion or interception: in those
-  six seasons a WR or TE row is completions only and its rates read high. The
-  share is repeated on the defense's WR and TE rows and null on QB and RB.
-  Nothing is imputed.
+  WR and TE rates are **on targets naming a receiver**. The 2003-2008 pbp carries
+  no receiver id on ANY incompletion or interception (the Shield feed has no
+  target stat), so the stage first recovers the target from the play text as
+  stage 06 does (:func:`~nfl_team_summaries.input.fill_receiver_ids`, nflverse's
+  ``receiver_id``); without it the share was 38-41% in those seasons and a WR or
+  TE row was completions only. Measured on the released seasons (2026-10-04),
+  league-wide: 1-4% from 2009 on (throwaways; 4.1% in 2024, 4.4% in 2025), 2-4%
+  in 1999-2001 and 9% in 2002. The share is repeated on the defense's WR and TE
+  rows and null on QB and RB.
 * ``<metric>_pct``: the percentile among qualifiers (``qualified``, the 3-game
   floor) within ``(season, position_group)``, over every team in the league,
   0-100 and oriented so that HIGHER = BETTER DEFENSE for every metric. A
@@ -75,7 +77,7 @@ from sportsdataverse.analytics.defense_vs_position import PBP_COLUMNS, _plays, d
 from nfl_team_summaries.__main__ import REPO, _parse_seasons
 from nfl_team_summaries.build import MIN_COHORT_TEAMS, _attach_cohort_percentiles, _teams_lookup
 from nfl_team_summaries.crosswalk import attach_team_ids
-from nfl_team_summaries.input import load_model_pbp, load_rosters
+from nfl_team_summaries.input import fill_receiver_ids, load_model_pbp, load_rosters
 
 TAG = "nfl_defense_vs_position"
 STEM = "defense_vs_position"
@@ -208,7 +210,7 @@ def build_defense_vs_position(season: int, pbp_dir: str | Path | None = None) ->
         )
         return pl.DataFrame(schema=OUTPUT_SCHEMA)
     # the model_pbp schema is uniform across seasons; a missing column fails here, at the boundary
-    pbp = load_model_pbp(season, pbp_dir).select(_PBP_COLS)
+    pbp = fill_receiver_ids(load_model_pbp(season, pbp_dir)).select(_PBP_COLS)
     stray = sorted(set(pbp["season"].unique()) - {season})
     if stray:
         # the percentile cohort is ONE season's position group

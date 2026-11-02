@@ -66,7 +66,8 @@ def load_espn_game_ids(raw_dir: str | None = None) -> pl.DataFrame:
     ``$NFL_RAW_DIR``, else raw.githubusercontent.com -- see
     :func:`nfl_espn_build.ingest.resolve_raw_root`). ESPN's library starts in 2002,
     so earlier nflverse games have no row. Columns: ``nflverse_game_id`` (Utf8),
-    ``game_id`` (Int64, the ESPN event id).
+    ``game_id`` (Int64, the ESPN event id), ``game_date`` (Date, the kickoff's
+    US/Eastern calendar day) and ``neutral_site`` (Boolean, ESPN's flag).
 
     Raises:
         ValueError: if the file is absent, is not a list of games, or maps no
@@ -77,7 +78,7 @@ def load_espn_game_ids(raw_dir: str | None = None) -> pl.DataFrame:
     root = resolve_raw_root(raw_dir)
     rows = EspnStore(root).crosswalk_games()  # [] for a 404 or a non-list body
     pairs = [
-        (r.get("game_id"), r.get("espn_event_id"))
+        (r.get("game_id"), r.get("espn_event_id"), r.get("kickoff_utc"), r.get("neutral_site"))
         for r in rows
         if isinstance(r, dict) and r.get("game_id") and r.get("espn_event_id")
     ]
@@ -87,5 +88,21 @@ def load_espn_game_ids(raw_dir: str | None = None) -> pl.DataFrame:
             "nflverse game_id to an espn_event_id"
         )
     return pl.DataFrame(
-        pairs, schema={"nflverse_game_id": pl.Utf8, "game_id": pl.Int64}, orient="row"
+        pairs,
+        schema={
+            "nflverse_game_id": pl.Utf8,
+            "game_id": pl.Int64,
+            "kickoff_utc": pl.Utf8,
+            "neutral_site": pl.Boolean,
+        },
+        orient="row",
+    ).select(
+        "nflverse_game_id",
+        "game_id",
+        pl.col("kickoff_utc")
+        .str.to_datetime("%Y-%m-%dT%H:%MZ", time_zone="UTC")
+        .dt.convert_time_zone("America/New_York")
+        .dt.date()
+        .alias("game_date"),
+        "neutral_site",
     )

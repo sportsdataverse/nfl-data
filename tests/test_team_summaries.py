@@ -10,6 +10,7 @@ site's own TypeScript interfaces, vendored under tests/fixtures.
 
 from __future__ import annotations
 
+import datetime as dt
 import random
 from pathlib import Path
 
@@ -65,9 +66,20 @@ ESPN_EVENTS = {g: 401772500 + i for i, (g, _, _) in enumerate(GAMES)}
 
 
 def _espn_game_ids() -> pl.DataFrame:
+    """``load_espn_game_ids``' shape; the week-2 KC-PHI game is at a neutral site."""
     return pl.DataFrame(
-        {"nflverse_game_id": list(ESPN_EVENTS), "game_id": list(ESPN_EVENTS.values())},
-        schema={"nflverse_game_id": pl.Utf8, "game_id": pl.Int64},
+        {
+            "nflverse_game_id": list(ESPN_EVENTS),
+            "game_id": list(ESPN_EVENTS.values()),
+            "game_date": [dt.date(2025, 9, 7 + 7 * int(g[5:7]) - 7) for g in ESPN_EVENTS],
+            "neutral_site": [g == "2025_02_KC_PHI" for g in ESPN_EVENTS],
+        },
+        schema={
+            "nflverse_game_id": pl.Utf8,
+            "game_id": pl.Int64,
+            "game_date": pl.Date,
+            "neutral_site": pl.Boolean,
+        },
     )
 
 
@@ -1173,7 +1185,32 @@ SPLITS_SCHEMA = {
     "epa_per_rush": pl.Float64,
     "success_rate_pass": pl.Float64,
     "success_rate_rush": pl.Float64,
+    "is_conference_game": pl.Boolean,
+    "neutral_site": pl.Boolean,
+    "game_date": pl.Date,
+    "win": pl.Boolean,
 }
+
+
+def test_opponent_splits_game_set_columns(splits):
+    """GOP S6: same-conference games, ESPN's neutral site and date, and the result."""
+    by = {(r["nflverse_game_id"], r["team_id"]): r for r in splits.iter_rows(named=True)}
+    assert by[("2025_01_BUF_KC", 12)]["is_conference_game"] is True  # AFC-AFC
+    assert by[("2025_01_DAL_PHI", 21)]["is_conference_game"] is True  # NFC-NFC
+    assert by[("2025_02_KC_PHI", 12)]["is_conference_game"] is False
+    assert by[("2025_02_BUF_DAL", 2)]["is_conference_game"] is False
+    assert by[("2025_02_KC_PHI", 21)]["neutral_site"] is True
+    assert by[("2025_01_BUF_KC", 12)]["neutral_site"] is False
+    assert by[("2025_02_KC_PHI", 21)]["game_date"] == dt.date(2025, 9, 14)
+    assert (splits["win"] == (splits["points_for"] > splits["points_against"])).all()
+
+
+def test_seattle_is_afc_before_the_2002_realignment():
+    from nfl_team_summaries.build import _SEA_AFC_THROUGH, _SEA_ESPN_ID
+
+    assert (_SEA_ESPN_ID, _SEA_AFC_THROUGH) == (26, 2001)
+    xw = load_crosswalk()
+    assert xw.filter(pl.col("espn_team_id") == 26)["nflverse_abbr"].item() == "SEA"
 
 
 def test_opponent_splits_carry_espn_int64_ids(splits):
@@ -1297,7 +1334,10 @@ def test_a_game_with_no_scrimmage_play_is_dropped():
             "play_type": [None, None],
         }
     )
-    ids = pl.concat([_espn_game_ids(), pl.DataFrame({"nflverse_game_id": [gid], "game_id": [1]})])
+    ids = pl.concat(
+        [_espn_game_ids(), pl.DataFrame({"nflverse_game_id": [gid], "game_id": [1]})],
+        how="diagonal_relaxed",
+    )
     s = _splits_with(no_contest, ids)
     assert gid not in s["nflverse_game_id"].to_list()
     assert s.height == 2 * len(GAMES)
@@ -1340,12 +1380,19 @@ def test_load_espn_game_ids_reads_the_nfl_raw_crosswalk(tmp_path):
 
     root = _write_crosswalk(
         tmp_path,
-        '[{"espn_event_id": 401772500, "game_id": "2025_01_BUF_KC"},'
+        '[{"espn_event_id": 401772500, "game_id": "2025_01_BUF_KC",'
+        ' "kickoff_utc": "2025-09-08T00:20Z", "neutral_site": false},'
         ' {"espn_event_id": 401772999, "game_id": null}]',
     )
     ids = load_espn_game_ids(root)
-    assert dict(ids.schema) == {"nflverse_game_id": pl.Utf8, "game_id": pl.Int64}
-    assert ids.rows() == [("2025_01_BUF_KC", 401772500)]
+    assert dict(ids.schema) == {
+        "nflverse_game_id": pl.Utf8,
+        "game_id": pl.Int64,
+        "game_date": pl.Date,
+        "neutral_site": pl.Boolean,
+    }
+    # 00:20 UTC Monday is Sunday night in US/Eastern
+    assert ids.rows() == [("2025_01_BUF_KC", 401772500, dt.date(2025, 9, 7), False)]
 
 
 @pytest.mark.parametrize(

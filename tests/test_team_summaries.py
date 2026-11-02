@@ -302,6 +302,7 @@ def _play(
         else None,
         "receiver_player_id": wr if kind == "pass" else None,
         "receiver_player_name": f"W.{wr[-3:]}" if kind == "pass" else None,
+        "desc": f"Q.{posteam} pass to W.{wr[-3:]}" if kind == "pass" else kind,
         "xpass": round(rng.uniform(0.3, 0.8), 3)
         if kind in ("pass", "sack", "scramble", "run")
         else None,

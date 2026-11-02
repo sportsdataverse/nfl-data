@@ -25,6 +25,7 @@ from nfl_team_summaries.build import (
     QB_QUALIFIES,
     RB_QUALIFIES,
     WR_QUALIFIES,
+    _add_team_games,
     _attach_cohort_percentiles,
     _attach_leader_ranks,
     _attach_position_cohorts,
@@ -38,6 +39,7 @@ from nfl_team_summaries.build import (
     build_team_opponent_splits,
     build_team_summaries,
     prepare_player_percentiles,
+    summarize_receiver,
 )
 from nfl_team_summaries.crosswalk import attach_team_ids, load_crosswalk
 from nfl_team_summaries.input import filter_season_types, prepare_plays
@@ -302,6 +304,7 @@ def _play(
         else None,
         "receiver_player_id": wr if kind == "pass" else None,
         "receiver_player_name": f"W.{wr[-3:]}" if kind == "pass" else None,
+        "desc": f"Q.{posteam} pass to W.{'One' if wr[-1] == '1' else 'Two'}" if kind == "pass" else kind,
         "xpass": round(rng.uniform(0.3, 0.8), 3)
         if kind in ("pass", "sack", "scramble", "run")
         else None,
@@ -1635,3 +1638,21 @@ def test_rushing_tiers_reach_the_table(tables):
     both = rb["EPAplay_one_score_n"] + rb["EPAplay_not_one_score_n"]
     assert both.to_list() == rb["plays"].to_list()
     assert rb["EPAplay_one_score_n"].sum() > 0 and rb["EPAplay_not_one_score_n"].sum() > 0
+
+
+def test_prepare_plays_recovers_targets_the_stats_omit():
+    # a 2003-2008 incompletion: the stats name no receiver, the play text does
+    pbp = _fake_pbp()
+    blanked = pbp.with_columns(
+        receiver_player_id=pl.when(pl.col("incomplete_pass") == 1)
+        .then(None)
+        .otherwise(pl.col("receiver_player_id"))
+    )
+    assert blanked["receiver_player_id"].null_count() > pbp["receiver_player_id"].null_count()
+
+    def targets(frame: pl.DataFrame) -> dict:
+        plays = prepare_plays(frame, 2025, schedule_fn=_schedule)
+        rows = plays.filter((pl.col("pass_attempt") == 1) & pl.col("receiver_player_id").is_not_null())
+        return dict(summarize_receiver(rows.pipe(_add_team_games)).select("receiver_player_id", "targets").iter_rows())
+
+    assert targets(blanked) == targets(pbp)

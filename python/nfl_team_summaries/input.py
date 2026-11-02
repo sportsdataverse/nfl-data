@@ -67,6 +67,48 @@ def filter_season_types(pbp: pl.DataFrame, season_types: Iterable[str]) -> pl.Da
     return pbp.filter(pl.col("season_type").is_in(list(season_types)))
 
 
+# nflfastR clean_pbp's receiver parser (helper_additional_functions.R): "to" or "for",
+# maybe a jersey number and a dash, then big_parser's name. Rust regex has no
+# lookbehind or possessive quantifiers, so the name is a capture group instead.
+_RECEIVER_NAME = (
+    r"[A-Z][A-Za-z]*(?:\.|\s)+[A-Z][A-Za-z]*'*-*[A-Z]*[a-z]*(?:\s(?:Jr\.|Sr\.|I{2,3})|IV)?"
+)
+_RECEIVER_RX = rf"(?:to|for)\s(?:\d{{1,2}}-)?({_RECEIVER_NAME})"
+
+
+def fill_receiver_ids(pbp: pl.DataFrame) -> pl.DataFrame:
+    """The targeted receiver on throws whose stats name none, as nflverse's ``receiver_id``.
+
+    The 2003-2008 Shield feed has no pass-target stat (115): an incompletion or
+    interception carries the passer and defenders only, so ``receiver_player_id``
+    is null on ~99% of them (nflverse's raw column is null on the same plays) and
+    a receiver's targets equal their catches. The target is still in ``desc``
+    ("J.Harrington pass incomplete to C.Schlesinger"). nflfastR's ``clean_pbp``
+    parses it and takes the most common stat id of that name on that ``posteam``
+    over the season; this does the same and fills only the nulls, so a stat-sourced
+    id is never overwritten. ``pbp`` must be the whole season (the mode's pool).
+    """
+    thrown = (_flag("pass_attempt") == 1) & (_flag("sack") == 0)
+    # clean_pbp's first step: "C. Schlesinger" -> "C.Schlesinger"
+    desc = pl.col("desc").str.replace_all(r"((?:\s|-)[A-Z]\.)\s+", "${1}")
+    df = pbp.with_columns(
+        __rx=pl.when(thrown & desc.str.contains(" pass ")).then(desc.str.extract(_RECEIVER_RX, 1))
+    ).with_columns(
+        __rid=pl.col("receiver_player_id").drop_nulls().mode().min().over(["__rx", "posteam"])
+    )
+    df = df.with_columns(
+        __fill=thrown & pl.col("receiver_player_id").is_null() & pl.col("__rid").is_not_null()
+    ).with_columns(
+        receiver_player_id=pl.when("__fill").then("__rid").otherwise("receiver_player_id")
+    )
+    # the id's stat-sourced name, not the parsed one: the parser stops "A.Randle El" at "A.Randle"
+    return df.with_columns(
+        receiver_player_name=pl.when("__fill")
+        .then(pl.col("receiver_player_name").drop_nulls().mode().min().over("receiver_player_id"))
+        .otherwise("receiver_player_name")
+    ).drop("__rx", "__rid", "__fill")
+
+
 def prepare_plays(
     pbp: pl.DataFrame,
     season: int,
@@ -84,7 +126,7 @@ def prepare_plays(
             the neutral-site flag the opponent adjustment needs. ``None`` uses
             sdv-py's loader; a loader failure degrades to ``neutral_site=False``.
     """
-    df = filter_season_types(pbp, season_types)
+    df = filter_season_types(fill_receiver_ids(pbp), season_types)
     if df.height == 0:
         return df
 

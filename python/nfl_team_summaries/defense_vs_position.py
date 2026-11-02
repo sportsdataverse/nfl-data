@@ -20,11 +20,11 @@ owns:
   no receiver id on ANY incompletion or interception (the Shield feed has no
   target stat), so the stage first recovers the target from the play text as
   stage 06 does (:func:`~nfl_team_summaries.input.fill_receiver_ids`, nflverse's
-  ``receiver_id``); without it the share was 38-41% in those seasons and a WR or
-  TE row was completions only. Measured on the released seasons (2026-10-04),
-  league-wide: 1-4% from 2009 on (throwaways; 4.1% in 2024, 4.4% in 2025), 2-4%
-  in 1999-2001 and 9% in 2002. The share is repeated on the defense's WR and TE
-  rows and null on QB and RB.
+  ``receiver_id``). Without it the share was 38-41% in those seasons and a WR or
+  TE row was completions only; with it, 1.1-1.8% (measured 2026-11-01). On the
+  released seasons (measured 2026-10-04), league-wide: 1-4% from 2009 on
+  (throwaways; 4.1% in 2024, 4.4% in 2025), 2-4% in 1999-2001 and 9% in 2002.
+  The share is repeated on the defense's WR and TE rows and null on QB and RB.
 * ``<metric>_pct``: the percentile among qualifiers (``qualified``, the 3-game
   floor) within ``(season, position_group)``, over every team in the league,
   0-100 and oriented so that HIGHER = BETTER DEFENSE for every metric. A

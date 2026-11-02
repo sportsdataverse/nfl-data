@@ -1191,7 +1191,17 @@ SPLITS_COLUMNS = [
     "epa_per_rush",
     "success_rate_pass",
     "success_rate_rush",
+    # game-set filters (GOP S6), appended: same-conference, ESPN's neutral-site flag,
+    # the kickoff's US/Eastern day (both null where the crosswalk has no event), win
+    "is_conference_game",
+    "neutral_site",
+    "game_date",
+    "win",
 ]
+#: Seattle played in the AFC West until the 2002 realignment; every other club's
+#: conference is the crosswalk's for the seasons this table covers (1999+)
+_SEA_ESPN_ID = 26
+_SEA_AFC_THROUGH = 2001
 
 
 def _team_off(plays: pl.DataFrame) -> pl.DataFrame:
@@ -1217,6 +1227,11 @@ def build_team_opponent_splits(
     (``2022_17_BUF_CIN``, the no-contest, carries only two placeholder rows and a
     7-3 "score"). ``team_id`` / ``opponent_id`` are ESPN ids; ``game_id`` is the
     ESPN event id from nfl-raw's crosswalk, with ``nflverse_game_id`` alongside.
+
+    ``is_conference_game`` is AFC-vs-AFC / NFC-vs-NFC from the vendored crosswalk
+    (Seattle is AFC through 2001); ESPN's ``conferenceCompetition`` is false on
+    every NFL game, so it cannot be used. ``neutral_site`` and ``game_date`` come
+    from nfl-raw's crosswalk with the event id; ``win`` is null for a tie.
 
     Args:
         plays: :func:`nfl_team_summaries.input.prepare_plays` output.
@@ -1295,8 +1310,16 @@ def build_team_opponent_splits(
             f"team_opponent_splits {yr}: {len(unmatched)} played game(s) have no ESPN event id "
             f"in nfl-raw's crosswalk (missing or stale?): {unmatched[:5]}"
         )
+    conf = dict(load_crosswalk().select("espn_team_id", "conference").iter_rows())
+    if yr <= _SEA_AFC_THROUGH:
+        conf[_SEA_ESPN_ID] = "AFC"
     return (
         out.with_columns(
+            is_conference_game=pl.col("team_id").replace_strict(conf)
+            == pl.col("opponent_id").replace_strict(conf),
+            win=pl.when(pl.col("points_for") != pl.col("points_against")).then(
+                pl.col("points_for") > pl.col("points_against")
+            ),
             season=pl.lit(int(yr), dtype=pl.Int64),
             week=pl.col("week").cast(pl.Int64),
             season_type=pl.col("season_type").replace_strict(

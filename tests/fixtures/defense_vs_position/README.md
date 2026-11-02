@@ -5,7 +5,7 @@ and `tests/test_defense_vs_position.py`, cut on 2026-10-04.
 
 | fixture | rows | source | source sha256 |
 | --- | --- | --- | --- |
-| `model_pbp_2024_slice.parquet` | 1,349 x 21 | `model_pbp_2024.parquet` on the `nfl_model_pbp` release tag of `sportsdataverse/sportsdataverse-data` (47,366 rows x 326 columns) | `94a72afbcd45c4ae06e43d10fa4756eed0b0af124ce21e8fd96190650c4b1d6c` |
+| `model_pbp_2024_slice.parquet` | 1,349 x 23 | `model_pbp_2024.parquet` on the `nfl_model_pbp` release tag of `sportsdataverse/sportsdataverse-data` (47,366 rows x 326 columns) | `94a72afbcd45c4ae06e43d10fa4756eed0b0af124ce21e8fd96190650c4b1d6c` |
 | `nfl_rosters_2024_slice.parquet` | 133 x 5 | `roster_2024.parquet` on the `rosters` release tag of `nflverse/nflverse-data` (3,216 rows x 36 columns), the file `sportsdataverse.nfl.load_nfl_rosters([2024])` reads | `bd38dbe785728c6b4ddc0b56b7d4fee69a8337595db3b631528d284253c04aaf` |
 
 Both hashes are of the files as downloaded that day. The pbp asset is the one the
@@ -17,7 +17,11 @@ Both hashes are of the files as downloaded that day. The pbp asset is the one th
 defended in the listed regular-season games: the semi-join of the season pbp on those
 `(defteam, game_id)` pairs, sorted by `game_id, play_id`. Columns:
 `sportsdataverse.analytics.defense_vs_position.PBP_COLUMNS["nfl"]` plus `qb_scramble` (the stage
-reads it) and `week`, `posteam`, `desc` for reading plays by hand.
+reads it) and `week`, `posteam`, `desc` for reading plays by hand. `pass_attempt` and
+`receiver_player_name` (what `fill_receiver_ids` reads) were joined on `game_id, play_id`
+on 2026-11-01 from that day's `model_pbp_2024.parquet` (sha256
+`487dc55e676d9a0425f98139fd00568f0391fc587c83a76538b5f3c934389a06`); the fill changes
+no receiver id in this slice, so the hand counts below are unchanged.
 
 | defense (`team_id`) | games (`game_id`) | why it is here |
 | --- | --- | --- |
@@ -104,7 +108,7 @@ pairs = pl.DataFrame(
 out = "tests/fixtures/defense_vs_position"
 pbp = (
     pl.read_parquet(f"{SRC}/model_pbp_2024.parquet")
-    .select(*PBP_COLUMNS["nfl"], "qb_scramble", "week", "posteam", "desc")
+    .select(*PBP_COLUMNS["nfl"], "qb_scramble", "week", "posteam", "desc", "pass_attempt", "receiver_player_name")
     .join(pairs, on=["defteam", "game_id"], how="semi")
     .sort("game_id", "play_id")
 )

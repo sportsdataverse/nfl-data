@@ -312,3 +312,26 @@ def test_stays_out_of_stage_06_and_league_averages():
     assert TAG not in {tag for tag, _ in stage_06}
     assert not any(fnmatch(f"{STEM}_{SEASON}.parquet", f"{stem}_*.parquet") for _, stem in stage_06)
     assert STEM not in CATEGORIES and STEM not in TABLES
+
+
+def test_targets_the_stats_omit_are_recovered_from_the_play_text(tmp_path, dvp):
+    """A 2003-2008 throw: the stats name no receiver, ``desc`` does ("... to X").
+
+    Blanking the receiver id on every incompletion to a receiver the slice also shows
+    catching a pass (the id's source; the build pools the whole season) must publish
+    the same table.
+    """
+    pbp = _pbp()
+    caught = (
+        pbp.filter(pl.col("complete_pass") == 1).select("posteam", "receiver_player_id").unique()
+    )
+    blank = (
+        (pl.col("pass") == 1)
+        & (pl.col("complete_pass") == 0)
+        & pl.struct("posteam", "receiver_player_id").is_in(caught.to_struct().implode())
+    )
+    blanked = pbp.with_columns(
+        receiver_player_id=pl.when(blank).then(None).otherwise(pl.col("receiver_player_id"))
+    )
+    assert blanked["receiver_player_id"].null_count() - pbp["receiver_player_id"].null_count() > 100
+    assert_frame_equal(build_defense_vs_position(SEASON, _pbp_dir(tmp_path, blanked)), dvp)

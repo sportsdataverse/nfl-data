@@ -96,15 +96,17 @@ def fill_receiver_ids(pbp: pl.DataFrame) -> pl.DataFrame:
     ).with_columns(
         __rid=pl.col("receiver_player_id").drop_nulls().mode().min().over(["__rx", "posteam"])
     )
-    fill = thrown & pl.col("receiver_player_id").is_null() & pl.col("__rx").is_not_null()
+    df = df.with_columns(
+        __fill=thrown & pl.col("receiver_player_id").is_null() & pl.col("__rid").is_not_null()
+    ).with_columns(
+        receiver_player_id=pl.when("__fill").then("__rid").otherwise("receiver_player_id")
+    )
+    # the id's stat-sourced name, not the parsed one: the parser stops "A.Randle El" at "A.Randle"
     return df.with_columns(
-        receiver_player_id=pl.when(fill)
-        .then(pl.col("__rid"))
-        .otherwise(pl.col("receiver_player_id")),
-        receiver_player_name=pl.when(fill & pl.col("__rid").is_not_null())
-        .then(pl.col("__rx"))
-        .otherwise(pl.col("receiver_player_name")),
-    ).drop("__rx", "__rid")
+        receiver_player_name=pl.when("__fill")
+        .then(pl.col("receiver_player_name").drop_nulls().mode().min().over("receiver_player_id"))
+        .otherwise("receiver_player_name")
+    ).drop("__rx", "__rid", "__fill")
 
 
 def prepare_plays(

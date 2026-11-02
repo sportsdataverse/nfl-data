@@ -62,3 +62,20 @@ def test_fills_nulls_only(plays):
         plays.filter(~THROWN)["receiver_player_id"]
     )
     assert filled.columns == plays.columns
+
+
+def test_filled_rows_carry_the_stat_name(plays):
+    # the parser stops "A.Randle El" at "A.Randle": a filled row takes a name the
+    # stats give its id instead (the feed itself spells some ids two ways, "A. Hakim")
+    stat = (
+        plays.filter(pl.col("receiver_player_id").is_not_null())
+        .select("receiver_player_id", "receiver_player_name")
+        .unique()
+    )
+    filled = fill_receiver_ids(plays).filter(
+        THROWN & plays["receiver_player_id"].is_null() & pl.col("receiver_player_id").is_not_null()
+    )
+    assert filled.height == 269 - 11
+    assert (
+        filled.join(stat, on=["receiver_player_id", "receiver_player_name"], how="anti").height == 0
+    )

@@ -297,6 +297,10 @@ still build and publish, and the run exits 1.
 | epa_per_rush | Float64 | Mean EPA per rush (`EPAplay_off_rush` per game); null when the team had none. |
 | success_rate_pass | Float64 | Share of dropbacks with EPA > 0 (`success_off_pass` per game). |
 | success_rate_rush | Float64 | Share of rushes with EPA > 0 (`success_off_rush` per game). |
+| is_conference_game | Boolean | Both teams are in the same conference (AFC or NFC), from the vendored crosswalk; Seattle is AFC through 2001. ESPN's `conferenceCompetition` is false on every NFL game, so it is not used. |
+| neutral_site | Boolean | ESPN's neutral-site flag (e.g. the international games), from nfl-raw's crosswalk; null where the crosswalk has no event. |
+| game_date | Date | Kickoff's calendar day in US/Eastern, from the same crosswalk row; null where it has none. |
+| win | Boolean | `points_for > points_against`; null for a tie. |
 
 ## League averages
 

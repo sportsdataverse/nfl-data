@@ -263,6 +263,21 @@ carry's yards are `rushing_yards` (the `yards` the table already sums), and the
 margin at the snap is nflfastR's `score_differential`, the offense's score minus
 the defense's before the play.
 
+## Team summaries: which plays count
+
+The season tables (`team_summaries`, `passing`, `rushing`, `receiving`) and the
+opponent splits aggregate **plays from scrimmage that stood**: nflfastR
+`play_type` `pass` or `run` with a down and an EPA. A play a penalty wiped out
+(`play_type == "no_play"`), a kneel and a spike are not counted, the same as
+nflverse's player and team stats and Game on Paper's game pages.
+
+rbsdm.com counts differently: every play with `pass == 1` or `rush == 1` and an
+EPA, which includes the nullified ones. So a team-season here has 43-55 fewer
+offensive plays than rbsdm's, and its `EPAplay_*` / `success_*` differ by
+about 0.007 a play (measured 2009-2026 on 2026-10-29: excluding `no_play` from
+the rbsdm reference cuts the play gap to 3-4 and halves the EPA/play gap; the
+rest is the EP model). Scrambles count as dropbacks here, as at rbsdm.
+
 ## Team opponent splits
 
 `nfl_team_opponent_splits` is one row per team per regular-season game, so every

@@ -328,11 +328,20 @@ def build_wp_training_set(
     return df.select([*feats, pl.col("wp_label").alias("label")])
 
 
+#: First season the CP model trains on (see ``build_cp_training_set``): nflverse names a receiver on
+#: incompletions from 2009, and the valid-pass filter needs one.
+CP_FIRST_SEASON = 2009
+
+
 def build_cp_training_set(df: pl.DataFrame) -> pl.DataFrame:
     """Full CP training set pipeline from raw nflverse PBP.
 
-    1. Floor to season >= 2006 (the CPOE era — nflfastR MODELS.R filters CP here; air_yards
-       are unavailable before 2006). This makes a full-history training run correct for CP.
+    1. Floor to season >= ``CP_FIRST_SEASON`` (2009). nflfastR's MODELS.R starts CP at 2006, the
+       first season with air yards, but nflverse's pbp names no receiver on 2006-08 incompletions
+       (0.2-0.4%, against 96% from 2009), and ``valid_pass`` needs one. Those seasons then entered
+       training as completions alone (99.7% complete), and their era2 rows taught the model that
+       2006-13 passes complete 8.5 points more often than they do: cp ran +0.085 against nflfastR
+       on every 2006-13 pass, and CPOE as far below. From 2009 the 2006-13 error is 0.008.
     2. Apply ``make_model_mutations()`` (era/roof/down one-hots, home indicator).
     3. Apply ``prepare_cp_data()`` (air_is_zero, pass_middle, distance_to_sticks, valid_pass).
     4. Filter to valid passes only (``valid_pass == 1``).
@@ -344,7 +353,7 @@ def build_cp_training_set(df: pl.DataFrame) -> pl.DataFrame:
     Returns:
         Training-ready DataFrame with ``CP_FEATURES`` columns + ``complete_pass`` label.
     """
-    df = df.filter(pl.col("season") >= 2006)
+    df = df.filter(pl.col("season") >= CP_FIRST_SEASON)
     df = make_model_mutations(df)
     df = prepare_cp_data(df)
     df = df.filter(pl.col("valid_pass") == 1.0)

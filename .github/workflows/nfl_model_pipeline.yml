@@ -85,6 +85,7 @@ jobs:
         env:
           STAGES: ${{ inputs.stages }}
           STAGE: ${{ matrix.stage }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           NUM="${STAGE:10:2}"
           MODEL="${STAGE:13}"
@@ -96,6 +97,15 @@ jobs:
                 SELECTED=true
               fi
             done
+          fi
+          # The decision stages (06-11) validate against nfl4th oracle artifacts that exist only
+          # on a workstation (decision_models/validate.py ORACLE_DIR, plus cal_data.rds via
+          # pyreadr): on a runner they fail before training. A dry run skips them, loudly, until
+          # those inputs are published somewhere a runner can read. The cron and a plain
+          # dispatch still run them.
+          if [ "${DRY_RUN}" = "true" ] && [ "${NUM}" -ge 6 ]; then
+            SELECTED=false
+            echo "::warning ::${STAGE} skipped in dry run: its oracle inputs (sdv-py-stats/dev/nfl4th_artifacts, cal_data.rds) are not on the runner"
           fi
           echo "selected=${SELECTED}" >> "$GITHUB_OUTPUT"
           echo "stage ${STAGE}: selected=${SELECTED}"

@@ -38,6 +38,11 @@ on:
         description: 'Override XGBoost nrounds for the decision stages (06-11) — set small (e.g. 20) for a smoke run'
         required: false
         default: ''
+      dry_run:
+        description: 'Smoke test: play-level stages on 2023-2024 only, decision stages at nrounds 20; never publishes'
+        required: false
+        type: boolean
+        default: false
   schedule:
     # 06:00 UTC on 1 March — after the Super Bowl and after nflverse has
     # settled the final season's data. Deliberately annual.
@@ -145,11 +150,18 @@ jobs:
         env:
           NROUNDS: ${{ inputs.nrounds }}
           STAGE: ${{ matrix.stage }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           EXTRA=""
           case "${STAGE}" in
             nfl_model_0[6-9]_*|nfl_model_1[01]_*)
               if [ -n "${NROUNDS}" ]; then EXTRA="--nrounds ${NROUNDS}"; fi
+              if [ "${DRY_RUN}" = "true" ]; then EXTRA="--nrounds 20 --force --allow-skip"; fi
+              ;;
+            *)
+              # play-level stages read local nflverse parquet: a fresh runner has none
+              EXTRA="--download"
+              if [ "${DRY_RUN}" = "true" ]; then EXTRA="--download --force --seasons 2023 2024"; fi
               ;;
           esac
           uv run --no-sync --project .. python -m "${STAGE}" ${EXTRA}
@@ -175,7 +187,7 @@ jobs:
   publish:
     name: Publish artifacts (opt-in)
     needs: stage
-    if: ${{ !cancelled() && inputs.publish && needs.stage.result == 'success' }}
+    if: ${{ !cancelled() && inputs.publish && !inputs.dry_run && needs.stage.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

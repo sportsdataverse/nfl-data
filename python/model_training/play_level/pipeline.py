@@ -318,14 +318,14 @@ def run_full_pipeline(
     )
     from .model_card import write_model_card
 
-    def _card(path, mtype, feats, label, hp, n_rows, extra=None):
+    def _card(path, mtype, feats, label, hp, n_rows, extra=None, card_seasons=None):
         if write_cards:
             write_model_card(
                 path,
                 model_type=mtype,
                 features=feats,
                 label=label,
-                seasons=seasons,
+                seasons=seasons if card_seasons is None else card_seasons,
                 n_rows=n_rows,
                 hyperparams=hp,
                 source=source,
@@ -379,7 +379,13 @@ def run_full_pipeline(
     print(f"[pipeline] CP: {cp_df.height:,} valid passes → training")
     cp_path = models_dir / "cp_model.ubj"
     _train_cp(cp_df, cp_path)
-    _card(cp_path, "cp", CP_FEATURES, "complete_pass", CP_HYPERPARAMS, cp_df.height)
+    # the card records the seasons CP trained on, after the CP_FIRST_SEASON floor
+    from .label import CP_FIRST_SEASON
+
+    _card(
+        cp_path, "cp", CP_FEATURES, "complete_pass", CP_HYPERPARAMS, cp_df.height,
+        card_seasons=[s for s in seasons if s >= CP_FIRST_SEASON],
+    )
     print(f"[pipeline] CP model saved → {cp_path}")
 
     return {

@@ -119,8 +119,10 @@ def loso_cp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: 
         tr, te = pbp.filter(pl.col("season") != held), pbp.filter(pl.col("season") == held)
         if tr.is_empty() or te.is_empty():
             continue
-        model = train_cp(build_cp_training_set(tr), nrounds=nrounds)
         cp_te = build_cp_training_set(te)
+        if cp_te.is_empty():  # seasons before CP_FIRST_SEASON have no CP rows
+            continue
+        model = train_cp(build_cp_training_set(tr), nrounds=nrounds)
         preds = model.predict(DMatrix(cp_te.select(CP_FEATURES).to_numpy(), feature_names=CP_FEATURES))
         fold = (
             cp_te.with_columns(

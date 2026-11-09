@@ -117,6 +117,10 @@ def run_report(
             if cp_cv.height
             else None,
             "n": cp_cv.height,
+            "seasons_evaluated": sorted(cp_cv["season"].unique().to_list()) if cp_cv.height else [],
+            "seasons_unavailable": sorted(
+                set(seasons) - set(cp_cv["season"].unique().to_list() if cp_cv.height else [])
+            ),
         },
     }
 
@@ -187,6 +191,10 @@ def _render_markdown(metrics: Dict[str, Any], figs: Dict[str, str], span: str, s
         f"| EP | {metrics['ep']['cal_error']:.4f} | — | {metrics['ep']['n']:,} |",
         f"| WP | {metrics['wp']['cal_error']:.4f} | {metrics['wp']['brier']:.4f} | {metrics['wp']['n']:,} |",
         f"| CP | {metrics['cp']['cal_error']['overall']:.4f} | {metrics['cp']['brier']:.4f} | {metrics['cp']['n']:,} |",
+        "",
+        "CP seasons evaluated: " + (", ".join(map(str, metrics["cp"]["seasons_evaluated"])) or "none")
+        + "; unavailable (no CP rows, e.g. before the 2009 training floor): "
+        + (", ".join(map(str, metrics["cp"]["seasons_unavailable"])) or "none"),
         "",
         "CP weighted cal error by air-yards bucket:",
         cp_buckets or "  (n/a)",

@@ -64,7 +64,8 @@ from importlib import metadata
 #:     incompletions whose Shield stats carry none, and making a 1999-2005 charted scramble's QB the
 #:     passer (nflfastR #536). The lock is already at sdv-py d192fe2d, past af7f867: ESPN game-path
 #:     and CPOE parity with a refit cp_model (#1037) and Shield kick/penalty classes (#1138) moved
-#:     output without a bump. Every 10 final must rebuild.
+#:     output without a bump. Every 10 final must rebuild. Known difference from nflverse: 2020 HOU's
+#:     David and Duke Johnson share one rusher_id (35 carries; the Shield desc has no jersey numbers).
 SCHEMA_REV = 11
 
 

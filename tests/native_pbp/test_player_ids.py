@@ -61,10 +61,21 @@ def test_passer_rusher_match_nflverse_but_for_charted_scrambles():
     assert scr["rusher_id"].null_count() == 46
 
 
-def test_names_ride_with_ids():
-    out = _add_player_ids(_plays("model_pbp_2003_det", 2003))
+@pytest.mark.parametrize("name", ["model_pbp_2003_det", "model_pbp_2003_ari"])
+def test_names_ride_with_ids(name):
+    out = _add_player_ids(_plays(name, 2003))
     for who in ("passer", "rusher", "receiver"):
+        if f"{who}_player_id" in out.columns:  # DET carries receiver stats only, ARI passer/rusher
+            assert out[f"{who}_id"].is_not_null().sum() > 100
         assert out.filter(pl.col(f"{who}_id").is_not_null() & pl.col(who).is_null()).height == 0
+
+
+def test_all_null_numeric_input_is_not_cast_to_string():
+    # a season frame where qb_scramble is null on every row is Null-typed; it must stay numeric
+    plays = _plays("model_pbp_2003_ari", 2003).with_columns(qb_scramble=pl.lit(None))
+    assert plays.schema["qb_scramble"] == pl.Null
+    out = _add_player_ids(plays)
+    assert out["passer_id"].is_not_null().sum() > 100
 
 
 def test_empty_frame_gets_typed_columns():
@@ -78,4 +89,6 @@ def test_build_season_writes_player_columns(tmp_path):
     out = pl.read_parquet(
         build_season(2024, raw_dir=_seed_raw_dir(tmp_path / "raw"), out_dir=tmp_path / "out")
     )
-    assert set(_PLAYER_ID_COLUMNS) <= set(out.columns)
+    # appended where build_season puts them: after the build columns, before any enrich column
+    i = out.columns.index("series_success") + 1
+    assert out.columns[i : i + len(_PLAYER_ID_COLUMNS)] == list(_PLAYER_ID_COLUMNS)

@@ -166,6 +166,10 @@ def _add_player_ids(df: pl.DataFrame) -> pl.DataFrame:
     release predates that fix). sdv-py's port (``clean_nfl_pbp``) runs on a copy of the
     columns it needs, so none of the columns it would also rewrite (``desc``, ``success``,
     team codes, ...) change here.
+
+    Known difference from nflverse: nflfastR tells 2020 HOU's David Johnson (#31) and Duke
+    Johnson (#25) apart by the jersey number in ``desc``. The Shield ``desc`` carries none, so
+    their 35 carries share one ``rusher_id``.
     """
     from sportsdataverse.nfl import clean_nfl_pbp
 
@@ -177,11 +181,14 @@ def _add_player_ids(df: pl.DataFrame) -> pl.DataFrame:
     src = src.with_columns(epa=pl.lit(None, pl.Float64))
     if "home_team" not in src.columns:
         src = src.with_columns(home_team=pl.lit(None, pl.String))
-    # an all-null column is Null-typed, and clean_nfl_pbp's string ops reject that dtype
+    # An all-null column is Null-typed, which clean_nfl_pbp's string and numeric ops reject.
+    numeric = {"season": pl.Int64, "play_id": pl.Int64, "qb_scramble": pl.Int64}
     src = src.with_columns(
-        [pl.col(c).cast(pl.String) for c, dt in src.schema.items() if dt == pl.Null]
+        [pl.col(c).cast(numeric.get(c, pl.String)) for c, dt in src.schema.items() if dt == pl.Null]
     )
-    out = clean_nfl_pbp(src.with_row_index("__row")).sort("__row")
+    out = clean_nfl_pbp(src)  # keeps the input row order (it restores it after its joins)
+    if out.height != df.height:
+        raise ValueError(f"clean_nfl_pbp returned {out.height} rows for {df.height}")
     return df.with_columns([out[c] for c in _PLAYER_ID_COLUMNS])
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 from native_pbp.build import build_season as build_season_frame
-from native_pbp.cli import _INT64_YARDS, _backfill_thin_games, build_season
+from native_pbp.cli import _INT64_YARDS, _PLAYER_ID_COLUMNS, _backfill_thin_games, build_season
 from polars.testing import assert_frame_equal
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "shield_thin"
@@ -171,7 +171,7 @@ def test_full_length_2002_game_is_untouched(tmp_path, nflverse):
     assert before.height >= 100
 
     after = _build(tmp_path, 2002, STL_PHI, MIA_MIN).filter(pl.col("game_id") == MIA_MIN)
-    after = after.drop("receiver", "receiver_id")  # appended by build_season (test_receiver_ids.py)
+    after = after.drop(_PLAYER_ID_COLUMNS)  # appended by build_season (test_player_ids.py)
 
     # dtypes may widen where every game was null (Null -> the backfill's dtype); values may not move
     assert_frame_equal(after, before, check_dtypes=False)

@@ -133,6 +133,65 @@ def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> 
     return pl.concat([kept, backfill], how="diagonal_relaxed").sort("game_id", maintain_order=True)
 
 
+#: nflfastR ``clean_pbp``'s player columns that nfl_model_pbp ships (nflverse pbp names and order).
+_PLAYER_ID_COLUMNS = ("passer", "passer_id", "rusher", "rusher_id", "receiver", "receiver_id")
+
+#: What ``clean_nfl_pbp`` reads to resolve those six; the rest of its inputs default.
+_PLAYER_ID_INPUTS = (
+    "game_id",
+    "play_id",
+    "season",
+    "posteam",
+    "home_team",
+    "desc",
+    "qb_scramble",
+    "passer_player_name",
+    "passer_player_id",
+    "rusher_player_name",
+    "rusher_player_id",
+    "receiver_player_name",
+    "receiver_player_id",
+    "fumbled_1_player_name",
+    "fumbled_1_player_id",
+)
+
+
+def _add_player_ids(df: pl.DataFrame) -> pl.DataFrame:
+    """Append nflfastR ``clean_pbp``'s ``passer`` / ``rusher`` / ``receiver`` names and ids.
+
+    ``clean_pbp`` names each player from ``desc`` and gives the name the mode stat id within
+    (posteam, season), which is why this runs on a whole season. That fills the 2003-2008
+    incompletions, whose Shield stats carry no pass target, and it moves a 1999-2005 charted
+    scramble's QB from ``rusher`` to ``passer`` (nflfastR #536; nflverse's 1999-2004 pbp
+    release predates that fix). sdv-py's port (``clean_nfl_pbp``) runs on a copy of the
+    columns it needs, so none of the columns it would also rewrite (``desc``, ``success``,
+    team codes, ...) change here.
+
+    Known difference from nflverse: nflfastR tells 2020 HOU's David Johnson (#31) and Duke
+    Johnson (#25) apart by the jersey number in ``desc``. The Shield ``desc`` carries none, so
+    their 35 carries share one ``rusher_id``.
+    """
+    from sportsdataverse.nfl import clean_nfl_pbp
+
+    if df.height == 0:
+        return df.with_columns([pl.lit(None, pl.String).alias(c) for c in _PLAYER_ID_COLUMNS])
+    src = df.select([c for c in _PLAYER_ID_INPUTS if c in df.columns])
+    # clean_nfl_pbp requires epa and home_team (for success / home_opening_kickoff);
+    # neither feeds a player column, so nulls do
+    src = src.with_columns(epa=pl.lit(None, pl.Float64))
+    if "home_team" not in src.columns:
+        src = src.with_columns(home_team=pl.lit(None, pl.String))
+    # An all-null column is Null-typed, which clean_nfl_pbp's string and numeric ops reject.
+    numeric = {"season": pl.Int64, "play_id": pl.Int64, "qb_scramble": pl.Int64}
+    src = src.with_columns(
+        [pl.col(c).cast(numeric.get(c, pl.String)) for c, dt in src.schema.items() if dt == pl.Null]
+    )
+    out = clean_nfl_pbp(src)  # keeps the input row order (it restores it after its joins)
+    if out.height != df.height:
+        raise ValueError(f"clean_nfl_pbp returned {out.height} rows for {df.height}")
+    return df.with_columns([out[c] for c in _PLAYER_ID_COLUMNS])
+
+
 def _build_schedule_lookup(season: int) -> dict[str, dict]:
     """Build a ``{game_id: {roof, spread_line, total_line}}`` map for *season*.
 
@@ -213,6 +272,7 @@ def build_season(
 
     df = _build_season(season, raw_dir=raw_dir, schedule_lookup=schedule_lookup)
     df = _backfill_thin_games(df, season, raw_dir)
+    df = _add_player_ids(df)
 
     if enrich and df.height:
         from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp

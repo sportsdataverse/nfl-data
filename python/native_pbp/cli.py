@@ -133,6 +133,49 @@ def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> 
     return pl.concat([kept, backfill], how="diagonal_relaxed").sort("game_id", maintain_order=True)
 
 
+#: What ``clean_nfl_pbp`` reads to resolve the receiver; the rest of its inputs default.
+_RECEIVER_INPUTS = (
+    "game_id",
+    "play_id",
+    "season",
+    "posteam",
+    "home_team",
+    "desc",
+    "receiver_player_name",
+    "receiver_player_id",
+)
+
+
+def _add_receiver_ids(df: pl.DataFrame) -> pl.DataFrame:
+    """Append nflfastR ``clean_pbp``'s ``receiver`` / ``receiver_id`` (nflverse pbp columns).
+
+    The 2003-2008 Shield feeds carry no pass-target stat, so ``receiver_player_id`` is null on
+    most incompletions there. ``clean_pbp`` names the target from ``desc`` and gives it the mode
+    stat id of that name within (posteam, season), which is why this runs on a whole season.
+    sdv-py's port (``clean_nfl_pbp``) runs on a copy of the columns it needs, so none of the
+    columns it would also rewrite (``desc``, ``success``, team codes, ...) change here.
+    ``passer`` / ``rusher`` are left out: on Shield seasons they do not match nflverse yet.
+    """
+    from sportsdataverse.nfl import clean_nfl_pbp
+
+    if df.height == 0:
+        return df.with_columns(
+            receiver=pl.lit(None, pl.String), receiver_id=pl.lit(None, pl.String)
+        )
+    src = df.select([c for c in _RECEIVER_INPUTS if c in df.columns])
+    # clean_nfl_pbp requires epa and home_team (for success / home_opening_kickoff);
+    # neither feeds the receiver, so nulls do
+    src = src.with_columns(epa=pl.lit(None, pl.Float64))
+    if "home_team" not in src.columns:
+        src = src.with_columns(home_team=pl.lit(None, pl.String))
+    # an all-null column is Null-typed, and clean_nfl_pbp's string ops reject that dtype
+    src = src.with_columns(
+        [pl.col(c).cast(pl.String) for c, dt in src.schema.items() if dt == pl.Null]
+    )
+    out = clean_nfl_pbp(src.with_row_index("__row")).sort("__row")
+    return df.with_columns(out["receiver"], out["receiver_id"])
+
+
 def _build_schedule_lookup(season: int) -> dict[str, dict]:
     """Build a ``{game_id: {roof, spread_line, total_line}}`` map for *season*.
 
@@ -213,6 +256,7 @@ def build_season(
 
     df = _build_season(season, raw_dir=raw_dir, schedule_lookup=schedule_lookup)
     df = _backfill_thin_games(df, season, raw_dir)
+    df = _add_receiver_ids(df)
 
     if enrich and df.height:
         from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp

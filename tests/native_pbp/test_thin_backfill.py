@@ -155,7 +155,7 @@ def test_drive_yard_lines_are_nflverse_strings_like_the_build(tmp_path, nflverse
 
 
 def test_backfilled_seasons_carry_the_2003_column_set(tmp_path, nflverse):
-    ref = build_season_frame(2003, raw_dir=_raw(tmp_path / "ref", CAR_HOU))
+    ref = _build(tmp_path / "ref", 2003, CAR_HOU)
     g00 = _build(tmp_path / "a", 2000, KC_OAK, SD_KC, BUF_MIA)
     g02 = _build(tmp_path / "b", 2002, STL_PHI, MIA_MIN)
     assert set(g00.columns) == set(ref.columns) == set(g02.columns)
@@ -171,6 +171,7 @@ def test_full_length_2002_game_is_untouched(tmp_path, nflverse):
     assert before.height >= 100
 
     after = _build(tmp_path, 2002, STL_PHI, MIA_MIN).filter(pl.col("game_id") == MIA_MIN)
+    after = after.drop("receiver", "receiver_id")  # appended by build_season (test_receiver_ids.py)
 
     # dtypes may widen where every game was null (Null -> the backfill's dtype); values may not move
     assert_frame_equal(after, before, check_dtypes=False)

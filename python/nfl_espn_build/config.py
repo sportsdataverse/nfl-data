@@ -59,7 +59,12 @@ from importlib import metadata
 #: 10: the lock moves to sdv-py af7f867320: Shield venue uuids carry their real roof (#1032), so
 #:     Shield-built nfl_model_pbp games at domes and retractables no longer score outdoors.
 #:     Every 9 final must rebuild.
-SCHEMA_REV = 10
+#: 11: nfl_model_pbp gains nflfastR clean_pbp's ``receiver`` / ``receiver_id``
+#:     (native_pbp.cli._add_receiver_ids), naming the target on the 2003-2008 incompletions whose
+#:     Shield stats carry none. The lock is already at sdv-py d192fe2d, past af7f867: ESPN game-path
+#:     and CPOE parity with a refit cp_model (#1037) and Shield kick/penalty classes (#1138) moved
+#:     output without a bump. Every 10 final must rebuild.
+SCHEMA_REV = 11
 
 
 @functools.lru_cache(maxsize=1)

@@ -125,6 +125,13 @@ def test_build_season_creates_parquet(tmp_path):
     assert out_path.exists()
     df = pl.read_parquet(out_path)
     assert df.shape[0] > 0, "expected at least 1 play row"
+    # the fixture fills no tackle-for-loss / assist columns: written typed, never as Null (_type_null_columns)
+    nulls = [
+        c
+        for c, t in df.schema.items()
+        if t == pl.Null and c.endswith(("_id", "_name", "_team", "_yards"))
+    ]
+    assert not nulls, nulls
 
 
 def test_build_season_stamps_processing_version(tmp_path):

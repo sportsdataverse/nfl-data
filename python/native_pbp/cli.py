@@ -69,6 +69,26 @@ _INT64_YARDS = (
 )
 
 
+def _type_null_columns(df: pl.DataFrame) -> pl.DataFrame:
+    """Give every all-null (``Null``-typed) column the dtype it has in the seasons that carry it.
+
+    A column no play of the season fills (2003-2026 ``tackle_with_assist_2_*``, 2005 ``air_yards``,
+    ...) is built as polars' ``Null`` type and was published that way, which readers that check a
+    schema contract refuse. Yards are Int64 in every published season and names / ids / teams String,
+    so those are cast: that covers every Null column of the 1999-2026 release. Another all-null
+    column (a test build's ``desc``, ``roof`` without a schedule lookup) is left as it is.
+    """
+    target = {}
+    for c, dt in df.schema.items():
+        if dt != pl.Null:
+            continue
+        if c in _INT64_YARDS or c.endswith("_yards"):
+            target[c] = pl.Int64
+        elif c.endswith(("_id", "_name", "_team")):
+            target[c] = pl.String
+    return df.with_columns([pl.col(c).cast(dt) for c, dt in target.items()])
+
+
 def _backfill_thin_games(df: pl.DataFrame, season: int, raw_dir: str | Path) -> pl.DataFrame:
     """Swap Shield stub games for nflverse pbp rows conformed to the build schema.
 
@@ -278,6 +298,7 @@ def build_season(
         from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp
 
         df = enrich_nfl_pbp(df, method="lead_diff")
+    df = _type_null_columns(df)
 
     out_path = out_dir / f"model_pbp_{season}.parquet"
     # the stamp nfl_model_publish's manifest reads back: which library state cut this season

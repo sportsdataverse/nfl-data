@@ -26,9 +26,11 @@ KNOWN_ABSENT = frozenset({"2000_03_SD_KC", "2000_06_BUF_MIA"})
 
 def season_problems(season: int, built: pl.DataFrame, schedule: pl.DataFrame) -> list[str]:
     """Why ``built`` (one season's model_pbp, ``game_id`` + ``week``) is stale; ``[]`` if fresh."""
-    done = schedule.filter(
-        (pl.col("season") == season)
-        & pl.col("home_score").is_not_null()
+    rows = schedule.filter(pl.col("season") == season)
+    if rows.height == 0:  # an absent season must not pass as "nothing completed yet"
+        return [f"{season}: no schedule rows, the build cannot be checked"]
+    done = rows.filter(
+        pl.col("home_score").is_not_null()
         & pl.col("away_score").is_not_null()
         & ~pl.col("game_id").is_in(sorted(KNOWN_ABSENT))
     )

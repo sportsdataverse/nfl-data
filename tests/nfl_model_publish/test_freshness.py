@@ -64,6 +64,17 @@ def test_known_absent_2000_games_are_not_required():
     assert season_problems(2000, built, schedule) == []
 
 
+def test_a_season_missing_from_the_schedule_is_refused():
+    assert season_problems(2027, _built(10), SCHEDULE) == [
+        "2027: no schedule rows, the build cannot be checked"
+    ]
+
+
+def test_a_scheduled_season_with_nothing_played_yet_passes():
+    unplayed = SCHEDULE.with_columns(pl.lit(None, pl.Int64).alias("home_score"))
+    assert season_problems(2026, _built(0), unplayed) == []
+
+
 def _write(tmp_path: Path, built: pl.DataFrame) -> Path:
     built.write_parquet(tmp_path / "model_pbp_2026.parquet")
     return tmp_path

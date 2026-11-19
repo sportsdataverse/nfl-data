@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Reprocess the native nfl_model_pbp family after an sdv-py lock bump: one season at a time,
-#   1. ingest + build model_pbp (--enrich, sdv-py enrich_nfl_pbp) and publish it (stage 01-03),
+#   1. ingest + build model_pbp (--enrich, sdv-py enrich_nfl_pbp), gate it on the schedule's
+#      completed games (nfl_model_publish freshness) and publish it (stage 01-03),
 #   2. stages 06 (season summaries + percentiles), 07 (metric curves), 08 (defense vs position),
 #      each built into its own per-season dir and published (stage 06 uploads its whole --out dir,
 #      so a shared dir would re-upload every earlier season),
@@ -57,6 +58,8 @@ for Y in $LIST; do
   py nfl_data_01_ingest --seasons "$Y" --cache-dir "$PWD/$RAW" || fail "$Y ingest"
   py nfl_data_02_model_pbp build --enrich --seasons "$Y" --raw-dir "$PWD/$RAW" --out "$W/model_pbp" || fail "$Y build"
   ls "$W"/model_pbp/*.parquet >/dev/null 2>&1 || fail "$Y build wrote no parquet"
+  # refuse a season behind its schedule (2026-11-19: cached pre-game shells, weeks 1-4 published)
+  py nfl_model_publish freshness --parquet-dir "$W/model_pbp" || fail "$Y build is behind the schedule"
   py nfl_data_03_pbp_publish --parquet-dir "$W/model_pbp" --tag nfl_model_pbp \
     --repo $REPO --no-manifest || fail "$Y model_pbp publish"
 

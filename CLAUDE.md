@@ -120,6 +120,15 @@ framework: `docs/models/parity.md`. Retrains run from `.github/workflows/nfl_mod
   **Not yet applied** by `model_training/play_level/ingest.py:191` (`load_native_pbp`, the
   `--source native` path), which calls `native_pbp.build.build_season` directly: a native-source
   run over 1999–2002 still sees the stub games.
+- **The raw cache trusts only finals; publish is gated on the schedule.** nfl-raw commits a file
+  for every scheduled game; an unplayed one is a shell (`summary` null; top-level `status` is
+  `"SCHEDULED"` on finals too, so useless). `nfl_data_ingest.fetch` treats a cached file as a hit
+  only when `summary.phase` starts with `FINAL`, never writes a shell, and lists seasons through
+  the contents API with `GITHUB_TOKEN`/`GH_TOKEN` when set. `nfl_model_publish freshness
+  --parquet-dir` exits 1 when a built season's newest week trails the nflverse schedule's newest
+  completed week or a completed game is missing (`freshness.KNOWN_ABSENT`: the two 2000 games
+  with no data); the cron and `reprocess_nfl_model_pbp.sh` run it before publishing. On
+  2026-11-19 207 shells cached 2026-10-09 published 2026 with weeks 1-4 only.
 - **No NGS scraper here.** NextGen Stats lives in sdv-py (`load_nfl_nextgen_stats`); references to
   "ngs" in this repo are PBP feature columns, not a producer.
 - **Public-tier endpoints only.** Auth-walled Shield endpoints are excluded; rosters/players use the

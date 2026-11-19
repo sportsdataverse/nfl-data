@@ -137,12 +137,18 @@ jobs:
       # --raw-dir points at the HTTP-fetched cache (nfl_data_ingest writes
       # {cache}/{season}/*.json — the shape native_pbp expects).
       # Output parquets are written to nfl-data/python/out/model_pbp/.
+      # The freshness gate runs IN this step, so a build behind the schedule's completed
+      # games fails it and skips every publish below (stages 07/08 key on this step).
       - name: Build model_pbp parquets
         id: model_pbp
         working-directory: nfl-data/python
+        env:
+          # the ingest lists nfl-raw/nfl/raw/<season> via the GitHub contents API; anonymous
+          # is 60 requests/h per runner IP (403 "rate limit exceeded" on 2026-11-19)
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          # Track B: fetch per-game JSON over HTTP (read-through cache, fail-soft)
-          # instead of checking out the 3GB+ nfl-raw repo.
+          # Track B: fetch per-game JSON over HTTP (read-through cache; only finals are
+          # cache hits) instead of checking out the 3GB+ nfl-raw repo.
           uv run --no-sync python -m nfl_data_01_ingest \
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --cache-dir "$GITHUB_WORKSPACE/_raw_cache"
@@ -151,6 +157,7 @@ jobs:
             --seasons "${{ steps.seasons.outputs.seasons }}" \
             --raw-dir "$GITHUB_WORKSPACE/_raw_cache" \
             --out out/model_pbp
+          uv run --no-sync python -m nfl_model_publish freshness --parquet-dir out/model_pbp
 
       # ── 11. Publish to sportsdataverse/sportsdataverse-data ───────────────
       # SDV_GH_TOKEN must be a PAT (classic or fine-grained) with

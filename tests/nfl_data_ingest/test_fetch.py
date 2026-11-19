@@ -15,8 +15,15 @@ from nfl_data_ingest.fetch import (
     enumerate_game_ids,
     fetch_game,
     ingest_season,
+    is_final_game,
     raw_url,
 )
+
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "nfl_raw"
+# A played game's JSON carries a summary in a FINAL phase; nothing else is a cache hit.
+_FINAL = {"summary": {"phase": "FINAL"}, "driveChart": {"plays": []}}
+# nfl-raw's file for a game not played yet: no summary, no driveChart.
+_SHELL = {"summary": None, "driveChart": None, "status": "SCHEDULED"}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -71,17 +78,17 @@ class TestRawUrl:
 
 class TestFetchGame:
     def test_writes_json_to_cache(self, tmp_path):
-        body = json.dumps({"driveChart": {"plays": []}}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         result = fetch_game(2024, "2024_01_BAL_KC", cache_dir=tmp_path, session=session)
 
         assert result == tmp_path / "2024" / "2024_01_BAL_KC.json"
         assert result.exists()
-        assert json.loads(result.read_bytes()) == {"driveChart": {"plays": []}}
+        assert json.loads(result.read_bytes()) == _FINAL
 
     def test_session_called_once_on_first_fetch(self, tmp_path):
-        body = json.dumps({"game": "data"}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         fetch_game(2024, "2024_01_BAL_KC", cache_dir=tmp_path, session=session)
@@ -89,7 +96,7 @@ class TestFetchGame:
         session.get.assert_called_once()
 
     def test_skip_on_second_call_if_file_exists(self, tmp_path):
-        body = json.dumps({"game": "data"}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         # First call — fetches
@@ -101,7 +108,7 @@ class TestFetchGame:
         assert session.get.call_count == 1  # still 1, not 2
 
     def test_force_refetches_existing(self, tmp_path):
-        body = json.dumps({"game": "data"}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         fetch_game(2024, "2024_01_BAL_KC", cache_dir=tmp_path, session=session)
@@ -110,7 +117,7 @@ class TestFetchGame:
         assert session.get.call_count == 2
 
     def test_creates_season_subdirectory(self, tmp_path):
-        body = json.dumps({}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         fetch_game(2024, "2024_01_BAL_KC", cache_dir=tmp_path, session=session)
@@ -118,14 +125,14 @@ class TestFetchGame:
         assert (tmp_path / "2024").is_dir()
 
     def test_returns_path_object(self, tmp_path):
-        body = json.dumps({}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         result = fetch_game(2024, "2024_01_BAL_KC", cache_dir=tmp_path, session=session)
         assert isinstance(result, Path)
 
     def test_url_contains_season_and_game(self, tmp_path):
-        body = json.dumps({}).encode()
+        body = json.dumps(_FINAL).encode()
         session = _fake_session(body)
 
         fetch_game(2023, "2023_22_KC_PHI", cache_dir=tmp_path, session=session)
@@ -133,6 +140,110 @@ class TestFetchGame:
         call_url = session.get.call_args[0][0]
         assert "2023" in call_url
         assert "2023_22_KC_PHI" in call_url
+
+
+class TestCacheTrustsOnlyFinals:
+    """A cached file is a hit only for a played game (the 2026-11-19 weeks-1-4 publish)."""
+
+    def _cache(self, tmp_path, game: dict) -> Path:
+        dest = tmp_path / "2026" / "2026_05_KC_JAX.json"
+        dest.parent.mkdir(parents=True)
+        dest.write_text(json.dumps(game))
+        return dest
+
+    def test_cached_shell_is_refetched_and_replaced(self, tmp_path):
+        dest = self._cache(tmp_path, _SHELL)
+        session = _fake_session(json.dumps(_FINAL))
+
+        result = fetch_game(2026, "2026_05_KC_JAX", cache_dir=tmp_path, session=session)
+
+        session.get.assert_called_once()
+        assert result == dest
+        assert json.loads(dest.read_text()) == _FINAL
+
+    @pytest.mark.parametrize("phase", ["PREGAME", "INGAME", "HALFTIME"])
+    def test_cached_unfinished_game_is_refetched(self, tmp_path, phase):
+        self._cache(tmp_path, {"summary": {"phase": phase}, "driveChart": {"plays": []}})
+        session = _fake_session(json.dumps(_FINAL))
+
+        fetch_game(2026, "2026_05_KC_JAX", cache_dir=tmp_path, session=session)
+
+        session.get.assert_called_once()
+
+    def test_corrupt_cache_file_is_refetched(self, tmp_path):
+        dest = self._cache(tmp_path, _FINAL)
+        dest.write_text('{"summary": {"pha')
+        session = _fake_session(json.dumps(_FINAL))
+
+        fetch_game(2026, "2026_05_KC_JAX", cache_dir=tmp_path, session=session)
+
+        session.get.assert_called_once()
+
+    @pytest.mark.parametrize("phase", ["FINAL", "FINAL_OVERTIME"])
+    def test_cached_final_is_a_hit(self, tmp_path, phase):
+        dest = self._cache(tmp_path, {"summary": {"phase": phase}})
+        session = _fake_session(json.dumps(_FINAL))
+
+        assert fetch_game(2026, "2026_05_KC_JAX", cache_dir=tmp_path, session=session) == dest
+        session.get.assert_not_called()
+
+    def test_fetched_shell_is_not_cached(self, tmp_path):
+        session = _fake_session(json.dumps(_SHELL))
+
+        result = fetch_game(2026, "2026_15_KC_JAX", cache_dir=tmp_path, session=session)
+
+        assert result is None
+        assert not (tmp_path / "2026" / "2026_15_KC_JAX.json").exists()
+
+    def test_fetched_shell_removes_a_stale_cached_shell(self, tmp_path):
+        dest = self._cache(tmp_path, _SHELL)
+        session = _fake_session(json.dumps(_SHELL))
+
+        assert fetch_game(2026, "2026_05_KC_JAX", cache_dir=tmp_path, session=session) is None
+        assert not dest.exists()
+
+    def test_pregame_with_a_summary_is_still_written(self, tmp_path):
+        # not final, so never a hit, but a summary with plays is game data the build reads
+        # (the 2022_17_BUF_CIN no-contest is PREGAME with 30 plays)
+        game = {"summary": {"phase": "PREGAME"}, "driveChart": {"plays": [{"playId": 1}]}}
+        session = _fake_session(json.dumps(game))
+
+        result = fetch_game(2026, "2026_11_IND_HOU", cache_dir=tmp_path, session=session)
+
+        assert result is not None and json.loads(result.read_text()) == game
+
+    def test_ingest_skips_shells_and_keeps_finals(self, tmp_path):
+        final = json.dumps(_FINAL).encode()
+        shell = json.dumps(_SHELL).encode()
+        session = MagicMock()
+        session.get.side_effect = lambda url, **kw: MagicMock(
+            content=shell if "_15_" in url else final, raise_for_status=MagicMock()
+        )
+        with patch("nfl_data_ingest.fetch.enumerate_game_ids",
+                   return_value=["2026_05_KC_JAX", "2026_15_KC_JAX"]):
+            ingest_season(2026, cache_dir=tmp_path, session=session)
+
+        assert sorted(p.name for p in (tmp_path / "2026").iterdir()) == ["2026_05_KC_JAX.json"]
+
+
+class TestIsFinalGameOnRealFiles:
+    """Real nfl-raw files (nfl/raw/2026/, nfl-raw 2d7b9d4f): a played final (ARI_LAC, its
+    driveChart lists cut to two entries), the 2026-11-19 TNF before kickoff (IND_HOU:
+    summary phase PREGAME, a lone GAME_START play) and a week-18 shell (TB_NO). All
+    three have top-level status "SCHEDULED"."""
+
+    @pytest.mark.parametrize(
+        ("name", "final"),
+        [("2026_01_ARI_LAC", True), ("2026_11_IND_HOU", False), ("2026_18_TB_NO", False)],
+    )
+    def test_signal(self, name, final):
+        game = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+        assert game["status"] == "SCHEDULED"
+        assert is_final_game(game) is final
+
+    def test_shell_has_no_summary_or_drive_chart(self):
+        game = json.loads((FIXTURES / "2026_18_TB_NO.json").read_text(encoding="utf-8"))
+        assert game["summary"] is None and not game.get("driveChart")
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +295,23 @@ class TestEnumerateGameIds:
         assert "nfl-raw" in url
         assert "2024" in url
 
+    def test_sends_token_when_set(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_TOKEN", "t0k")
+        session = _fake_session(_github_contents_payload(["2024_01_BAL_KC.json"]))
+
+        enumerate_game_ids(2024, session=session)
+
+        assert session.get.call_args.kwargs["headers"] == {"Authorization": "Bearer t0k"}
+
+    def test_anonymous_without_token(self, monkeypatch):
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        session = _fake_session(_github_contents_payload(["2024_01_BAL_KC.json"]))
+
+        enumerate_game_ids(2024, session=session)
+
+        assert session.get.call_args.kwargs["headers"] == {}
+
     def test_returns_list_of_strings(self):
         payload = _github_contents_payload(["2024_01_BAL_KC.json"])
         session = _fake_session(payload)
@@ -199,7 +327,7 @@ class TestEnumerateGameIds:
 
 class TestIngestSeason:
     def test_fetches_all_enumerated_games(self, tmp_path):
-        game_body = json.dumps({"driveChart": {"plays": []}}).encode()
+        game_body = json.dumps(_FINAL).encode()
         session = _fake_session(game_body)
 
         with patch("nfl_data_ingest.fetch.enumerate_game_ids",
@@ -210,7 +338,7 @@ class TestIngestSeason:
         assert (tmp_path / "2024" / "2024_01_GB_PHI.json").exists()
 
     def test_returns_cache_root(self, tmp_path):
-        game_body = json.dumps({}).encode()
+        game_body = json.dumps(_FINAL).encode()
         session = _fake_session(game_body)
 
         with patch("nfl_data_ingest.fetch.enumerate_game_ids",

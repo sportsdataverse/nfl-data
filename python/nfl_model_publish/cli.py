@@ -19,6 +19,8 @@ Usage::
         [--tag nfl_model_pbp] \\
         [--repo sportsdataverse/sportsdataverse-data]
 
+    python -m nfl_model_publish freshness --parquet-dir <dir>
+
     python -m nfl_model_publish playstats \\
         --parquet-dir <dir> \\
         [--tag nfl_play_stats] \\
@@ -172,6 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pm.add_argument("--tag", default="nfl_model_pbp", help="GitHub release tag.")
     _add_repo_dry(pm)
+
+    fr = sub.add_parser(
+        "freshness",
+        help="Exit 1 if a built model_pbp season is behind its schedule's completed games "
+        "(run before publishing).",
+    )
+    fr.add_argument(
+        "--parquet-dir", required=True, help="Directory containing model_pbp_*.parquet files."
+    )
 
     psx = sub.add_parser(
         "playstats",
@@ -343,6 +354,16 @@ def main(argv=None) -> int:
             f"SCHEMA_REV {pm.SCHEMA_REV}"
         )
         return 1 if problems else 0
+    elif args.cmd == "freshness":
+        from .freshness import check_dir
+
+        problems = check_dir(args.parquet_dir)
+        for p in problems:
+            print(f"freshness: STALE {p}")
+        if problems:
+            print("freshness: refusing to publish a build behind the schedule")
+            return 1
+        print(f"freshness: {args.parquet_dir} covers every completed game")
     elif args.cmd == "playstats":
         res = upload_artifacts(
             args.parquet_dir,

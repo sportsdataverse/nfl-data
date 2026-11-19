@@ -66,7 +66,11 @@ from importlib import metadata
 #:     and CPOE parity with a refit cp_model (#1037) and Shield kick/penalty classes (#1138) moved
 #:     output without a bump. Every 10 final must rebuild. Known difference from nflverse: 2020 HOU's
 #:     David and Duke Johnson share one rusher_id (35 carries; the Shield desc has no jersey numbers).
-SCHEMA_REV = 11
+#: 12: Shield ``UNSPECIFIED`` plays with stats and a penalty or no pass / rush / punt / FG attempt are
+#:     ``no_play`` (was null), as in nflfastR's ``translate_play_type_nfl`` (sdv-py #1238, lock at
+#:     118e7737). On 2025 that is 111 rows, and all 135 ``UNSPECIFIED`` rows match nflverse; the 10 with
+#:     no stats stay null. ep / wp / wpa / vegas_wp do not change on any row. Every 11 final must rebuild.
+SCHEMA_REV = 12
 
 
 @functools.lru_cache(maxsize=1)

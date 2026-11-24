@@ -212,13 +212,61 @@ def _add_player_ids(df: pl.DataFrame) -> pl.DataFrame:
     return df.with_columns([out[c] for c in _PLAYER_ID_COLUMNS])
 
 
+#: nflfastR ``add_game_data``'s schedule columns (R/helper_add_game_data.R), schedule names.
+#: ``total`` is the final combined score (``total_line`` is the betting line).
+_SCHEDULE_GAME_COLUMNS = (
+    "old_game_id",
+    "gameday",
+    "location",
+    "total",
+    "div_game",
+    "surface",
+    "temp",
+    "wind",
+    "home_coach",
+    "away_coach",
+    "stadium_id",
+    "stadium",
+)
+#: add_game_data writes the schedule's ``stadium`` as ``game_stadium`` and ``gameday`` as
+#: ``game_date``; pbp's own ``stadium`` is the Shield payload's venue (see _game_payload).
+_SCHEDULE_RENAME = {"gameday": "game_date", "stadium": "game_stadium"}
+_INT_GAME_COLUMNS = ("total", "div_game", "temp", "wind")
+#: The 16 game columns nfl_model_pbp ships, in nflverse pbp order.
+_GAME_COLUMNS = (
+    "old_game_id",
+    "game_date",
+    "start_time",
+    "stadium",
+    "stadium_id",
+    "game_stadium",
+    "weather",
+    "location",
+    "total",
+    "div_game",
+    "surface",
+    "temp",
+    "wind",
+    "home_coach",
+    "away_coach",
+    "nfl_api_id",
+)
+_JERSEY_COLUMNS = (
+    "passer_jersey_number",
+    "rusher_jersey_number",
+    "receiver_jersey_number",
+    "jersey_number",
+)
+
+
 def _build_schedule_lookup(season: int) -> dict[str, dict]:
-    """Build a ``{game_id: {roof, spread_line, total_line}}`` map for *season*.
+    """Build a ``{game_id: {roof, spread_line, total_line, <game columns>}}`` map for *season*.
 
     These game-level fields are absent from the Shield feed ``native_pbp`` parses;
     nflverse sources them from the schedule (Lee Sharpe's games file). Without
     them ``spread_line``/``total_line`` are null and ``vegas_wp`` falls back to a
-    default spread (the 4th-down decision step is also skipped). Degrades to an
+    default spread (the 4th-down decision step is also skipped). The
+    ``_SCHEDULE_GAME_COLUMNS`` ride along for :func:`_add_game_columns`. Degrades to an
     empty map — leaving the fields null, the prior behavior — with a
     ``RuntimeWarning`` if the schedule can't be loaded; a betting-line lookup must
     never fail the build.
@@ -229,19 +277,13 @@ def _build_schedule_lookup(season: int) -> dict[str, dict]:
         sched = load_nfl_schedule([season])
         if not isinstance(sched, pl.DataFrame):
             sched = pl.from_pandas(sched)
-        keep = [c for c in ("game_id", "roof", "spread_line", "total_line") if c in sched.columns]
+        want = ("game_id", "roof", "spread_line", "total_line", *_SCHEDULE_GAME_COLUMNS)
+        keep = [c for c in want if c in sched.columns]
         if "game_id" not in keep:
             return {}
-        # `keep` drops any column absent from the schedule, so row.get(...) below
+        # `keep` drops any column absent from the schedule, so a reader's .get(...)
         # returns None for a missing field (the intended null-degrade).
-        return {
-            row["game_id"]: {
-                "roof": row.get("roof"),
-                "spread_line": row.get("spread_line"),
-                "total_line": row.get("total_line"),
-            }
-            for row in sched.select(keep).iter_rows(named=True)
-        }
+        return {row.pop("game_id"): row for row in sched.select(keep).iter_rows(named=True)}
     except Exception as exc:  # network / schema / loader failure → degrade, never fail the build
         warnings.warn(
             f"native_pbp build: schedule lookup failed for {season} "
@@ -252,6 +294,159 @@ def _build_schedule_lookup(season: int) -> dict[str, dict]:
         return {}
 
 
+#: nflverse publishes weekly rosters from this season; before it only the season roster.
+_FIRST_WEEKLY_ROSTER_SEASON = 2002
+
+
+def _build_jersey_lookup(season: int) -> pl.DataFrame | None:
+    """``(gsis_id, week, jersey_number)`` for *season* from the nflverse rosters.
+
+    nflfastR reads jersey numbers off ``desc`` ("12-T.Brady"); the Shield ``desc`` has
+    none, so they come from the rosters, keyed on gsis id (never on a name). Rows with a
+    ``week`` are the weekly roster (2002+; a trade or renumbering changes the number
+    mid-season); rows with a null ``week`` are the season roster, the fallback for a
+    player-week the weekly roster lacks. A key with two numbers keeps one row with a null
+    number, so it stays null rather than falling back to the season roster.
+    Degrades to ``None`` (null jersey columns) with a ``RuntimeWarning`` if a roster
+    can't be loaded.
+    """
+
+    def _one_number(r: pl.DataFrame, key: list[str]) -> pl.DataFrame:
+        r = r.filter(
+            pl.col("gsis_id").is_not_null() & pl.col("jersey_number").is_not_null()
+        ).unique()
+        ambiguous = pl.len().over(key) > 1
+        return r.with_columns(
+            pl.when(ambiguous.not_()).then("jersey_number").alias("jersey_number")
+        ).unique()
+
+    try:
+        from sportsdataverse.nfl import load_nfl_rosters, load_nfl_weekly_rosters
+
+        cols = [pl.col("gsis_id").cast(pl.String), pl.col("jersey_number").cast(pl.Int64)]
+        out = _one_number(load_nfl_rosters([season]).select(cols), ["gsis_id"]).select(
+            "gsis_id", pl.lit(None, pl.Int64).alias("week"), "jersey_number"
+        )
+        if season >= _FIRST_WEEKLY_ROSTER_SEASON:
+            weekly = load_nfl_weekly_rosters([season]).select(
+                cols[0], pl.col("week").cast(pl.Int64), cols[1]
+            )
+            out = pl.concat([_one_number(weekly, ["gsis_id", "week"]), out])
+        return out
+    except Exception as exc:  # network / schema / loader failure → degrade, never fail the build
+        warnings.warn(
+            f"native_pbp build: roster lookup failed for {season} "
+            f"({type(exc).__name__}: {exc}); jersey numbers will be null",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+
+
+def _game_payload(raw_dir: str | Path, season: int) -> pl.DataFrame:
+    """nflfastR's game-payload columns, one row per raw game file of *season*.
+
+    ``nfl_api_id`` is the Shield game id, ``stadium`` the venue name, ``weather`` the
+    summary's weather string (whitespace squished, as nflverse ships it) and
+    ``start_time`` the actual kickoff, rendered like nflverse: US Eastern
+    ``"9/5/24, 20:44:42"`` (seconds truncated).
+    """
+    import json
+
+    rows = []
+    for p in sorted(Path(raw_dir, str(season)).glob(f"{season}_*.json")):
+        g = json.loads(p.read_text(encoding="utf-8"))
+        s = g.get("summary") or {}
+        rows.append(
+            {
+                "game_id": p.stem,
+                "nfl_api_id": g.get("id"),
+                "start_time": s.get("startTime"),
+                "weather": s.get("weather"),
+                "stadium": (g.get("venue") or {}).get("name"),
+            }
+        )
+    df = pl.DataFrame(rows, schema=dict.fromkeys(rows[0] if rows else ["game_id"], pl.String))
+    if not rows:
+        return df
+    kickoff = (
+        pl.col("start_time")
+        .str.replace(r"(\.\d+)?Z$", "")
+        .str.to_datetime("%Y-%m-%dT%H:%M:%S", strict=False)
+        .dt.replace_time_zone("UTC")
+        .dt.convert_time_zone("America/New_York")
+    )
+    return df.with_columns(
+        kickoff.dt.strftime("%-m/%-d/%y, %H:%M:%S").alias("start_time"),
+        pl.col("weather").str.replace_all(r"\s+", " ").str.strip_chars(),
+    )
+
+
+def _add_game_columns(
+    df: pl.DataFrame, season: int, raw_dir: str | Path, schedule_lookup: dict | None
+) -> pl.DataFrame:
+    """Append the 16 ``_GAME_COLUMNS`` (nflfastR ``add_game_data`` + its game payload fields).
+
+    Schedule fields come from *schedule_lookup* (null without one) and the payload fields
+    from the raw game files, both joined on ``game_id``.
+    """
+    sched_schema = {
+        "game_id": pl.String,
+        **{c: pl.Int64 if c in _INT_GAME_COLUMNS else pl.String for c in _SCHEDULE_GAME_COLUMNS},
+    }
+    sched = pl.DataFrame(
+        [
+            {"game_id": g, **{c: m.get(c) for c in _SCHEDULE_GAME_COLUMNS}}
+            for g, m in (schedule_lookup or {}).items()
+        ],
+        schema=sched_schema,
+    ).rename(_SCHEDULE_RENAME)
+    games = _game_payload(raw_dir, season)
+    if "nfl_api_id" not in games.columns:  # no raw files: payload columns stay null
+        games = games.with_columns(
+            pl.lit(None, pl.String).alias(c)
+            for c in ("nfl_api_id", "start_time", "weather", "stadium")
+        )
+    out = df.drop(_GAME_COLUMNS, strict=False)
+    for right in (sched, games):
+        assert out.schema["game_id"] == right.schema["game_id"] == pl.String
+        out = out.join(right, on="game_id", how="left", maintain_order="left")
+    if out.height != df.height:
+        raise ValueError(f"game-column join changed the row count: {df.height} -> {out.height}")
+    return out.select(*[c for c in out.columns if c not in _GAME_COLUMNS], *_GAME_COLUMNS)
+
+
+def _add_jersey_numbers(df: pl.DataFrame, jerseys: pl.DataFrame | None) -> pl.DataFrame:
+    """``passer/rusher/receiver_jersey_number`` by (gsis id, week), else by gsis id from the
+    season roster, and nflfastR's ``jersey_number`` (the passer's, else the rusher's)."""
+    if jerseys is None:
+        jerseys = pl.DataFrame(
+            schema={"gsis_id": pl.String, "week": pl.Int64, "jersey_number": pl.Int64}
+        )
+    weekly = jerseys.filter(pl.col("week").is_not_null())
+    season = jerseys.filter(pl.col("week").is_null()).drop("week")
+    out = df.drop(_JERSEY_COLUMNS, strict=False)
+    for role in ("passer", "rusher", "receiver"):
+        k, col = f"{role}_id", f"{role}_jersey_number"
+        # `_wk` marks a weekly-roster hit, even an ambiguous one (null number): only a player-week
+        # the weekly roster lacks falls back to the season roster.
+        wk = weekly.rename({"gsis_id": k, "jersey_number": col}).with_columns(_wk=pl.lit(True))
+        ss = season.rename({"gsis_id": k, "jersey_number": "_ss"})
+        for key, right in ((k, wk), ("week", wk), (k, ss)):
+            assert out.schema[key] == right.schema[key], (key, out.schema[key], right.schema[key])
+        out = (
+            out.join(wk, on=[k, "week"], how="left", maintain_order="left")
+            .join(ss, on=k, how="left", maintain_order="left")
+            .with_columns(pl.when(pl.col("_wk").is_null()).then("_ss").otherwise(col).alias(col))
+            .drop("_wk", "_ss")
+        )
+    if out.height != df.height:
+        raise ValueError(f"jersey join changed the row count: {df.height} -> {out.height}")
+    return out.with_columns(
+        pl.coalesce("passer_jersey_number", "rusher_jersey_number").alias("jersey_number")
+    )
+
+
 def build_season(
     season: int,
     raw_dir: str | Path,
@@ -259,6 +454,7 @@ def build_season(
     *,
     enrich: bool = False,
     schedule_lookup: dict | None = None,
+    jersey_lookup: pl.DataFrame | None = None,
 ) -> Path:
     """Build one season's model-PBP parquet and write it to *out_dir*.
 
@@ -282,6 +478,8 @@ def build_season(
             map supplying the game-level fields the Shield feed omits. ``None``
             (default) leaves them null — kept null-by-default so unit tests stay
             hermetic; ``main()`` builds it from the nflverse schedule.
+        jersey_lookup: Optional ``(gsis_id, week, jersey_number)`` frame for the jersey
+            columns (:func:`_build_jersey_lookup`). ``None`` (default) leaves them null.
 
     Returns:
         Path to the written parquet file.
@@ -298,6 +496,10 @@ def build_season(
         from sportsdataverse.nfl.ep_wp import enrich_nfl_pbp
 
         df = enrich_nfl_pbp(df, method="lead_diff")
+    if df.height:
+        df = _add_jersey_numbers(
+            _add_game_columns(df, season, raw_dir, schedule_lookup), jersey_lookup
+        )
     df = _type_null_columns(df)
 
     out_path = out_dir / f"model_pbp_{season}.parquet"
@@ -428,6 +630,13 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--raw-dir", default="../nfl-raw", help="nfl-raw checkout (ESPN crosswalk).")
     pp.add_argument("--refresh", action="store_true", help="Re-download cached release parquets.")
     pp.add_argument(
+        "--espn-first-season",
+        type=int,
+        default=None,
+        help="Compare espn_pbp from this season (default 2006; its play ids embed the GSIS "
+        "play_id only from 2006, so earlier joins are coincidental).",
+    )
+    pp.add_argument(
         "--float-tol", type=_nonneg_float, default=1e-4, help="Finite, >= 0 (0 = exact)."
     )
     pp.add_argument(
@@ -450,6 +659,7 @@ def main(argv=None) -> int:
                 out_dir=args.out,
                 enrich=args.enrich,
                 schedule_lookup=_build_schedule_lookup(season),
+                jersey_lookup=_build_jersey_lookup(season),
             )
             print(f"wrote {out_path}")
     elif args.cmd == "build-playstats":
@@ -470,6 +680,9 @@ def main(argv=None) -> int:
             refresh=args.refresh,
             float_tol=args.float_tol,
             top_n=args.top_n,
+            first_seasons=None
+            if args.espn_first_season is None
+            else {"espn_pbp": args.espn_first_season},
         )
         print(f"wrote {readme}")
     return 0

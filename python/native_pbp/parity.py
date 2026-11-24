@@ -170,10 +170,13 @@ NFLVERSE_PBP_URL = (
     "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{season}.parquet"
 )
 
-#: dataset -> (release tag, asset name, first season)
+#: dataset -> (release tag, asset name, first season compared by default). espn_nfl_pbp is
+#: published from 2002, but before 2006 the ESPN play id does not embed the GSIS play_id, so
+#: the (game_id, play_id) join is coincidental; ``first_seasons`` / ``--espn-first-season``
+#: asks for those seasons explicitly.
 PUBLISHED = {
     "model_pbp": ("nfl_model_pbp", "model_pbp_{season}.parquet", 1999),
-    "espn_pbp": ("espn_nfl_pbp", "play_by_play_{season}.parquet", 2002),
+    "espn_pbp": ("espn_nfl_pbp", "play_by_play_{season}.parquet", 2006),
 }
 
 #: espn_nfl_pbp column -> nflverse column (verified on 2024; booleans become 0/1 Float64)
@@ -200,6 +203,10 @@ ESPN_COLUMN_MAP: Dict[str, str] = {
 }
 
 METRIC_COLUMNS = ("ep", "epa", "wp", "wpa", "cp", "cpoe")
+#: nflverse flags marking a try (PAT / two-point). Set even in 2003-2004, whose nflverse pbp types
+#: every extra-point try play_type "no_play" and so scores it as a play at the 2 (ep ~4.9): the
+#: metrics are reported on all plays, on non-try plays and on the tries as their own group.
+_TRY_FLAGS = ("extra_point_attempt", "two_point_attempt")
 _KEY = ["game_id", "play_id"]
 _NV = "nv__"
 
@@ -275,7 +282,7 @@ def compare_published(
     nv_cols = [pl.col(c).alias(f"{_NV}{c}") for c in shared]
     extra = [
         pl.col(c).alias(f"{_NV}{c}")
-        for c in ("play_type", "desc")
+        for c in ("play_type", "desc", *_TRY_FLAGS)
         if c in n.columns and c not in shared
     ]
     for name, df in (("ours", o), ("nflverse", n)):
@@ -351,6 +358,10 @@ def compare_published(
     metrics, devs = [], []
     ptype = f"{_NV}play_type" if f"{_NV}play_type" in j.columns else None
     desc = f"{_NV}desc" if f"{_NV}desc" in j.columns else None
+    is_try = pl.any_horizontal(
+        pl.lit(False), *[pl.col(f"{_NV}{f}") == 1 for f in _TRY_FLAGS if f"{_NV}{f}" in j.columns]
+    ).fill_null(False)
+    groups = {"all": pl.lit(True), "non_try": is_try.not_(), "try": is_try}
     for m in METRIC_COLUMNS:
         if m not in shared:
             continue
@@ -363,20 +374,27 @@ def compare_published(
                 (pl.col(desc) if desc else pl.lit(None, pl.Utf8)).cast(pl.Utf8).alias("desc"),
                 pl.col(m).cast(pl.Float64).fill_nan(None).alias("ours"),
                 pl.col(f"{_NV}{m}").cast(pl.Float64).fill_nan(None).alias("nflverse"),
+                *[g.alias(f"g|{k}") for k, g in groups.items()],
             )
             .drop_nulls(["ours", "nflverse"])
             .with_columns((pl.col("ours") - pl.col("nflverse")).abs().alias("abs_diff"))
         )
-        st = sub.select(
-            pl.len().cast(pl.Int64).alias("n"),
-            pl.col("abs_diff").mean().alias("mean_abs_diff"),
-            pl.corr("ours", "nflverse").alias("r"),
-            pl.col("ours").mean().alias("mean_ours"),
-            pl.col("nflverse").mean().alias("mean_nflverse"),
-        ).row(0, named=True)
-        metrics.append({"metric": m, **st})
+        for k in groups:
+            st = (
+                sub.filter(pl.col(f"g|{k}"))
+                .select(
+                    pl.len().cast(pl.Int64).alias("n"),
+                    pl.col("abs_diff").mean().alias("mean_abs_diff"),
+                    pl.corr("ours", "nflverse").alias("r"),
+                    pl.col("ours").mean().alias("mean_ours"),
+                    pl.col("nflverse").mean().alias("mean_nflverse"),
+                )
+                .row(0, named=True)
+            )
+            metrics.append({"metric": m, "plays": k, **st})
         devs.append(
-            sub.sort("abs_diff", descending=True)
+            sub.drop([f"g|{k}" for k in groups])
+            .sort("abs_diff", descending=True)
             .head(top_n)
             .with_columns(pl.lit(m).alias("metric"))
         )
@@ -384,6 +402,7 @@ def compare_published(
         metrics,
         schema={
             "metric": pl.Utf8,
+            "plays": pl.Utf8,
             "n": pl.Int64,
             "mean_abs_diff": pl.Float64,
             "r": pl.Float64,
@@ -590,8 +609,12 @@ def run_published_parity(
     refresh: bool = False,
     float_tol: float = 1e-4,
     top_n: int = 50,
+    first_seasons: Optional[Dict[str, int]] = None,
 ) -> Any:
     """Every season of each dataset vs nflverse; writes CSVs + ``README.md`` under ``out_dir``.
+
+    Seasons before a dataset's first season (``PUBLISHED``, overridden per dataset by
+    ``first_seasons``) are skipped.
 
     Returns:
         The README path. Per dataset: ``summary`` / ``coverage`` / ``columns`` / ``metrics`` /
@@ -607,7 +630,8 @@ def run_published_parity(
     from pathlib import Path
 
     out_dir = Path(out_dir)
-    plan = {ds: [s for s in seasons if s >= PUBLISHED[ds][2]] for ds in datasets}
+    first = {ds: PUBLISHED[ds][2] for ds in datasets} | (first_seasons or {})
+    plan = {ds: [s for s in seasons if s >= first[ds]] for ds in datasets}
     if not any(plan.values()):
         raise ValueError(f"no season in {seasons} is published for {datasets}")
     if out_dir.exists() and any(out_dir.iterdir()):
@@ -712,7 +736,7 @@ def run_published_parity(
         perfect = col_all.filter(pl.col("rate") == 1.0).height
         met = full["metrics"]
         met_pooled = (
-            met.group_by("metric")
+            met.group_by("metric", "plays")
             .agg(
                 pl.col("n").sum(),
                 ((pl.col("mean_abs_diff") * pl.col("n")).sum() / pl.col("n").sum()).alias(
@@ -722,12 +746,12 @@ def run_published_parity(
                 pl.col("r").filter(pl.col("r").is_not_nan()).min().alias("r_min_season"),
                 pl.col("r").filter(pl.col("r").is_not_nan()).median().alias("r_median_season"),
             )
-            .sort("metric")
+            .sort("metric", "plays")
         )
         met_wide = (
-            met.select("season", "metric", "mean_abs_diff", "r")
-            .pivot(on="metric", index="season", values=["mean_abs_diff", "r"])
-            .sort("season")
+            met.select("season", "plays", "metric", "mean_abs_diff", "r")
+            .pivot(on="metric", index=["season", "plays"], values=["mean_abs_diff", "r"])
+            .sort("season", "plays")
         )
         miss = (
             full["missing"]
@@ -763,7 +787,8 @@ def run_published_parity(
             "",
             _md(col_all.filter(pl.col("rate") < 1.0)),
             "",
-            "### EP / EPA / WP / WPA / CP / CPOE (both non-null)",
+            "### EP / EPA / WP / WPA / CP / CPOE (both non-null; `plays`: all, non_try, and the "
+            "PAT / two-point tries nflverse flags `extra_point_attempt` / `two_point_attempt`)",
             "",
             _md(met_pooled),
             "",

@@ -130,7 +130,7 @@ def test_run_published_parity_writes_readme_and_csvs_offline(tmp_path, monkeypat
         ["model_pbp"], [2023, 2024], tmp_path / "cache", tmp_path / "out"
     )
     text = readme.read_text(encoding="utf-8")
-    assert "0.2.0b1+abc.13" in text and "| epa | 4 |" in text  # 2 joined plays x 2 seasons
+    assert "0.2.0b1+abc.13" in text and "| epa | all | 4 |" in text  # 2 joined plays x 2 seasons
     summary = pl.read_csv(tmp_path / "out" / "model_pbp" / "summary.csv")
     assert summary["season"].to_list() == [2023, 2024] and summary["joined"].to_list() == [2, 2]
     assert pl.read_csv(tmp_path / "out" / "model_pbp" / "missing.csv")[
@@ -207,3 +207,50 @@ def test_cli_rejects_bad_tolerance_and_top_n(args):
 
     with pytest.raises(SystemExit):
         build_parser().parse_args(["parity", "--seasons", "2024", "--out", "x", *args])
+
+
+def test_espn_pbp_skips_pre_2006_by_default_and_takes_an_explicit_first_season(
+    tmp_path, monkeypatch
+):
+    # before 2006 the ESPN play id does not embed the GSIS play_id: the join is coincidental
+    import native_pbp.parity as parity
+    from native_pbp.cli import build_parser
+
+    asked = []
+
+    def fake_load(dataset, season, cache_dir, games=None, refresh=False, **kw):
+        asked.append(season)
+        return _ours(), _nv(stadium=["a", "b", "c"]), "stamp"
+
+    monkeypatch.setattr(parity, "load_season", fake_load)
+    (tmp_path / "raw" / "nfl" / "espn" / "crosswalk").mkdir(parents=True)
+    (tmp_path / "raw" / "nfl" / "espn" / "crosswalk" / "games.json").write_text("[]")
+    seasons = [2004, 2005, 2006, 2007]
+    run = parity.run_published_parity
+    run(["espn_pbp"], seasons, tmp_path / "c", tmp_path / "o1", raw_dir=tmp_path / "raw")
+    assert asked == [2006, 2007]
+    asked.clear()
+    run(
+        ["espn_pbp"],
+        seasons,
+        tmp_path / "c",
+        tmp_path / "o2",
+        raw_dir=tmp_path / "raw",
+        first_seasons={"espn_pbp": 2005},
+    )
+    assert asked == [2005, 2006, 2007]
+    args = build_parser().parse_args(
+        ["parity", "--seasons", "2004", "--out", "x", "--espn-first-season", "2002"]
+    )
+    assert args.espn_first_season == 2002
+
+
+def test_metrics_split_tries_from_other_plays_by_the_nflverse_try_flags():
+    # 2003-04 nflverse types every PAT try "no_play" but still sets extra_point_attempt
+    ours = _ours(ep=[0.0, 1.0, 0.9])
+    nv = _nv(ep=[1.0, 4.9, 0.0], extra_point_attempt=[0.0, 1.0, 0.0], two_point_attempt=[0, 0, 0])
+    rep = compare_published(ours, nv)  # joined: play 2 (1.0 vs 1.0), play 3 a try (0.9 vs 4.9)
+    m = {r["plays"]: r for r in rep["metrics"].filter(pl.col("metric") == "ep").to_dicts()}
+    assert m["all"]["n"] == 2 and m["try"]["n"] == 1 and m["non_try"]["n"] == 1
+    assert m["try"]["mean_abs_diff"] == pytest.approx(4.0)
+    assert m["non_try"]["mean_abs_diff"] == pytest.approx(0.0)

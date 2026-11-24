@@ -17,6 +17,7 @@ import numpy as np
 import polars as pl
 
 from .constants import CP_FEATURES, EP_CLASS_ORDER, EP_FEATURES, WP_NAIVE_FEATURES
+from .features import era_features
 from .metrics import ep_expected_points
 
 _EP_POINTS = ep_expected_points  # alias for readability
@@ -27,8 +28,16 @@ def _seasons(pbp: pl.DataFrame, seasons: Optional[List[int]]) -> List[int]:
     return [s for s in (seasons or present) if s in present]
 
 
-def loso_ep(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: Optional[int] = None) -> pl.DataFrame:
+def loso_ep(
+    pbp: pl.DataFrame,
+    *,
+    seasons: Optional[List[int]] = None,
+    nrounds: Optional[int] = None,
+    era: str = "nflfastr5",
+) -> pl.DataFrame:
     """LOSO for EP — returns (season, pred_ep, actual_points) per play.
+
+    ``era`` picks the era bucketing (``features.ERA_VARIANTS``) for both the fit and the fold.
 
     ``actual_points`` is the realized next-score value (the class's point value),
     so a calibration table of pred_ep vs actual_points is a reliability check.
@@ -59,9 +68,10 @@ def loso_ep(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: 
         tr, te = pbp.filter(pl.col("season") != held), pbp.filter(pl.col("season") == held)
         if tr.is_empty() or te.is_empty():
             continue
-        model = train_ep(build_ep_training_set(tr), nrounds=nrounds)
-        ep_te = build_ep_training_set(te)
-        probs = model.predict(DMatrix(ep_te.select(EP_FEATURES).to_numpy(), feature_names=EP_FEATURES))
+        feats = era_features(EP_FEATURES, era)
+        model = train_ep(build_ep_training_set(tr, era=era), nrounds=nrounds, features=feats)
+        ep_te = build_ep_training_set(te, era=era)
+        probs = model.predict(DMatrix(ep_te.select(feats).to_numpy(), feature_names=feats))
         # Reconstruct down from the one-hot features for the EP-by-yardline curve.
         down = ep_te["down1"] * 1 + ep_te["down2"] * 2 + ep_te["down3"] * 3 + ep_te["down4"] * 4
         actual_class = ep_te["next_score_class"].to_numpy()
@@ -107,7 +117,13 @@ def loso_wp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: 
     return pl.concat(folds, how="diagonal_relaxed") if folds else pl.DataFrame()
 
 
-def loso_cp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: Optional[int] = None) -> pl.DataFrame:
+def loso_cp(
+    pbp: pl.DataFrame,
+    *,
+    seasons: Optional[List[int]] = None,
+    nrounds: Optional[int] = None,
+    era: str = "nflfastr5",
+) -> pl.DataFrame:
     """LOSO for CP — returns (season, pred_cp, complete_pass, air_yards_bucket) per play."""
     from xgboost import DMatrix
 
@@ -119,11 +135,12 @@ def loso_cp(pbp: pl.DataFrame, *, seasons: Optional[List[int]] = None, nrounds: 
         tr, te = pbp.filter(pl.col("season") != held), pbp.filter(pl.col("season") == held)
         if tr.is_empty() or te.is_empty():
             continue
-        cp_te = build_cp_training_set(te)
+        feats = era_features(CP_FEATURES, era)
+        cp_te = build_cp_training_set(te, era=era)
         if cp_te.is_empty():  # seasons before CP_FIRST_SEASON have no CP rows
             continue
-        model = train_cp(build_cp_training_set(tr), nrounds=nrounds)
-        preds = model.predict(DMatrix(cp_te.select(CP_FEATURES).to_numpy(), feature_names=CP_FEATURES))
+        model = train_cp(build_cp_training_set(tr, era=era), nrounds=nrounds, features=feats)
+        preds = model.predict(DMatrix(cp_te.select(feats).to_numpy(), feature_names=feats))
         fold = (
             cp_te.with_columns(
                 pred_cp=pl.Series(preds.tolist(), dtype=pl.Float64),

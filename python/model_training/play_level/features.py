@@ -32,7 +32,32 @@ _ERA_BOUNDS: list[tuple[int, int, str]] = [
 ]
 
 
-def make_model_mutations(df: pl.DataFrame, *, nflfastr_roof: bool = False) -> pl.DataFrame:
+def _era5_at(first: int) -> list[tuple[int, int, str]]:
+    return [*_ERA_BOUNDS[:-1], (2018, first, "era4"), (first, 9999, "era5")]
+
+
+#: era bucketings for the retrain comparison (compare-only; published models use ``nflfastr5``).
+#: The era5 break years are the owner's two candidates (2026-11-24), tested against nflfastR's five.
+ERA_VARIANTS: dict[str, list[tuple[int, int, str]]] = {
+    "nflfastr5": _ERA_BOUNDS,
+    "era5_2023": _era5_at(2023),
+    "era5_2024": _era5_at(2024),
+}
+
+
+def era_features(features: list[str], era: str = "nflfastr5") -> list[str]:
+    """``features`` with ``era5`` inserted after ``era4`` when the variant has a fifth break."""
+    if era not in ERA_VARIANTS:
+        raise ValueError(f"Unknown era variant {era!r}; expected one of {sorted(ERA_VARIANTS)}.")
+    if era == "nflfastr5" or "era4" not in features:
+        return list(features)
+    i = features.index("era4") + 1
+    return [*features[:i], "era5", *features[i:]]
+
+
+def make_model_mutations(
+    df: pl.DataFrame, *, nflfastr_roof: bool = False, era: str = "nflfastr5"
+) -> pl.DataFrame:
     """Add all derived columns needed by EP, WP, and CP models.
 
     Mirrors nflfastR's ``make_model_mutations()`` + relevant parts of
@@ -45,6 +70,9 @@ def make_model_mutations(df: pl.DataFrame, *, nflfastr_roof: bool = False) -> pl
     ``nflfastr_roof=True`` maps the roof the way nflfastR's ``model_roof`` does (EP only, since #84).
     The default keeps the mapping CP, xYAC and the decision models were trained on, and that their
     sdv-py appliers still read; move one to the nflfastR mapping only together with its applier.
+
+    ``era`` picks the era bucketing (:data:`ERA_VARIANTS`); an ``era5_*`` variant ends ``era4`` at
+    its break and adds ``era5``. The default is nflfastR's five eras, which every published model uses.
     """
     # home indicator
     df = df.with_columns((pl.col("posteam") == pl.col("home_team")).cast(pl.Float64).alias("home"))
@@ -77,12 +105,14 @@ def make_model_mutations(df: pl.DataFrame, *, nflfastr_roof: bool = False) -> pl
         )
 
     # era buckets from season
+    if era not in ERA_VARIANTS:
+        raise ValueError(f"Unknown era variant {era!r}; expected one of {sorted(ERA_VARIANTS)}.")
     era_exprs = [
         pl.when((pl.col("season") >= lo) & (pl.col("season") < hi))
         .then(pl.lit(1.0))
         .otherwise(pl.lit(0.0))
         .alias(name)
-        for lo, hi, name in _ERA_BOUNDS
+        for lo, hi, name in ERA_VARIANTS[era]
     ]
     df = df.with_columns(era_exprs)
 
@@ -219,7 +249,7 @@ def prepare_cp_data(df: pl.DataFrame) -> pl.DataFrame:
     )
     # Keep complete_pass (the CP label) when present so build_cp_training_set can
     # select it; absent at inference time, where only the features are needed.
-    keep = [*CP_FEATURES, "valid_pass"]
+    keep = [*CP_FEATURES, *(["era5"] if "era5" in df.columns else []), "valid_pass"]  # era5: an era variant
     if "complete_pass" in df.columns:
         keep.append("complete_pass")
     return df.select(keep)
@@ -248,7 +278,7 @@ def prepare_xyac_data(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col("air_yards") - pl.col("ydstogo")).alias("distance_to_sticks"),
         (pl.col("yardline_100") - pl.col("air_yards")).alias("distance_to_goal"),
     )
-    keep = [*XYAC_FEATURES]
+    keep = [*XYAC_FEATURES, *(["era5"] if "era5" in df.columns else [])]  # era5: an era variant
     # Keep the raw filter/label sources when present (training); absent at inference.
     for extra in ("yards_after_catch", "complete_pass", "pass_location"):
         if extra in df.columns:

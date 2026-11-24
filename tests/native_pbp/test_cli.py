@@ -15,6 +15,7 @@ from native_pbp.build import build_season as build_season_frame
 from native_pbp.cli import (
     _GAME_COLUMNS,
     _add_jersey_numbers,
+    _build_jersey_lookup,
     _build_schedule_lookup,
     _parse_season_range,
     build_season,
@@ -285,6 +286,28 @@ def test_jersey_numbers_join_on_gsis_id_and_week_then_the_season_roster():
     assert out["receiver_jersey_number"].to_list() == [11, None, None]
     assert out["jersey_number"].to_list() == [8, 13, 22]  # passer, else rusher
     assert _add_jersey_numbers(df, None)["jersey_number"].null_count() == 3
+
+
+def test_an_ambiguous_weekly_jersey_stays_null_and_never_falls_back(monkeypatch):
+    """Two numbers for one (player, week) leave it null; only a week the roster lacks falls back."""
+    import sportsdataverse.nfl as nfl
+
+    weekly = pl.DataFrame({"gsis_id": ["qb", "qb"], "week": [2, 2], "jersey_number": [8, 13]})
+    season = pl.DataFrame({"gsis_id": ["qb"], "jersey_number": [13]})
+    monkeypatch.setattr(nfl, "load_nfl_weekly_rosters", lambda s: weekly, raising=True)
+    monkeypatch.setattr(nfl, "load_nfl_rosters", lambda s: season, raising=True)
+    jerseys = _build_jersey_lookup(2024)
+    df = pl.DataFrame(
+        {
+            "game_id": ["g", "g"],
+            "week": [2, 3],
+            "passer_id": ["qb", "qb"],
+            "rusher_id": pl.Series([None, None], dtype=pl.String),
+            "receiver_id": pl.Series([None, None], dtype=pl.String),
+        }
+    )
+    out = _add_jersey_numbers(df, jerseys)
+    assert out["passer_jersey_number"].to_list() == [None, 13]
 
 
 def test_build_schedule_lookup_degrades_on_load_failure(monkeypatch):

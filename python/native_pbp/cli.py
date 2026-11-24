@@ -305,17 +305,20 @@ def _build_jersey_lookup(season: int) -> pl.DataFrame | None:
     none, so they come from the rosters, keyed on gsis id (never on a name). Rows with a
     ``week`` are the weekly roster (2002+; a trade or renumbering changes the number
     mid-season); rows with a null ``week`` are the season roster, the fallback for a
-    player-week the weekly roster lacks. A key with two numbers is dropped (left null).
+    player-week the weekly roster lacks. A key with two numbers keeps one row with a null
+    number, so it stays null rather than falling back to the season roster.
     Degrades to ``None`` (null jersey columns) with a ``RuntimeWarning`` if a roster
     can't be loaded.
     """
 
     def _one_number(r: pl.DataFrame, key: list[str]) -> pl.DataFrame:
-        return (
-            r.filter(pl.col("gsis_id").is_not_null() & pl.col("jersey_number").is_not_null())
-            .unique()
-            .filter(pl.len().over(key) == 1)
-        )
+        r = r.filter(
+            pl.col("gsis_id").is_not_null() & pl.col("jersey_number").is_not_null()
+        ).unique()
+        ambiguous = pl.len().over(key) > 1
+        return r.with_columns(
+            pl.when(ambiguous.not_()).then("jersey_number").alias("jersey_number")
+        ).unique()
 
     try:
         from sportsdataverse.nfl import load_nfl_rosters, load_nfl_weekly_rosters
@@ -425,20 +428,18 @@ def _add_jersey_numbers(df: pl.DataFrame, jerseys: pl.DataFrame | None) -> pl.Da
     out = df.drop(_JERSEY_COLUMNS, strict=False)
     for role in ("passer", "rusher", "receiver"):
         k, col = f"{role}_id", f"{role}_jersey_number"
-        for keys, right in (([k, "week"], weekly), ([k], season)):
-            right = right.rename({"gsis_id": k, "jersey_number": f"{col}_"})
-            for key in keys:
-                assert out.schema[key] == right.schema[key], (
-                    key,
-                    out.schema[key],
-                    right.schema[key],
-                )
-            out = out.join(right, on=keys, how="left", maintain_order="left")
-            out = out.with_columns(
-                (pl.coalesce(col, f"{col}_") if col in out.columns else pl.col(f"{col}_")).alias(
-                    col
-                )
-            ).drop(f"{col}_")
+        # `_wk` marks a weekly-roster hit, even an ambiguous one (null number): only a player-week
+        # the weekly roster lacks falls back to the season roster.
+        wk = weekly.rename({"gsis_id": k, "jersey_number": col}).with_columns(_wk=pl.lit(True))
+        ss = season.rename({"gsis_id": k, "jersey_number": "_ss"})
+        for key, right in ((k, wk), ("week", wk), (k, ss)):
+            assert out.schema[key] == right.schema[key], (key, out.schema[key], right.schema[key])
+        out = (
+            out.join(wk, on=[k, "week"], how="left", maintain_order="left")
+            .join(ss, on=k, how="left", maintain_order="left")
+            .with_columns(pl.when(pl.col("_wk").is_null()).then("_ss").otherwise(col).alias(col))
+            .drop("_wk", "_ss")
+        )
     if out.height != df.height:
         raise ValueError(f"jersey join changed the row count: {df.height} -> {out.height}")
     return out.with_columns(

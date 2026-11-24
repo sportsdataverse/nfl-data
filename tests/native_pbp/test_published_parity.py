@@ -118,7 +118,7 @@ def test_espn_to_nflverse_strips_the_game_prefix_maps_teams_and_columns():
 def test_run_published_parity_writes_readme_and_csvs_offline(tmp_path, monkeypatch):
     import native_pbp.parity as parity
 
-    def fake_load(dataset, season, cache_dir, games=None, refresh=False):
+    def fake_load(dataset, season, cache_dir, games=None, refresh=False, **kw):
         return (
             _ours(epa=[0.0, 1.0, 2.0]),
             _nv(epa=[0.0, 1.5, 2.0], stadium=["a", "b", "c"]),
@@ -141,5 +141,69 @@ def test_run_published_parity_writes_readme_and_csvs_offline(tmp_path, monkeypat
 def test_model_column_refs_counts_files_that_name_a_column(tmp_path):
     (tmp_path / "a.py").write_text('cols = ["aborted_play", "down"]\n', encoding="utf-8")
     (tmp_path / "b.py").write_text("x = df['aborted_play']\n", encoding="utf-8")
+    (tmp_path / "c.py").write_text('# Removed "stadium"\nx = 1\n', encoding="utf-8")
     refs = model_column_refs(["aborted_play", "stadium"], roots=[tmp_path])
-    assert refs == {"aborted_play": 2, "stadium": 0}
+    assert refs == {"aborted_play": 2, "stadium": 0}  # a comment is not a reference
+
+
+# --- review fixes (PR #98): inputs the report must refuse, not silently mis-count ---
+
+
+def test_fractional_play_id_is_refused():
+    with pytest.raises(ValueError, match="fractional play_id"):
+        compare_published(_ours(), _nv(play_id=[2.0, 2.5, 4.0]))
+
+
+def test_duplicate_keys_are_refused():
+    dup = pl.DataFrame({"game_id": ["g1", "g1"], "play_id": [2, 2], "play_type": ["pass", "pass"]})
+    with pytest.raises(ValueError, match="duplicate"):
+        compare_published(dup, _nv())
+
+
+def test_coverage_counts_every_row_when_play_type_is_absent():
+    rep = compare_published(_ours().drop("play_type"), _nv().drop("play_type"))
+    cov = rep["coverage"]
+    assert cov["matched"].sum() == rep["joined"] == 2 and cov["play_type"].to_list() == ["(null)"]
+
+
+def test_nan_against_a_null_typed_column_is_both_null():
+    ours = _ours(cp=pl.Series([None, None, None], dtype=pl.Null))
+    nv = _nv(cp=[float("nan"), float("nan"), 0.5])
+    col = {r["column"]: r for r in compare_published(ours, nv)["columns"].to_dicts()}["cp"]
+    assert (
+        col["both_null"] == 2 and col["na_mismatch"] == 0
+    )  # joined plays 2, 3 are NaN on nflverse
+
+
+def test_espn_null_id_is_refused():
+    espn = pl.DataFrame(
+        {
+            "id": [40167161740, None],
+            "game_id": [401671617, 401671617],
+            "nflverse_game_id": ["g"] * 2,
+            "type.text": ["Kickoff"] * 2,
+            "pos_team_id": [22, 22],
+            "def_pos_team_id": [2, 2],
+        }
+    )
+    with pytest.raises(ValueError, match="game_id"):
+        espn_to_nflverse(espn, [])
+
+
+def test_runner_refuses_a_non_empty_out_dir_and_an_empty_selection(tmp_path):
+    import native_pbp.parity as parity
+
+    with pytest.raises(ValueError, match="no season"):
+        parity.run_published_parity(["model_pbp"], [], tmp_path / "c", tmp_path / "o1")
+    (tmp_path / "o2").mkdir()
+    (tmp_path / "o2" / "README.md").write_text("old", encoding="utf-8")
+    with pytest.raises(ValueError, match="not empty"):
+        parity.run_published_parity(["model_pbp"], [2024], tmp_path / "c", tmp_path / "o2")
+
+
+@pytest.mark.parametrize("args", [["--float-tol", "-1"], ["--float-tol", "nan"], ["--top-n", "-1"]])
+def test_cli_rejects_bad_tolerance_and_top_n(args):
+    from native_pbp.cli import build_parser
+
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["parity", "--seasons", "2024", "--out", "x", *args])

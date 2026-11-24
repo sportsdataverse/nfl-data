@@ -205,7 +205,14 @@ _NV = "nv__"
 
 
 def _keyed(df: pl.DataFrame, side: str) -> pl.DataFrame:
-    """One dtype per join key at the boundary: game_id String, play_id Int64."""
+    """One dtype per join key at the boundary: game_id String, play_id Int64.
+
+    Raises:
+        ValueError: If a float ``play_id`` is fractional (the Int64 cast would alias it).
+    """
+    pid = df.schema["play_id"]
+    if pid.is_float() and df.select((pl.col("play_id") != pl.col("play_id").round()).any()).item():
+        raise ValueError(f"{side}: fractional play_id; refusing to cast it to Int64")
     out = df.with_columns(pl.col("game_id").cast(pl.Utf8), pl.col("play_id").cast(pl.Int64))
     assert out.schema["game_id"] == pl.Utf8 and out.schema["play_id"] == pl.Int64, side
     return out
@@ -218,8 +225,11 @@ def _is_num(dt: pl.DataType) -> bool:
 def _match_exprs(c: str, ours_dt: pl.DataType, nv_dt: pl.DataType, tol: float):
     """(mode, a, b, eq) for one shared column; NaN is treated as null."""
     a, b = pl.col(c), pl.col(f"{_NV}{c}")
+    # NaN is null on every float operand, whatever the other side's dtype
+    a = a.fill_nan(None) if ours_dt.is_float() else a
+    b = b.fill_nan(None) if nv_dt.is_float() else b
     if _is_num(ours_dt) and _is_num(nv_dt):
-        a, b = a.cast(pl.Float64).fill_nan(None), b.cast(pl.Float64).fill_nan(None)
+        a, b = a.cast(pl.Float64), b.cast(pl.Float64)
         if ours_dt.is_float() or nv_dt.is_float():
             return "tol", a, b, (a - b).abs() <= tol
         return "exact", a, b, a == b
@@ -229,9 +239,10 @@ def _match_exprs(c: str, ours_dt: pl.DataType, nv_dt: pl.DataType, tol: float):
 
 
 def _typed_counts(df: pl.DataFrame, col: str, name: str) -> pl.DataFrame:
-    t = pl.col(col).cast(pl.Utf8) if col in df.columns else pl.lit(None, pl.Utf8)
+    if col not in df.columns:  # one row per play, so the counts still sum to the row count
+        df = df.with_columns(pl.lit(None, pl.Utf8).alias(col))
     return (
-        df.select(t.fill_null("(null)").alias("play_type"))
+        df.select(pl.col(col).cast(pl.Utf8).fill_null("(null)").alias("play_type"))
         .group_by("play_type")
         .agg(pl.len().alias(name))
     )
@@ -267,6 +278,12 @@ def compare_published(
         for c in ("play_type", "desc")
         if c in n.columns and c not in shared
     ]
+    for name, df in (("ours", o), ("nflverse", n)):
+        dupes = df.height - df.select(_KEY).n_unique()
+        if dupes:
+            raise ValueError(
+                f"{name}: {dupes} duplicate (game_id, play_id) rows; coverage would double-count"
+            )
     j = o.select(_KEY + shared).join(n.select(_KEY + nv_cols + extra), on=_KEY, how="inner")
 
     cov = (
@@ -424,7 +441,8 @@ def espn_to_nflverse(espn: pl.DataFrame, games: List[Dict[str, Any]]) -> pl.Data
     ids = espn.select(
         pl.col("id").cast(pl.Utf8).alias("i"), pl.col("game_id").cast(pl.Utf8).alias("g")
     )
-    if not ids.select(pl.col("i").str.starts_with(pl.col("g")).all()).item():
+    # a null id or game_id fails the rule too (``.all()`` would skip the null)
+    if not ids.select(pl.col("i").str.starts_with(pl.col("g")).fill_null(False).all()).item():
         raise ValueError(
             "espn_nfl_pbp id does not start with its game_id; the play_id rule no longer holds"
         )
@@ -475,17 +493,30 @@ def model_column_refs(columns: List[str], roots: Optional[List[Any]] = None) -> 
     """How many trainer source files name each column as a string literal.
 
     Ranks the nflverse columns we lack by model impact from the committed code, not by hand.
-    ``roots`` defaults to ``python/model_training``.
+    String constants are read from the parsed AST, so comments do not count (docstrings do not
+    either: a literal must equal the column name exactly). ``roots`` defaults to
+    ``python/model_training``.
     """
+    import ast
     from pathlib import Path
 
     roots = roots or [Path(__file__).resolve().parents[1] / "model_training"]
-    texts = [p.read_text(encoding="utf-8") for r in roots for p in Path(r).rglob("*.py")]
-    return {c: sum(1 for t in texts if f'"{c}"' in t or f"'{c}'" in t) for c in columns}
+    literals = [
+        {
+            n.value
+            for n in ast.walk(ast.parse(p.read_text(encoding="utf-8-sig")))
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        }
+        for r in roots
+        for p in Path(r).rglob("*.py")
+    ]
+    return {c: sum(1 for lits in literals if c in lits) for c in columns}
 
 
 def fetch_parquet(url: str, path: Any, refresh: bool = False) -> Any:
     """Download ``url`` to ``path`` once (``refresh`` re-downloads); returns the path."""
+    import os
+    import tempfile
     from pathlib import Path
 
     import requests
@@ -495,9 +526,10 @@ def fetch_parquet(url: str, path: Any, refresh: bool = False) -> Any:
         path.parent.mkdir(parents=True, exist_ok=True)
         resp = requests.get(url, timeout=600)
         resp.raise_for_status()
-        tmp = path.with_suffix(".tmp")
-        tmp.write_bytes(resp.content)
-        tmp.replace(path)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")  # unique per download
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(resp.content)
+        os.replace(tmp, path)
     return path
 
 
@@ -507,8 +539,13 @@ def load_season(
     cache_dir: Any,
     games: Optional[List[Dict[str, Any]]] = None,
     refresh: bool = False,
+    refresh_nflverse: Optional[bool] = None,
 ):
-    """``(ours_in_nflverse_names, nflverse, stamp)`` for one season, from the published releases."""
+    """``(ours_in_nflverse_names, nflverse, stamp)`` for one season, from the published releases.
+
+    ``refresh_nflverse`` (default: ``refresh``) lets a run re-download each nflverse season once
+    and reuse that snapshot for every dataset it compares.
+    """
     from pathlib import Path
 
     tag, name, _ = PUBLISHED[dataset]
@@ -519,7 +556,7 @@ def load_season(
     nv_path = fetch_parquet(
         NFLVERSE_PBP_URL.format(season=season),
         Path(cache_dir) / "nflverse_pbp" / f"play_by_play_{season}.parquet",
-        refresh,
+        refresh if refresh_nflverse is None else refresh_nflverse,
     )
     stamp = pl.read_parquet_metadata(ours_path).get("processing_version")
     ours = pl.read_parquet(ours_path)
@@ -559,6 +596,10 @@ def run_published_parity(
     Returns:
         The README path. Per dataset: ``summary`` / ``coverage`` / ``columns`` / ``metrics`` /
         ``deviations`` / ``missing`` CSVs, each with a ``season`` column.
+
+    Raises:
+        ValueError: If no selected dataset has a season in ``seasons``, or ``out_dir`` is not
+            empty (one run per directory, so a report never mixes files from two runs).
     """
     import json
     import subprocess
@@ -566,8 +607,13 @@ def run_published_parity(
     from pathlib import Path
 
     out_dir = Path(out_dir)
+    plan = {ds: [s for s in seasons if s >= PUBLISHED[ds][2]] for ds in datasets}
+    if not any(plan.values()):
+        raise ValueError(f"no season in {seasons} is published for {datasets}")
+    if out_dir.exists() and any(out_dir.iterdir()):
+        raise ValueError(f"{out_dir} is not empty; give each parity run a fresh --out")
     games = None
-    if "espn_pbp" in datasets:
+    if plan.get("espn_pbp"):
         games = json.loads(
             (Path(raw_dir) / "nfl" / "espn" / "crosswalk" / "games.json").read_text(
                 encoding="utf-8"
@@ -591,14 +637,22 @@ def run_published_parity(
         "counts both-null as a match and null-vs-value as a mismatch. Every number below is computed by "
         "`native_pbp/parity.py`; the CSVs next to this file hold the full tables.",
     ]
+    nv_fetched: set = set()  # seasons whose nflverse file this run already refreshed
     for ds in datasets:
-        first = PUBLISHED[ds][2]
         tables: Dict[str, List[pl.DataFrame]] = {
             k: [] for k in ("coverage", "columns", "metrics", "deviations", "missing")
         }
         summary = []
-        for season in [s for s in seasons if s >= first]:
-            ours, nv, stamp = load_season(ds, season, cache_dir, games, refresh)
+        for season in plan[ds]:
+            ours, nv, stamp = load_season(
+                ds,
+                season,
+                cache_dir,
+                games,
+                refresh,
+                refresh_nflverse=refresh and season not in nv_fetched,
+            )
+            nv_fetched.add(season)
             rep = compare_published(
                 ours,
                 nv,
@@ -664,8 +718,9 @@ def run_published_parity(
                 ((pl.col("mean_abs_diff") * pl.col("n")).sum() / pl.col("n").sum()).alias(
                     "mean_abs_diff"
                 ),
-                pl.col("r").min().alias("r_min_season"),
-                pl.col("r").median().alias("r_median_season"),
+                # an undefined r (constant values) is NaN, which sorts last: leave it out
+                pl.col("r").filter(pl.col("r").is_not_nan()).min().alias("r_min_season"),
+                pl.col("r").filter(pl.col("r").is_not_nan()).median().alias("r_median_season"),
             )
             .sort("metric")
         )

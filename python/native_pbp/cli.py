@@ -351,6 +351,22 @@ def _parse_season_range(s: str) -> list[int]:
     return [int(s)]
 
 
+def _nonneg_float(s: str) -> float:
+    import math
+
+    v = float(s)
+    if not math.isfinite(v) or v < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {s!r}")
+    return v
+
+
+def _nonneg_int(s: str) -> int:
+    v = int(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {s!r}")
+    return v
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="native_pbp")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -411,9 +427,14 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--out", required=True, help="Report directory (README.md + per-dataset CSVs).")
     pp.add_argument("--raw-dir", default="../nfl-raw", help="nfl-raw checkout (ESPN crosswalk).")
     pp.add_argument("--refresh", action="store_true", help="Re-download cached release parquets.")
-    pp.add_argument("--float-tol", type=float, default=1e-4)
     pp.add_argument(
-        "--top-n", type=int, default=50, help="Deviation plays kept per metric and season."
+        "--float-tol", type=_nonneg_float, default=1e-4, help="Finite, >= 0 (0 = exact)."
+    )
+    pp.add_argument(
+        "--top-n",
+        type=_nonneg_int,
+        default=50,
+        help="Deviation plays kept per metric and season (>= 0).",
     )
     return ap
 

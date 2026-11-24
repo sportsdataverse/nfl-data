@@ -204,6 +204,51 @@ def load_native_pbp(
     return out
 
 
+#: nflverse writes these as Int32; every other integer / boolean column is Float64 there
+#: (checked against nflverse play_by_play_2024 for all 91 integer/boolean columns we share)
+_NFLVERSE_INT32 = ("season", "week", "home_score", "away_score", "result")
+
+
+def load_sdv_pbp(seasons: List[int], *, validate: bool = True) -> pl.DataFrame:
+    """The published ``nfl_model_pbp`` release, cast to nflverse dtypes at the boundary.
+
+    ``nfl_model_pbp`` writes Int64 (``play_id``, ``down``, the 0/1 flags) where nflverse writes
+    Float64, so integer and boolean columns become Float64 here (:data:`_NFLVERSE_INT32` Int32),
+    and downstream code sees one dtype per column whichever source it trained on.
+
+    Args:
+        seasons: Seasons to load.
+        validate: Run :func:`validate_pbp` on the result.
+
+    Returns:
+        Concatenated polars DataFrame in nflverse dtypes.
+
+    Raises:
+        ValueError: If no season returns rows.
+    """
+    from sportsdataverse.nfl import load_nfl_pbp
+
+    frames: list[pl.DataFrame] = []
+    for season in seasons:
+        d = load_nfl_pbp([season], source="sdv")
+        if not isinstance(d, pl.DataFrame):
+            d = pl.from_pandas(d)
+        if d.height:
+            casts = [
+                pl.col(c).cast(pl.Int32 if c in _NFLVERSE_INT32 else pl.Float64)
+                for c, dt in d.schema.items()
+                if dt.is_integer() or dt == pl.Boolean
+            ]
+            frames.append(d.with_columns(casts))
+    if not frames:
+        raise ValueError(f"No nfl_model_pbp returned for seasons {seasons}.")
+    out = pl.concat(frames, how="diagonal_relaxed")
+    assert out.schema["play_id"] == pl.Float64 and out.schema["season"] == pl.Int32
+    if validate:
+        validate_pbp(out)
+    return out
+
+
 def load_local_pbp(seasons: List[int], data_dir: Path = Path("data")) -> pl.DataFrame:
     """Load previously-downloaded PBP parquets from disk.
 

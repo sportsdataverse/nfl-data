@@ -39,7 +39,7 @@ def test_loso_cp_skips_seasons_before_the_floor(monkeypatch):
             import numpy as np
             return np.full(dmat.num_row(), 0.5)
 
-    def fake_train(df, nrounds=None):
+    def fake_train(df, nrounds=None, **kw):
         calls.append(df.height)
         return _Model()
 

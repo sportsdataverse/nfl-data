@@ -351,6 +351,22 @@ def _parse_season_range(s: str) -> list[int]:
     return [int(s)]
 
 
+def _nonneg_float(s: str) -> float:
+    import math
+
+    v = float(s)
+    if not math.isfinite(v) or v < 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number >= 0, got {s!r}")
+    return v
+
+
+def _nonneg_int(s: str) -> int:
+    v = int(s)
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {s!r}")
+    return v
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="native_pbp")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -398,6 +414,28 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Output directory for the play_stats_{season}.parquet files.",
     )
+
+    pp = sub.add_parser(
+        "parity",
+        help="Published nfl_model_pbp / espn_nfl_pbp vs nflverse, every season: README + CSVs.",
+    )
+    pp.add_argument("--seasons", required=True, help="Season or range, e.g. '2024' or '1999:2025'.")
+    pp.add_argument("--dataset", choices=["model_pbp", "espn_pbp", "both"], default="both")
+    pp.add_argument(
+        "--cache-dir", default=".cache/parity", help="Where release parquets are cached."
+    )
+    pp.add_argument("--out", required=True, help="Report directory (README.md + per-dataset CSVs).")
+    pp.add_argument("--raw-dir", default="../nfl-raw", help="nfl-raw checkout (ESPN crosswalk).")
+    pp.add_argument("--refresh", action="store_true", help="Re-download cached release parquets.")
+    pp.add_argument(
+        "--float-tol", type=_nonneg_float, default=1e-4, help="Finite, >= 0 (0 = exact)."
+    )
+    pp.add_argument(
+        "--top-n",
+        type=_nonneg_int,
+        default=50,
+        help="Deviation plays kept per metric and season (>= 0).",
+    )
     return ap
 
 
@@ -419,4 +457,19 @@ def main(argv=None) -> int:
         for season in seasons:
             out_path = build_playstats_season(season, raw_dir=args.raw_dir, out_dir=args.out)
             print(f"wrote {out_path}")
+    elif args.cmd == "parity":
+        from native_pbp.parity import run_published_parity
+
+        datasets = ["model_pbp", "espn_pbp"] if args.dataset == "both" else [args.dataset]
+        readme = run_published_parity(
+            datasets,
+            _parse_season_range(args.seasons),
+            args.cache_dir,
+            args.out,
+            raw_dir=args.raw_dir,
+            refresh=args.refresh,
+            float_tol=args.float_tol,
+            top_n=args.top_n,
+        )
+        print(f"wrote {readme}")
     return 0

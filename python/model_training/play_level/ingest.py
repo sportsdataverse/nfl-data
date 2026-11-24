@@ -205,14 +205,15 @@ def load_native_pbp(
 
 
 #: nflverse writes these as Int32; every other integer / boolean column is Float64 there
-_NFLVERSE_INT32 = ("season", "week")
+#: (checked against nflverse play_by_play_2024 for all 91 integer/boolean columns we share)
+_NFLVERSE_INT32 = ("season", "week", "home_score", "away_score", "result")
 
 
 def load_sdv_pbp(seasons: List[int], *, validate: bool = True) -> pl.DataFrame:
     """The published ``nfl_model_pbp`` release, cast to nflverse dtypes at the boundary.
 
     ``nfl_model_pbp`` writes Int64 (``play_id``, ``down``, the 0/1 flags) where nflverse writes
-    Float64, so integer and boolean columns become Float64 here (``season`` / ``week`` Int32),
+    Float64, so integer and boolean columns become Float64 here (:data:`_NFLVERSE_INT32` Int32),
     and downstream code sees one dtype per column whichever source it trained on.
 
     Args:

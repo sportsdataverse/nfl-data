@@ -70,6 +70,8 @@ def test_load_sdv_pbp_reads_source_sdv_and_casts_to_nflverse_dtypes(monkeypatch)
                 "week": pl.Series([1], dtype=pl.Int64),
                 "pass": pl.Series([True]),
                 "yardline_100": [75.0],
+                "home_score": pl.Series([21], dtype=pl.Int64),
+                "result": pl.Series([7], dtype=pl.Int64),
             }
         )
 
@@ -81,7 +83,21 @@ def test_load_sdv_pbp_reads_source_sdv_and_casts_to_nflverse_dtypes(monkeypatch)
     assert out.schema["play_id"] == pl.Float64 and out.schema["down"] == pl.Float64
     assert out.schema["pass"] == pl.Float64
     assert out.schema["season"] == pl.Int32 and out.schema["week"] == pl.Int32
+    assert (
+        out.schema["home_score"] == pl.Int32 and out.schema["result"] == pl.Int32
+    )  # nflverse Int32
     assert out["season"].to_list() == [2023, 2024]
+
+
+def test_trainer_without_features_still_fits_era5():
+    """No silent no-op: an era5 frame trained without ``features=`` keeps its era5 column."""
+    from model_training.play_level.label import build_cp_training_set
+    from model_training.play_level.trainer import train_cp
+
+    df = build_cp_training_set(_cp_rows([2023, 2024, 2024, 2025]), era="era5_2024")
+    assert "era5" in train_cp(df, nrounds=2).feature_names
+    base = build_cp_training_set(_cp_rows([2023, 2024, 2024, 2025]))
+    assert "era5" not in train_cp(base, nrounds=2).feature_names
 
 
 def test_resolve_pbp_routes_sdv(monkeypatch, tmp_path):
@@ -95,14 +111,25 @@ def test_resolve_pbp_routes_sdv(monkeypatch, tmp_path):
 
 def _cp_rows(seasons):
     n = len(seasons)
-    return pl.DataFrame({
-        "air_yards": [8.0] * n, "yardline_100": [60.0] * n, "ydstogo": [10.0] * n, "down": [1.0] * n,
-        "pass_location": ["left"] * n, "qb_hit": [0.0] * n, "posteam": ["NE"] * n,
-        "home_team": ["NE"] * n, "roof": ["outdoors"] * n,
-        "complete_pass": [1.0, 0.0] * (n // 2) + [1.0] * (n % 2),
-        "incomplete_pass": [0.0, 1.0] * (n // 2) + [0.0] * (n % 2), "interception": [0.0] * n,
-        "receiver_player_id": ["00-1"] * n, "receiver_player_name": ["A.B"] * n, "season": seasons,
-    })
+    return pl.DataFrame(
+        {
+            "air_yards": [8.0] * n,
+            "yardline_100": [60.0] * n,
+            "ydstogo": [10.0] * n,
+            "down": [1.0] * n,
+            "pass_location": ["left"] * n,
+            "qb_hit": [0.0] * n,
+            "posteam": ["NE"] * n,
+            "home_team": ["NE"] * n,
+            "roof": ["outdoors"] * n,
+            "complete_pass": [1.0, 0.0] * (n // 2) + [1.0] * (n % 2),
+            "incomplete_pass": [0.0, 1.0] * (n // 2) + [0.0] * (n % 2),
+            "interception": [0.0] * n,
+            "receiver_player_id": ["00-1"] * n,
+            "receiver_player_name": ["A.B"] * n,
+            "season": seasons,
+        }
+    )
 
 
 def test_cp_training_set_carries_era5_only_for_a_variant():

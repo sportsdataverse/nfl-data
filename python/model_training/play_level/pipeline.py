@@ -56,12 +56,17 @@ def _resolve_pbp(seasons: List[int], data_dir: Path, download: bool, source: str
     """Load the training PBP frame from the chosen source.
 
     ``source="nflverse"`` (default) downloads (optional) + reads local parquet;
-    ``source="native"`` reconstructs from the committed nfl/raw Shield library.
+    ``source="native"`` reconstructs from the committed nfl/raw Shield library;
+    ``source="sdv"`` reads the published ``nfl_model_pbp`` release in nflverse dtypes.
     """
     if source == "native":
         return _load_native(seasons)
+    if source == "sdv":
+        from . import ingest
+
+        return ingest.load_sdv_pbp(seasons)
     if source != "nflverse":
-        raise ValueError(f"Unknown source {source!r}; expected 'nflverse' or 'native'.")
+        raise ValueError(f"Unknown source {source!r}; expected 'nflverse', 'native' or 'sdv'.")
     if download:
         _download_pbp(seasons, data_dir)
     return _load_pbp(seasons, data_dir)

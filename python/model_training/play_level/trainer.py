@@ -25,6 +25,18 @@ from .constants import (
     XYAC_FEATURES,
     XYAC_HYPERPARAMS,
 )
+from .features import era_features
+
+
+def _features(df: pl.DataFrame, base: list[str], features: Optional[list[str]]) -> list[str]:
+    """``features``, else ``base`` plus ``era5`` when the frame carries it (an era variant).
+
+    Deriving the list from the frame means an era5 training set can never be fit without its
+    era5 column because a caller forgot ``features=``.
+    """
+    if features:
+        return features
+    return era_features(base, "era5_2024") if "era5" in df.columns else base
 
 
 def _to_dmatrix(
@@ -43,6 +55,7 @@ def _to_dmatrix(
 def train_ep(
     df: pl.DataFrame,
     *,
+    features: Optional[list[str]] = None,
     nrounds: Optional[int] = None,
     output_path: Optional[Path] = None,
 ) -> Booster:
@@ -59,7 +72,7 @@ def train_ep(
     """
     rounds = nrounds if nrounds is not None else EP_HYPERPARAMS["nrounds"]
     params = {k: v for k, v in EP_HYPERPARAMS.items() if k != "nrounds"}
-    dmat = _to_dmatrix(df, EP_FEATURES, "next_score_class", weight_col="weight")
+    dmat = _to_dmatrix(df, _features(df, EP_FEATURES, features), "next_score_class", weight_col="weight")
     model = xgb_train(params, dmat, num_boost_round=rounds)
     if output_path is not None:
         model.save_model(str(output_path))
@@ -122,6 +135,7 @@ def train_wp_naive(
 def train_cp(
     df: pl.DataFrame,
     *,
+    features: Optional[list[str]] = None,
     nrounds: Optional[int] = None,
     output_path: Optional[Path] = None,
 ) -> Booster:
@@ -141,7 +155,7 @@ def train_cp(
     # base_score = mean completion rate (set dynamically)
     if "complete_pass" in df.columns:
         params["base_score"] = float(df["complete_pass"].mean())
-    dmat = _to_dmatrix(df, CP_FEATURES, "complete_pass")
+    dmat = _to_dmatrix(df, _features(df, CP_FEATURES, features), "complete_pass")
     model = xgb_train(params, dmat, num_boost_round=rounds)
     if output_path is not None:
         model.save_model(str(output_path))
@@ -151,6 +165,7 @@ def train_cp(
 def train_xyac(
     df: pl.DataFrame,
     *,
+    features: Optional[list[str]] = None,
     nrounds: Optional[int] = None,
     output_path: Optional[Path] = None,
 ) -> Booster:
@@ -170,7 +185,7 @@ def train_xyac(
     """
     rounds = nrounds if nrounds is not None else XYAC_HYPERPARAMS["nrounds"]
     params = {k: v for k, v in XYAC_HYPERPARAMS.items() if k != "nrounds"}
-    dmat = _to_dmatrix(df, XYAC_FEATURES, "label")
+    dmat = _to_dmatrix(df, _features(df, XYAC_FEATURES, features), "label")
     model = xgb_train(params, dmat, num_boost_round=rounds)
     if output_path is not None:
         model.save_model(str(output_path))

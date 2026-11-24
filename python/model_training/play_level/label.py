@@ -23,6 +23,7 @@ from .constants import (
     XYAC_NUM_CLASSES,
 )
 from .features import (
+    era_features,
     make_model_mutations,
     prepare_cp_data,
     prepare_xyac_data,
@@ -259,7 +260,7 @@ def _add_ep_sample_weights(df: pl.DataFrame) -> pl.DataFrame:
     return df.drop(["_dsd", "_absdiff", "_dsd_w", "_sd_w", "_total_w"])
 
 
-def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
+def build_ep_training_set(df: pl.DataFrame, *, era: str = "nflfastr5") -> pl.DataFrame:
     """Full EP training set pipeline from raw nflverse PBP.
 
     1. Compute ``Next_Score_Half`` label (+ ``next_score_drive``).
@@ -270,6 +271,7 @@ def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
 
     Args:
         df: Raw nflverse PBP frame (multiple seasons).
+        era: Era bucketing (:data:`features.ERA_VARIANTS`); a variant adds ``era5``.
 
     Returns:
         Training-ready DataFrame with EP_FEATURES columns + ``next_score_class`` + ``weight``.
@@ -286,14 +288,14 @@ def build_ep_training_set(df: pl.DataFrame) -> pl.DataFrame:
     keep += [pl.col(c).is_null() for c in ("two_point_conv_result", "extra_point_result") if c in df.columns]
     df = df.filter(*keep)
     df = _add_ep_sample_weights(df)
-    df = make_model_mutations(df, nflfastr_roof=True)
+    df = make_model_mutations(df, nflfastr_roof=True, era=era)
     # Match nflfastR's cal_data filter (MODELS.R): drop plays missing yardline or timeouts.
     df = df.filter(
         pl.col("yardline_100").is_not_null()
         & pl.col("posteam_timeouts_remaining").is_not_null()
         & pl.col("defteam_timeouts_remaining").is_not_null()
     )
-    return df.select([*EP_FEATURES, "next_score_class", "weight"])
+    return df.select([*era_features(EP_FEATURES, era), "next_score_class", "weight"])
 
 
 def build_wp_training_set(
@@ -333,7 +335,7 @@ def build_wp_training_set(
 CP_FIRST_SEASON = 2009
 
 
-def build_cp_training_set(df: pl.DataFrame) -> pl.DataFrame:
+def build_cp_training_set(df: pl.DataFrame, *, era: str = "nflfastr5") -> pl.DataFrame:
     """Full CP training set pipeline from raw nflverse PBP.
 
     1. Floor to season >= ``CP_FIRST_SEASON`` (2009). nflfastR's MODELS.R starts CP at 2006, the
@@ -349,18 +351,19 @@ def build_cp_training_set(df: pl.DataFrame) -> pl.DataFrame:
 
     Args:
         df: Raw nflverse PBP frame containing pass play columns.
+        era: Era bucketing (:data:`features.ERA_VARIANTS`); a variant adds ``era5``.
 
     Returns:
         Training-ready DataFrame with ``CP_FEATURES`` columns + ``complete_pass`` label.
     """
     df = df.filter(pl.col("season") >= CP_FIRST_SEASON)
-    df = make_model_mutations(df)
+    df = make_model_mutations(df, era=era)
     df = prepare_cp_data(df)
     df = df.filter(pl.col("valid_pass") == 1.0)
-    return df.select([*CP_FEATURES, "complete_pass"])
+    return df.select([*era_features(CP_FEATURES, era), "complete_pass"])
 
 
-def build_xyac_training_set(df: pl.DataFrame) -> pl.DataFrame:
+def build_xyac_training_set(df: pl.DataFrame, *, era: str = "nflfastr5") -> pl.DataFrame:
     """Full xYAC training set pipeline from raw nflverse PBP.
 
     Faithful port of ``nflverse-pbp/models/train_xyac_model.R``. Same completed-pass
@@ -382,12 +385,13 @@ def build_xyac_training_set(df: pl.DataFrame) -> pl.DataFrame:
 
     Args:
         df: Raw nflverse PBP frame containing pass play columns + ``yards_after_catch``.
+        era: Era bucketing (:data:`features.ERA_VARIANTS`); a variant adds ``era5``.
 
     Returns:
         Training-ready DataFrame with ``XYAC_FEATURES`` columns + ``label`` (Int32, 0–75).
     """
     df = df.filter(pl.col("season") >= 2006)
-    df = make_model_mutations(df)
+    df = make_model_mutations(df, era=era)
     df = prepare_xyac_data(df)
     df = df.filter(
         (pl.col("complete_pass") == 1)
@@ -407,4 +411,4 @@ def build_xyac_training_set(df: pl.DataFrame) -> pl.DataFrame:
         .clip(0, XYAC_NUM_CLASSES - 1)
         .alias("label")
     )
-    return df.select([*XYAC_FEATURES, "label"])
+    return df.select([*era_features(XYAC_FEATURES, era), "label"])

@@ -12,7 +12,14 @@ from pathlib import Path
 import polars as pl
 import pytest
 from native_pbp.build import build_season as build_season_frame
-from native_pbp.cli import _build_schedule_lookup, _parse_season_range, build_season, main
+from native_pbp.cli import (
+    _GAME_COLUMNS,
+    _add_jersey_numbers,
+    _build_schedule_lookup,
+    _parse_season_range,
+    build_season,
+    main,
+)
 
 # ---------------------------------------------------------------------------
 # Minimal synthetic Shield game payload
@@ -203,15 +210,81 @@ def test_main_wires_schedule_lookup_into_build(tmp_path, monkeypatch):
     out_dir = tmp_path / "out"
     sentinel = {"2024_01_KC_BAL": {"roof": "outdoors", "spread_line": 1.5, "total_line": 40.0}}
     monkeypatch.setattr("native_pbp.cli._build_schedule_lookup", lambda season: sentinel)
+    jerseys = pl.DataFrame({"gsis_id": ["x"], "week": [None], "jersey_number": [1]})
+    monkeypatch.setattr("native_pbp.cli._build_jersey_lookup", lambda season: jerseys)
     captured = {}
 
-    def _spy(season, *, raw_dir, out_dir, enrich=False, schedule_lookup=None):
+    def _spy(season, *, raw_dir, out_dir, enrich=False, schedule_lookup=None, jersey_lookup=None):
         captured["schedule_lookup"] = schedule_lookup
+        captured["jersey_lookup"] = jersey_lookup
         return Path(out_dir) / f"model_pbp_{season}.parquet"
 
     monkeypatch.setattr("native_pbp.cli.build_season", _spy)
     main(["build", "--seasons", "2024", "--raw-dir", str(raw_dir), "--out", str(out_dir)])
     assert captured["schedule_lookup"] is sentinel
+    assert captured["jersey_lookup"] is jerseys
+
+
+def test_build_season_adds_the_game_columns(tmp_path):
+    """Schedule fields by game_id (stadium -> game_stadium, gameday -> game_date) and the
+    payload's id / venue / weather / kickoff, rendered like nflverse's start_time."""
+    season_dir = tmp_path / "raw" / "2024"
+    season_dir.mkdir(parents=True)
+    game = _make_game()
+    game["id"] = "7d3e8f84-shield"
+    game["venue"] = {"name": "M&T Bank Stadium"}
+    game["summary"].update(
+        startTime="2024-09-06T00:44:42.957Z", weather="Temp: 67° F,  Wind:   mph"
+    )
+    (season_dir / "2024_01_KC_BAL.json").write_text(json.dumps(game), encoding="utf-8")
+    lookup = {
+        "2024_01_KC_BAL": {
+            "roof": "outdoors",
+            "old_game_id": "2024090500",
+            "gameday": "2024-09-05",
+            "location": "Home",
+            "total": 47,
+            "div_game": 0,
+            "stadium": "M&T Bank",
+            "stadium_id": "BAL00",
+        }
+    }
+    df = pl.read_parquet(
+        build_season(2024, tmp_path / "raw", tmp_path / "out", schedule_lookup=lookup)
+    )
+    assert df.columns[-20:-4] == list(_GAME_COLUMNS)
+    row = df.select(_GAME_COLUMNS).row(0, named=True)
+    assert row["nfl_api_id"] == "7d3e8f84-shield" and row["old_game_id"] == "2024090500"
+    assert row["start_time"] == "9/5/24, 20:44:42"  # US Eastern, seconds truncated
+    assert row["weather"] == "Temp: 67° F, Wind: mph"
+    assert (row["stadium"], row["game_stadium"]) == ("M&T Bank Stadium", "M&T Bank")
+    assert (row["game_date"], row["total"], row["temp"]) == ("2024-09-05", 47, None)
+    assert df.schema["total"] == pl.Int64 and df.schema["temp"] == pl.Int64
+
+
+def test_jersey_numbers_join_on_gsis_id_and_week_then_the_season_roster():
+    df = pl.DataFrame(
+        {
+            "game_id": ["g"] * 3,
+            "week": [1, 2, 2],
+            "passer_id": ["qb", "qb", None],
+            "rusher_id": [None, None, "rb"],
+            "receiver_id": ["wr", None, None],
+        }
+    )
+    jerseys = pl.DataFrame(
+        {
+            "gsis_id": ["qb", "qb", "qb", "rb", "wr"],
+            "week": [1, 2, None, None, None],  # null week = season roster (the fallback)
+            "jersey_number": [8, 13, 13, 22, 11],
+        }
+    )
+    out = _add_jersey_numbers(df, jerseys)
+    assert out["passer_jersey_number"].to_list() == [8, 13, None]  # traded mid-season
+    assert out["rusher_jersey_number"].to_list() == [None, None, 22]
+    assert out["receiver_jersey_number"].to_list() == [11, None, None]
+    assert out["jersey_number"].to_list() == [8, 13, 22]  # passer, else rusher
+    assert _add_jersey_numbers(df, None)["jersey_number"].null_count() == 3
 
 
 def test_build_schedule_lookup_degrades_on_load_failure(monkeypatch):

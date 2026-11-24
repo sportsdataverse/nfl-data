@@ -70,7 +70,12 @@ from importlib import metadata
 #:     ``no_play`` (was null), as in nflfastR's ``translate_play_type_nfl`` (sdv-py #1238, lock at
 #:     118e7737). On 2025 that is 111 rows, and all 135 ``UNSPECIFIED`` rows match nflverse; the 10 with
 #:     no stats stay null. ep / wp / wpa / vegas_wp do not change on any row. Every 11 final must rebuild.
-SCHEMA_REV = 12
+#: 13: the lock moves to sdv-py main 2974302a00: ESPN credits the intended receiver on an interception and
+#:     never a text fragment as a receiver (#1248); the box score counts kneels as rushes, leaves INT returns
+#:     out of passing Yards and adds net pass yards (#1247); play-participant columns stay String when the
+#:     athlete lookup is empty (#1251). ESPN-only changes; nfl_model_pbp moves with the sha. Every 12 final
+#:     must rebuild.
+SCHEMA_REV = 13
 
 
 @functools.lru_cache(maxsize=1)

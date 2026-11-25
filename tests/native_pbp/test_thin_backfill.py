@@ -113,8 +113,10 @@ def test_thin_2000_game_drops_timeouts_and_two_minute_warnings_only(tmp_path, nf
 
 def test_all_null_stub_column_keeps_nflverse_values(tmp_path, nflverse):
     stub = build_season_frame(2000, raw_dir=_raw(tmp_path / "stub", KC_OAK, SD_KC, BUF_MIA))
-    # a stub-only season: the column is all-null, so Null-typed
-    assert stub.schema["qb_hit_1_player_id"] == pl.Null
+    # a stub-only season: the column is all-null (Null-typed before sdv-py #1265; String since its
+    # nflverse column contract types the Shield frame)
+    assert stub["qb_hit_1_player_id"].null_count() == stub.height
+    assert stub.schema["qb_hit_1_player_id"] in (pl.Null, pl.String)
 
     g = _build(tmp_path, 2000, KC_OAK, SD_KC, BUF_MIA)
 

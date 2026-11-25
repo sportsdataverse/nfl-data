@@ -75,7 +75,12 @@ from importlib import metadata
 #:     out of passing Yards and adds net pass yards (#1247); play-participant columns stay String when the
 #:     athlete lookup is empty (#1251). ESPN-only changes; nfl_model_pbp moves with the sha. Every 12 final
 #:     must rebuild.
-SCHEMA_REV = 13
+#: 14: the lock moves to sdv-py main 0e664cfaef: play_type_nfl / aborted_play on the Shield and ESPN processors
+#:     (#1255), ESPN cpoe in percentage points (#1261), nflverse play_by_play columns on the Shield path and
+#:     nflfastR's try EP (#1265), espn_nfl_pbp_nflverse (#1266); with this repo's game-metadata and jersey
+#:     columns (#100), nfl_model_pbp 2026 (cut at 18bd7e81) is 430 columns where 1999-2025 (2974302a) are 335,
+#:     on the same rev 13. Every 13 final must rebuild.
+SCHEMA_REV = 14
 
 
 @functools.lru_cache(maxsize=1)

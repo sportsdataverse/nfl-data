@@ -80,10 +80,10 @@ from importlib import metadata
 #:     nflfastR's try EP (#1265), espn_nfl_pbp_nflverse (#1266); with this repo's game-metadata and jersey
 #:     columns (#100), nfl_model_pbp 2026 (cut at 18bd7e81) is 430 columns where 1999-2025 (2974302a) are 335,
 #:     on the same rev 13. Every 13 final must rebuild.
-#:     Re-locked before any rev-14 final was published, to sdv-py main 3684a3e9ab: NFLPlayProcess stamps
-#:     nflverse_game_id on espn_nfl_pbp, and espn_nfl_pbp_nflverse gains players / drive / text / model
-#:     columns (#1270); build_nfl_season keeps the processor's dtypes (#1273); the view spots split tries
-#:     and gives penalized kickoffs to the receiver (#1274). Same rev: the new sha moves the stamp.
+#:     Re-locked before the rev-14 reprocess (only the scheduled 2026 builds had published rev 14, espn at
+#:     0e664cfa and model_pbp at main), to sdv-py main 3684a3e9ab (#1270, #1273, #1274). Those mostly change
+#:     the sdv-py-runtime espn_nfl_pbp_nflverse view and build_nfl_season; this repo's output changes only
+#:     by the processor's nflverse_game_id, which stamp_identity overwrites. Same rev: the new sha moves the stamp.
 SCHEMA_REV = 14
 
 

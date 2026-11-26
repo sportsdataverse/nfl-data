@@ -83,7 +83,8 @@ from importlib import metadata
 #:     Re-locked before the rev-14 reprocess (only the scheduled 2026 builds had published rev 14, espn at
 #:     0e664cfa and model_pbp at main), to sdv-py main 3684a3e9ab (#1270, #1273, #1274). Those mostly change
 #:     the sdv-py-runtime espn_nfl_pbp_nflverse view and build_nfl_season; this repo's output changes only
-#:     by the processor's nflverse_game_id, which stamp_identity overwrites. Same rev: the new sha moves the stamp.
+#:     by the processor's nflverse_game_id, which stamp_identity overwrites when the crosswalk has an id
+#:     (the column also moves into the processor's header block). Same rev: the new sha moves the stamp.
 SCHEMA_REV = 14
 
 

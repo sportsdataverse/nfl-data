@@ -1414,11 +1414,13 @@ def build_team_summaries(
     ).with_columns(season=pl.lit(int(yr), dtype=pl.Int64))
 
     # opponent-adjusted EPA: the shared sdv-py ridge (league-agnostic; keyed on
-    # pos_team_id / def_pos_team_id / home / neutral_site / wp_before). NFL keeps
-    # the pre-#598 method: #598's refit was validated on CFB only and needs
-    # wp_before_naive, which this build doesn't create (owner decision 2026-09-27).
+    # pos_team_id / def_pos_team_id / home / neutral_site, garbage time by the score
+    # margin from period / pos_score_diff_start). The current method replaced
+    # method="pre598" (the 0.1-0.9 wp band) after a 2014-2023 walk-forward of
+    # next-week margins: 0.088 points lower MAE, 95% CI [0.015, 0.170], and 0.127
+    # lower on the 2024-2025 holdout.
     adj = (
-        cfb_adjusted_epa(plays, method="pre598")
+        cfb_adjusted_epa(plays)
         .drop("pos_team")
         .with_columns(team_id=pl.col("team_id").cast(pl.Int64))
     )

@@ -85,6 +85,11 @@ from importlib import metadata
 #:     the sdv-py-runtime espn_nfl_pbp_nflverse view and build_nfl_season; this repo's output changes only
 #:     by the processor's nflverse_game_id, which stamp_identity overwrites when the crosswalk has an id
 #:     (the column also moves into the processor's header block). Same rev: the new sha moves the stamp.
+#:     Re-locked to sdv-py main 5be846a67c: ``stuffed_run`` / ``stopped_run`` count any rush, kneels excluded
+#:     (#1334, moves espn_nfl_adv_team's rushing_stuff / rushing_stopped too); pass_depth / pass_direction anchor
+#:     on the charted-pass phrase (#1355), which also reads the 2002-04 feed's "to the" / "across the" (#1373);
+#:     a lateral's credited catcher / carrier / returner reads the box
+#:     score's full name (#1359). Same rev: the new sha moves the stamp, so every 3684a3e9 final rebuilds.
 SCHEMA_REV = 14
 
 

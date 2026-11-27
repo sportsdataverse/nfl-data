@@ -13,7 +13,9 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+import polars as pl
 from nfl_model_publish.artifacts import _gh_release_exists, _gh_runner
+from nfl_model_publish.pbp_manifest import MANIFEST_SCHEMA, fetch_manifest
 
 log = logging.getLogger(__name__)
 
@@ -57,3 +59,38 @@ def publish_files(
         runner(["release", "upload", tag, str(f), "--clobber", "--repo", repo])
         log.info("uploaded %s -> %s@%s", f.name, repo, tag)
     return files
+
+
+def merge_published_manifest(
+    manifest: Path,
+    season: int,
+    tag: str,
+    *,
+    repo: str = DEFAULT_REPO,
+    gh: Callable[[list], str] | None = None,
+    exists_check: Callable[[str, str], bool] | None = None,
+) -> Path:
+    """Rewrite the local ``manifest`` as the tag's manifest with ``season``'s row taken from the local one.
+
+    The nightly cron builds in a fresh checkout, so its local manifest holds only the season it cut;
+    uploading that replaced every other season's row on the tag (2026-11-26: both stuff-flag tags listed
+    2026 alone). The published rows are read back first and only ``season``'s row changes. A failed
+    listing or download raises, never falling back to the one-row file. A tag with no release yet keeps
+    the local file (``publish_files`` creates the release).
+    """
+    manifest = Path(manifest)
+    if not manifest.exists() or not (exists_check or _gh_release_exists)(tag, repo):
+        return manifest
+    mine = pl.read_csv(manifest, schema_overrides=MANIFEST_SCHEMA).filter(
+        pl.col("season") == int(season)
+    )
+    published = fetch_manifest(tag, repo, gh=gh, name=manifest.name)
+    merged = pl.concat([published.filter(pl.col("season") != int(season)), mine], how="vertical")
+    merged.sort("season").write_csv(manifest)
+    log.info(
+        "%s: %d published row(s) kept, season %s from this run",
+        manifest.name,
+        merged.height - mine.height,
+        season,
+    )
+    return manifest

@@ -759,6 +759,17 @@ def test_publish_sends_the_manifest_with_the_season_parquet(built, tmp_path, mon
     calls: list[list] = []
     monkeypatch.setattr(publish, "_gh_release_exists", lambda tag, repo: True)
     monkeypatch.setattr(publish, "_gh_runner", calls.append)
+    uploaded: list[pl.DataFrame] = []
+    monkeypatch.setattr(
+        publish, "fetch_manifest", lambda tag, repo, gh=None, name=None: _published_manifest()
+    )
+
+    def runner(args):
+        calls.append(args)
+        if args[:2] == ["release", "upload"] and args[3].endswith(".csv"):
+            uploaded.append(pl.read_csv(args[3], schema_overrides=build.MANIFEST_SCHEMA))
+
+    monkeypatch.setattr(publish, "_gh_runner", runner)
     rc = main(
         [
             "--dataset",
@@ -778,6 +789,96 @@ def test_publish_sends_the_manifest_with_the_season_parquet(built, tmp_path, mon
     assert rc == 0
     sent = [Path(c[3]).name for c in calls if c[:2] == ["release", "upload"]]
     assert sent == ["drives_2025.parquet", "espn_nfl_drives_in_data_repo.csv"]
+    # a fresh checkout's one-season manifest is merged into the published one, not uploaded over it
+    (man,) = uploaded
+    assert man["season"].to_list() == list(range(2002, 2027))
+    row = man.filter(pl.col("season") == 2025).row(0, named=True)
+    assert row["processing_version"] == processing_version()
+    pub = _published_manifest().filter(pl.col("season") != 2025)
+    assert man.filter(pl.col("season") != 2025).equals(pub)
+
+
+MANIFEST_FIX = (
+    Path(__file__).parent / "fixtures" / "espn_nfl_manifest" / "espn_nfl_pbp_in_data_repo.csv"
+)
+
+
+def _published_manifest() -> pl.DataFrame:
+    """The espn_nfl_pbp manifest as the tag carried it after the 2002-2026 rebuild of 2026-11-24 (25 rows)."""
+    return pl.read_csv(MANIFEST_FIX, schema_overrides=build.MANIFEST_SCHEMA)
+
+
+def _fake_gh(assets: set[str], fail: bool = False):
+    def gh(args):
+        if fail:
+            raise RuntimeError("gh: HTTP 502")
+        if args[:2] == ["release", "view"]:
+            return json.dumps({"assets": [{"name": a} for a in sorted(assets)]})
+        if args[:2] == ["release", "download"]:
+            dest = Path(args[args.index("--dir") + 1]) / args[args.index("--pattern") + 1]
+            dest.write_bytes(MANIFEST_FIX.read_bytes())
+            return ""
+        raise AssertionError(args)
+
+    return gh
+
+
+def _local_manifest(tmp_path: Path, season: int, rows: int) -> Path:
+    path = tmp_path / "espn_nfl_pbp_in_data_repo.csv"
+    pl.DataFrame(
+        {
+            "season": [season],
+            "row_count": [rows],
+            "processing_version": ["0.2.0b1+bba09519.14"],
+            "generated_at_utc": ["2026-11-27 05:00:00 UTC"],
+        },
+        schema=build.MANIFEST_SCHEMA,
+    ).write_csv(path)
+    return path
+
+
+def test_merge_keeps_every_published_season_and_replaces_only_this_one(tmp_path):
+    local = _local_manifest(tmp_path, 2026, 37913)
+    gh = _fake_gh({"espn_nfl_pbp_in_data_repo.csv", "play_by_play_2026.parquet"})
+    publish.merge_published_manifest(
+        local, 2026, "espn_nfl_pbp", gh=gh, exists_check=lambda t, r: True
+    )
+    man = pl.read_csv(local, schema_overrides=build.MANIFEST_SCHEMA)
+    assert man.height == 25 and man["season"].to_list() == list(range(2002, 2027))
+    assert man.filter(pl.col("season") == 2026)["row_count"].item() == 37913
+    assert (
+        man.filter(pl.col("season") == 2026)["processing_version"].item() == "0.2.0b1+bba09519.14"
+    )
+    assert man.filter(pl.col("season") < 2026).equals(
+        _published_manifest().filter(pl.col("season") < 2026)
+    )
+
+
+def test_merge_raises_on_a_failed_read_and_leaves_the_local_file(tmp_path):
+    local = _local_manifest(tmp_path, 2026, 37913)
+    before = local.read_bytes()
+    with pytest.raises(RuntimeError, match="502"):
+        publish.merge_published_manifest(
+            local,
+            2026,
+            "espn_nfl_pbp",
+            gh=_fake_gh(set(), fail=True),
+            exists_check=lambda t, r: True,
+        )
+    assert local.read_bytes() == before
+
+
+def test_merge_keeps_the_local_file_for_a_new_tag_or_a_tag_without_a_manifest(tmp_path):
+    local = _local_manifest(tmp_path, 2026, 37913)
+    before = local.read_bytes()
+    publish.merge_published_manifest(
+        local, 2026, "espn_nfl_new", gh=_fake_gh(set()), exists_check=lambda t, r: False
+    )
+    assert local.read_bytes() == before
+    publish.merge_published_manifest(
+        local, 2026, "espn_nfl_pbp", gh=_fake_gh(set()), exists_check=lambda t, r: True
+    )
+    assert pl.read_csv(local)["season"].to_list() == [2026]
 
 
 def test_build_reads_the_current_crosswalk_not_the_cached_id(built, tmp_path):

@@ -27,7 +27,12 @@ from nfl_espn_build.config import (
 )
 from nfl_espn_build.ingest import EspnStore, resolve_raw_root
 from nfl_espn_build.process import process_season
-from nfl_espn_build.publish import DEFAULT_REPO, PUBLISH_HELD, publish_files
+from nfl_espn_build.publish import (
+    DEFAULT_REPO,
+    PUBLISH_HELD,
+    merge_published_manifest,
+    publish_files,
+)
 
 GROUPS = {
     "all": ALL_ORDER,
@@ -129,7 +134,11 @@ def main(argv: list[str] | None = None) -> int:
                 spec = REGISTRY[name]
                 # the manifest rides with the season parquet so the tag itself
                 # records which processing_version cut each season
-                files = [path, manifest_path(spec, args.out)]
+                manifest = manifest_path(spec, args.out)
+                if not args.dry_run:
+                    # the tag's other seasons stay listed: merge into the published manifest
+                    merge_published_manifest(manifest, season, spec.tag, repo=args.repo)
+                files = [path, manifest]
                 if name == "qa":
                     # the season summary (error-free share + drift findings)
                     # is part of the asset, not a build artefact

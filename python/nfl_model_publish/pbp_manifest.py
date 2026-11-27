@@ -67,17 +67,18 @@ def published_seasons(assets: set[str], seasons: list[int]) -> list[int]:
     return [s for s in seasons if f"model_pbp_{s}.parquet" in assets]
 
 
-def fetch_manifest(tag: str, repo: str, *, gh=None) -> pl.DataFrame:
-    """The published manifest; an empty frame only when the tag has no manifest asset.
+def fetch_manifest(tag: str, repo: str, *, gh=None, name: str = MANIFEST) -> pl.DataFrame:
+    """The published manifest ``name``; an empty frame only when the tag has no such asset.
 
     ``gh`` (``(args) -> stdout``) is injectable for tests. A failed listing or download raises.
+    ``name`` defaults to this tag's manifest; the ``espn_nfl_*`` tags pass theirs.
     """
     gh = gh or _gh
-    if MANIFEST not in release_assets(tag, repo, gh=gh):
+    if name not in release_assets(tag, repo, gh=gh):
         return pl.DataFrame(schema=MANIFEST_SCHEMA)
     with tempfile.TemporaryDirectory() as d:
-        gh(["release", "download", tag, "--repo", repo, "--pattern", MANIFEST, "--dir", d])
-        return pl.read_csv(Path(d) / MANIFEST, schema_overrides=MANIFEST_SCHEMA)
+        gh(["release", "download", tag, "--repo", repo, "--pattern", name, "--dir", d])
+        return pl.read_csv(Path(d) / name, schema_overrides=MANIFEST_SCHEMA)
 
 
 def upsert(manifest: pl.DataFrame, parquets: list[Path]) -> pl.DataFrame:

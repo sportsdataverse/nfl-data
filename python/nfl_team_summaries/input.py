@@ -183,6 +183,8 @@ def prepare_plays(
         yards_to_goal=pl.col("yardline_100"),
         # the offense's margin before the snap (posteam_score - defteam_score)
         pos_score_diff_start=pl.col("score_differential"),
+        # the quarter, for the opponent adjustment's garbage-time rule (overtime is 5)
+        period=pl.col("qtr"),
         epa_success=(pl.col("epa") > 0).cast(pl.Float64),
         success=(pl.col("epa") > 0).cast(pl.Float64),
         sack_vec=_flag("sack").cast(pl.Float64),
